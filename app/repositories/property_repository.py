@@ -10,7 +10,11 @@ class PropertyRepository:
         self.session = session
 
     def get_all_by_owner(self, owner_id: int) -> list[Property]:
-        stmt = select(Property).where(Property.owner_id == owner_id)
+        stmt = (
+            select(Property)
+            .where(Property.owner_id == owner_id)
+            .options(selectinload(Property.renters))
+        )
         return list(self.session.scalars(stmt).all())
 
     def get_by_id(self, property_id: int, owner_id: int) -> Property | None:
@@ -28,7 +32,15 @@ class PropertyRepository:
         return property
 
     def update(self, property: Property, data: dict) -> Property:
-        nullable_fields = {"image_url"}
+        nullable_fields = {
+            "image_url",
+            "number_of_rooms",
+            "parking_numbers",
+            "electricity_meter_number",
+            "water_meter_tax",
+            "property_tax",
+            "house_committee",
+        }
         for key, value in data.items():
             if hasattr(property, key) and (value is not None or key in nullable_fields):
                 setattr(property, key, value)

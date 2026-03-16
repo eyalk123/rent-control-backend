@@ -3,13 +3,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.dependencies import get_current_user, get_property_service
-from app.schemas.property import PropertyCreate, PropertyListRead, PropertyRead, PropertyUpdate
+from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas.renter import PropertyRenterSummary
 from app.services.property_service import PropertyService
 
 router = APIRouter()
 
 
-@router.get("", response_model=list[PropertyListRead])
+@router.get("", response_model=list[PropertyRead])
 def list_properties(
     current_user: Annotated[dict, Depends(get_current_user)],
     property_service: Annotated[PropertyService, Depends(get_property_service)],
@@ -17,6 +18,19 @@ def list_properties(
     """Returns a list of all properties for the current user."""
     properties = property_service.list_properties(owner_id=current_user["user_id"])
     return properties
+
+
+@router.get("/{property_id}/renters", response_model=list[PropertyRenterSummary])
+def list_property_renters(
+    property_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+):
+    """Returns renters linked to the property (active leases) for e.g. add-revenue form."""
+    renters = property_service.get_property_renters(property_id, owner_id=current_user["user_id"])
+    if renters is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return renters
 
 
 @router.get("/{property_id}", response_model=PropertyRead)
@@ -32,7 +46,7 @@ def get_property(
     return property
 
 
-@router.post("", response_model=PropertyListRead, status_code=201)
+@router.post("", response_model=PropertyRead, status_code=201)
 def create_property(
     data: PropertyCreate,
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -43,7 +57,7 @@ def create_property(
     return property
 
 
-@router.patch("/{property_id}", response_model=PropertyListRead)
+@router.patch("/{property_id}", response_model=PropertyRead)
 def update_property(
     property_id: int,
     data: PropertyUpdate,
@@ -70,7 +84,7 @@ def delete_property(
     return None
 
 
-@router.post("/{property_id}/image", response_model=PropertyListRead)
+@router.post("/{property_id}/image", response_model=PropertyRead)
 def upload_image(
     property_id: int,
     file: Annotated[UploadFile, File()],
