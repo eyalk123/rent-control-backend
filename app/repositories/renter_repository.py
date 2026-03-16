@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -30,9 +32,19 @@ class RenterRepository:
         return renter
 
     def update(self, renter: Renter, data: dict) -> Renter:
-        nullable_fields = {"property_id"}
+        nullable_fields = {
+            "property_id",
+            "number_of_payments",
+            "payment_type",
+            "payment_day_of_month",
+            "insurance_type",
+            "insurance_amount",
+        }
+        always_set_fields = {"lease_years", "lease_end"}
         for key, value in data.items():
-            if hasattr(renter, key) and (value is not None or key in nullable_fields):
+            if hasattr(renter, key) and (
+                value is not None or key in nullable_fields or key in always_set_fields
+            ):
                 setattr(renter, key, value)
         self.session.commit()
         self.session.refresh(renter)
@@ -45,3 +57,26 @@ class RenterRepository:
         self.session.delete(renter)
         self.session.commit()
         return True
+
+    def get_by_property_id(
+        self,
+        property_id: int,
+        owner_id: int,
+        active_only: bool = True,
+    ) -> list[Renter]:
+        today = date.today()
+        stmt = (
+            select(Renter)
+            .join(Property, Renter.property_id == Property.id)
+            .where(
+                Renter.property_id == property_id,
+                Property.owner_id == owner_id,
+            )
+        )
+        if active_only:
+            stmt = stmt.where(
+                Renter.lease_start <= today,
+                Renter.lease_end >= today,
+            )
+        stmt = stmt.order_by(Renter.lease_start.desc())
+        return list(self.session.scalars(stmt).all())

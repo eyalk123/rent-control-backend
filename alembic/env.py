@@ -8,8 +8,11 @@ from alembic import context
 
 from app.config import settings
 from app.models.base import Base
+from app.models.expense_category import ExpenseCategory
 from app.models.property import Property
 from app.models.renter import Renter
+from app.models.supplier import Supplier
+from app.models.transaction import Transaction
 
 # this is the Alembic Config object
 config = context.config
