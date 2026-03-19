@@ -46,6 +46,7 @@ class RenterCreate(BaseModel):
     payment_day_of_month: Optional[int] = None
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
+    contact_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,6 +71,7 @@ class RenterUpdate(BaseModel):
     payment_day_of_month: Optional[int] = None
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
+    contact_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -95,6 +97,7 @@ class RenterRead(BaseModel):
     payment_day_of_month: Optional[int] = None
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
+    contact_id: Optional[str] = None
     property: Optional[PropertyBriefRead] = None
 
     model_config = ConfigDict(from_attributes=True)

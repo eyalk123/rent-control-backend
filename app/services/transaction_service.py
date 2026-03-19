@@ -41,7 +41,7 @@ class TransactionService:
         renter_name = None
         if t.renter:
             renter_name = f"{t.renter.first_name} {t.renter.last_name}".strip()
-        category_name = t.category.key if t.category else None
+        category_name = (t.category.key or t.category.name) if t.category else None
         supplier_name = t.supplier.name if t.supplier else None
         return TransactionRead(
             id=t.id,
@@ -140,11 +140,16 @@ class TransactionService:
         if category is None:
             raise HTTPException(status_code=400, detail="Expense category not found")
         if data.supplier_id is not None:
-            supplier = self.supplier_repository.get_by_id(data.supplier_id)
-            if supplier is None or supplier.category_id != data.category_id:
+            supplier = self.supplier_repository.get_by_id(data.supplier_id, owner_id)
+            if supplier is None:
+                raise HTTPException(status_code=400, detail="Supplier not found")
+            if not supplier.is_active:
+                raise HTTPException(status_code=400, detail="Supplier is inactive")
+            category_ids = [c.id for c in supplier.categories]
+            if data.category_id not in category_ids:
                 raise HTTPException(
                     status_code=400,
-                    detail="Supplier not found or does not belong to the selected category",
+                    detail="Supplier does not belong to the selected category",
                 )
         currency_code = property.currency_code or settings.DEFAULT_CURRENCY
         transaction = Transaction(

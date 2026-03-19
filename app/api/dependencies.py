@@ -71,8 +71,11 @@ def get_expense_category_service(
 
 def get_supplier_service(
     supplier_repository: Annotated[SupplierRepository, Depends(get_supplier_repository)],
+    expense_category_repository: Annotated[
+        ExpenseCategoryRepository, Depends(get_expense_category_repository)
+    ],
 ) -> SupplierService:
-    return SupplierService(supplier_repository)
+    return SupplierService(supplier_repository, expense_category_repository)
 
 
 def get_transaction_service(

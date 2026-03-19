@@ -62,6 +62,7 @@ class RenterService:
             payment_day_of_month=data.payment_day_of_month,
             insurance_type=data.insurance_type,
             insurance_amount=data.insurance_amount,
+            contact_id=data.contact_id,
         )
         return self.renter_repository.create(renter)
 
