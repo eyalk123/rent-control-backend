@@ -39,6 +39,7 @@ class RenterRepository:
             "payment_day_of_month",
             "insurance_type",
             "insurance_amount",
+            "contact_id",
         }
         always_set_fields = {"lease_years", "lease_end"}
         for key, value in data.items():

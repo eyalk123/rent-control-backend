@@ -23,6 +23,7 @@ class Renter(Base):
     payment_day_of_month = Column(Integer, nullable=True)
     insurance_type = Column(String, nullable=True)
     insurance_amount = Column(Float, nullable=True)
+    contact_id = Column(String(255), nullable=True)
 
     property = relationship("Property", back_populates="renters")
     transactions = relationship("Transaction", back_populates="renter")
