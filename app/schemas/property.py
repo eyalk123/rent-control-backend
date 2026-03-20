@@ -11,6 +11,15 @@ class PropertyType(str, Enum):
     Commercial = "commercial"
 
 
+def _normalize_optional_str(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        return s if s else None
+    return v
+
+
 class PropertyBriefRead(BaseModel):
     """Minimal property info for nested use in renter responses."""
 
@@ -36,8 +45,14 @@ class PropertyCreate(BaseModel):
     water_meter_tax: Optional[float] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
+    property_owner: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("property_owner", mode="before")
+    @classmethod
+    def normalize_property_owner_create(cls, v):
+        return _normalize_optional_str(v)
 
 
 class PropertyUpdate(BaseModel):
@@ -54,8 +69,14 @@ class PropertyUpdate(BaseModel):
     water_meter_tax: Optional[float] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
+    property_owner: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("property_owner", mode="before")
+    @classmethod
+    def normalize_property_owner_update(cls, v):
+        return _normalize_optional_str(v)
 
 
 def _parse_parking_numbers(v):
@@ -93,6 +114,7 @@ class PropertyRead(BaseModel):
     water_meter_tax: Optional[float] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
+    property_owner: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
 

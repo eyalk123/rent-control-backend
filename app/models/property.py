@@ -26,6 +26,7 @@ class Property(Base):
     sq_ft = Column(Integer, nullable=False)
     purchase_price = Column(Float, nullable=False)
     image_url = Column(String, nullable=True)
+    property_owner = Column(String, nullable=True)
     number_of_rooms = Column(Integer, nullable=True)
     parking_numbers = Column(Text, nullable=True)  # JSON array of strings
     electricity_meter_number = Column(String, nullable=True)
