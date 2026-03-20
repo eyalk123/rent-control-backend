@@ -86,6 +86,7 @@ class TransactionRepository:
                     Renter.last_name.ilike(search),
                     Property.address.ilike(search),
                     Property.city.ilike(search),
+                    Property.property_owner.ilike(search),
                     ExpenseCategory.key.ilike(search),
                     Supplier.name.ilike(search),
                     Transaction.notes.ilike(search),

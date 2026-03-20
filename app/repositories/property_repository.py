@@ -34,6 +34,7 @@ class PropertyRepository:
     def update(self, property: Property, data: dict) -> Property:
         nullable_fields = {
             "image_url",
+            "property_owner",
             "number_of_rooms",
             "parking_numbers",
             "electricity_meter_number",
