@@ -15,7 +15,7 @@ class Property(Base):
     __tablename__ = "properties"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    owner_id = Column(Integer, nullable=False)
+    owner_id = Column(String, nullable=False)
     address = Column(String, nullable=False)
     city = Column(String, nullable=False)
     zip_code = Column(String, nullable=False)

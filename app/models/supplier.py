@@ -15,7 +15,7 @@ class Supplier(Base):
     __tablename__ = "suppliers"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    owner_id = Column(Integer, nullable=False)
+    owner_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     phone = Column(String, nullable=True)

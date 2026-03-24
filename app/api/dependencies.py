@@ -1,8 +1,12 @@
 from typing import Annotated
 
-from fastapi import Depends
+import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.property_repository import PropertyRepository
@@ -15,10 +19,40 @@ from app.services.renter_service import RenterService
 from app.services.supplier_service import SupplierService
 from app.services.transaction_service import TransactionService
 
+_bearer = HTTPBearer()
+_jwks_client: PyJWKClient | None = None
 
-def get_current_user() -> dict:
-    """Mock authentication - returns a simulated authenticated user."""
-    return {"user_id": 1, "role": "owner"}
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(settings.CLERK_JWKS_URL)
+    return _jwks_client
+
+
+def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
+) -> dict:
+    token = credentials.credentials
+    try:
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer=settings.CLERK_ISSUER,
+            options={"verify_exp": True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+
+    user_id: str | None = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing sub claim")
+
+    return {"user_id": user_id, "role": "owner"}
 
 
 def get_property_repository(db: Annotated[Session, Depends(get_db)]) -> PropertyRepository:

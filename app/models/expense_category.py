@@ -10,7 +10,7 @@ class ExpenseCategory(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     key = Column(String(255), unique=True, nullable=True)
     name = Column(String(255), nullable=True)
-    owner_id = Column(Integer, nullable=True)
+    owner_id = Column(String, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     sort_order = Column(Integer, nullable=False, default=0)
 
