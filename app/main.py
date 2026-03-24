@@ -18,3 +18,8 @@ app.include_router(renters.router, prefix="/renters", tags=["renters"])
 app.include_router(transactions.router, prefix="/transactions", tags=["transactions"])
 app.include_router(expense_categories.router, prefix="/expense-categories", tags=["expense-categories"])
 app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/eyalk/Desktop/PythonProjects/rent-control-backend -type d -not -path */.* -not -path */__pycache__*)",
+      "Bash(wc:*)",
+      "Bash(grep -E '\\\\.\\(sh|bash|ps1|bat|cmd\\)$')"
+    ]
+  }
+}
