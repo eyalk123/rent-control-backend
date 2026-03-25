@@ -24,6 +24,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 
@@ -33,6 +34,16 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Claude Code
+.claude/settings.local.json
+
+# Testing & linting artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
 # Alembic
 # (keep versions tracked, but not local overrides)
