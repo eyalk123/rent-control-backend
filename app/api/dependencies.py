@@ -1,9 +1,11 @@
 from typing import Annotated
 
-import jwt
+import requests as http_requests
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import PyJWKClient
+from google.auth.exceptions import TransportError
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -20,14 +22,7 @@ from app.services.supplier_service import SupplierService
 from app.services.transaction_service import TransactionService
 
 _bearer = HTTPBearer()
-_jwks_client: PyJWKClient | None = None
-
-
-def _get_jwks_client() -> PyJWKClient:
-    global _jwks_client
-    if _jwks_client is None:
-        _jwks_client = PyJWKClient(settings.CLERK_JWKS_URL)
-    return _jwks_client
+_google_request = google_requests.Request(session=http_requests.Session())
 
 
 def get_current_user(
@@ -35,22 +30,19 @@ def get_current_user(
 ) -> dict:
     token = credentials.credentials
     try:
-        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
-        payload = jwt.decode(
+        payload = id_token.verify_firebase_token(
             token,
-            signing_key.key,
-            algorithms=["RS256"],
-            issuer=settings.CLERK_ISSUER,
-            options={"verify_exp": True},
+            _google_request,
+            audience=settings.FIREBASE_PROJECT_ID,
         )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    except jwt.InvalidTokenError as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+    except TransportError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
-    user_id: str | None = payload.get("sub")
+    user_id: str | None = payload.get("uid")
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing sub claim")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing uid claim")
 
     return {"user_id": user_id, "role": "owner"}
 
