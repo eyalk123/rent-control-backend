@@ -40,7 +40,7 @@ def get_current_user(
     except TransportError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
-    user_id: str | None = payload.get("uid")
+    user_id: str | None = payload.get("sub") or payload.get("user_id")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing uid claim")
 
