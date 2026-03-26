@@ -27,22 +27,22 @@ class RenterService:
         self.renter_repository = renter_repository
         self.property_repository = property_repository
 
-    def list_renters(self, owner_id: int):
+    def list_renters(self, owner_id: str):
         return self.renter_repository.get_all(owner_id=owner_id)
 
-    def get_renter(self, renter_id: int, owner_id: int):
+    def get_renter(self, renter_id: int, owner_id: str):
         renter = self.renter_repository.get_by_id(renter_id)
         if renter is None:
             return None
         self._check_renter_access(renter, owner_id)
         return renter
 
-    def _check_renter_access(self, renter: Renter, owner_id: int) -> None:
+    def _check_renter_access(self, renter: Renter, owner_id: str) -> None:
         if renter.property_id is not None and renter.property is not None:
             if renter.property.owner_id != owner_id:
                 raise HTTPException(status_code=403, detail="Access denied")
 
-    def create_renter(self, data: RenterCreate, owner_id: int):
+    def create_renter(self, data: RenterCreate, owner_id: str):
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
             if property is None:
@@ -66,7 +66,7 @@ class RenterService:
         )
         return self.renter_repository.create(renter)
 
-    def update_renter(self, renter_id: int, data: RenterUpdate, owner_id: int):
+    def update_renter(self, renter_id: int, data: RenterUpdate, owner_id: str):
         renter = self.renter_repository.get_by_id(renter_id)
         if renter is None:
             return None
@@ -90,7 +90,7 @@ class RenterService:
             update_dict["lease_end"] = _compute_lease_end(lease_start, count)
         return self.renter_repository.update(renter, update_dict)
 
-    def delete_renter(self, renter_id: int, owner_id: int) -> bool:
+    def delete_renter(self, renter_id: int, owner_id: str) -> bool:
         renter = self.renter_repository.get_by_id(renter_id)
         if renter is None:
             return False

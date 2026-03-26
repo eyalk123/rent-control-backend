@@ -9,7 +9,7 @@ class PropertyRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def get_all_by_owner(self, owner_id: int) -> list[Property]:
+    def get_all_by_owner(self, owner_id: str) -> list[Property]:
         stmt = (
             select(Property)
             .where(Property.owner_id == owner_id)
@@ -17,7 +17,7 @@ class PropertyRepository:
         )
         return list(self.session.scalars(stmt).all())
 
-    def get_by_id(self, property_id: int, owner_id: int) -> Property | None:
+    def get_by_id(self, property_id: int, owner_id: str) -> Property | None:
         stmt = (
             select(Property)
             .where(Property.id == property_id, Property.owner_id == owner_id)
@@ -49,7 +49,7 @@ class PropertyRepository:
         self.session.refresh(property)
         return property
 
-    def delete(self, property_id: int, owner_id: int) -> bool:
+    def delete(self, property_id: int, owner_id: str) -> bool:
         property = self.get_by_id(property_id, owner_id)
         if property is None:
             return False
@@ -61,7 +61,7 @@ class PropertyRepository:
         self.session.commit()
         return True
 
-    def update_image_url(self, property_id: int, owner_id: int, image_url: str) -> Property | None:
+    def update_image_url(self, property_id: int, owner_id: str, image_url: str) -> Property | None:
         stmt = (
             select(Property)
             .where(Property.id == property_id, Property.owner_id == owner_id)

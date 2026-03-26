@@ -8,7 +8,7 @@ class ExpenseCategoryRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def get_all_active_ordered(self, owner_id: int) -> list[ExpenseCategory]:
+    def get_all_active_ordered(self, owner_id: str) -> list[ExpenseCategory]:
         """Return predefined (owner_id IS NULL) and user-created (owner_id = owner_id) categories."""
         stmt = (
             select(ExpenseCategory)

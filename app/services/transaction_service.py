@@ -66,7 +66,7 @@ class TransactionService:
 
     def list_transactions(
         self,
-        owner_id: int,
+        owner_id: str,
         type_filter: str | None = None,
         property_id: int | None = None,
         renter_id: int | None = None,
@@ -94,13 +94,13 @@ class TransactionService:
         )
         return [self._transaction_to_read(t) for t in rows]
 
-    def get_transaction(self, transaction_id: int, owner_id: int) -> TransactionRead | None:
+    def get_transaction(self, transaction_id: int, owner_id: str) -> TransactionRead | None:
         t = self.transaction_repository.get_by_id(transaction_id, owner_id)
         if t is None:
             return None
         return self._transaction_to_read(t)
 
-    def create_revenue(self, data: TransactionCreateRevenue, owner_id: int) -> TransactionRead:
+    def create_revenue(self, data: TransactionCreateRevenue, owner_id: str) -> TransactionRead:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
@@ -132,7 +132,7 @@ class TransactionService:
         created = self.transaction_repository.create(transaction)
         return self.get_transaction(created.id, owner_id)
 
-    def create_expense(self, data: TransactionCreateExpense, owner_id: int) -> TransactionRead:
+    def create_expense(self, data: TransactionCreateExpense, owner_id: str) -> TransactionRead:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")

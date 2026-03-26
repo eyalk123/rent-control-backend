@@ -11,7 +11,7 @@ class SupplierRepository:
 
     def get_all(
         self,
-        owner_id: int,
+        owner_id: str,
         category_id: int | None = None,
         q: str | None = None,
         include_inactive: bool = False,
@@ -37,7 +37,7 @@ class SupplierRepository:
         stmt = stmt.order_by(Supplier.name)
         return list(self.session.scalars(stmt).unique().all())
 
-    def get_by_id(self, supplier_id: int, owner_id: int | None = None) -> Supplier | None:
+    def get_by_id(self, supplier_id: int, owner_id: str | None = None) -> Supplier | None:
         stmt = (
             select(Supplier)
             .where(Supplier.id == supplier_id)
@@ -63,7 +63,7 @@ class SupplierRepository:
     def update(
         self,
         supplier_id: int,
-        owner_id: int,
+        owner_id: str,
         *,
         name: str | None = None,
         phone: str | None = None,

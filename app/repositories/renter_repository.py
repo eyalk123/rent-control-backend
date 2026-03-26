@@ -11,7 +11,7 @@ class RenterRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def get_all(self, owner_id: int | None = None) -> list[Renter]:
+    def get_all(self, owner_id: str | None = None) -> list[Renter]:
         stmt = select(Renter).options(selectinload(Renter.property))
         if owner_id is not None:
             stmt = stmt.join(Property).where(Property.owner_id == owner_id)
@@ -62,7 +62,7 @@ class RenterRepository:
     def get_by_property_id(
         self,
         property_id: int,
-        owner_id: int,
+        owner_id: str,
         active_only: bool = True,
     ) -> list[Renter]:
         today = date.today()

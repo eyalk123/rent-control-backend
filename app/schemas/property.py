@@ -100,7 +100,7 @@ from app.schemas.renter import RenterRead
 
 class PropertyRead(BaseModel):
     id: int
-    owner_id: int
+    owner_id: str
     address: str
     city: str
     zip_code: str

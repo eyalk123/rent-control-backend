@@ -18,13 +18,13 @@ class PropertyService:
         self.property_repository = property_repository
         self.renter_repository = renter_repository
 
-    def list_properties(self, owner_id: int):
+    def list_properties(self, owner_id: str):
         return self.property_repository.get_all_by_owner(owner_id)
 
-    def get_property(self, property_id: int, owner_id: int):
+    def get_property(self, property_id: int, owner_id: str):
         return self.property_repository.get_by_id(property_id, owner_id)
 
-    def create_property(self, data: PropertyCreate, owner_id: int):
+    def create_property(self, data: PropertyCreate, owner_id: str):
         property_type = PropertyTypeEnum(data.type.value)
         parking_numbers_str = (
             json.dumps(data.parking_numbers) if data.parking_numbers is not None else None
@@ -49,7 +49,7 @@ class PropertyService:
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)
 
-    def update_property(self, property_id: int, data: PropertyUpdate, owner_id: int):
+    def update_property(self, property_id: int, data: PropertyUpdate, owner_id: str):
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
@@ -65,10 +65,10 @@ class PropertyService:
         self.property_repository.update(property, update_dict)
         return self.property_repository.get_by_id(property_id, owner_id)
 
-    def delete_property(self, property_id: int, owner_id: int) -> bool:
+    def delete_property(self, property_id: int, owner_id: str) -> bool:
         return self.property_repository.delete(property_id, owner_id)
 
-    def upload_property_image(self, property_id: int, file: UploadFile, owner_id: int):
+    def upload_property_image(self, property_id: int, file: UploadFile, owner_id: str):
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
@@ -76,7 +76,7 @@ class PropertyService:
         self.property_repository.update_image_url(property_id, owner_id, mock_url)
         return self.property_repository.get_by_id(property_id, owner_id)
 
-    def get_property_renters(self, property_id: int, owner_id: int):
+    def get_property_renters(self, property_id: int, owner_id: str):
         """Return renters linked to the property (active leases only) for e.g. add-revenue form."""
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:

@@ -24,7 +24,7 @@ class TransactionRepository:
     def get_by_id(
         self,
         transaction_id: int,
-        owner_id: int,
+        owner_id: str,
     ) -> Transaction | None:
         stmt = (
             select(Transaction)
@@ -44,7 +44,7 @@ class TransactionRepository:
 
     def list(
         self,
-        owner_id: int,
+        owner_id: str,
         type_filter: TransactionTypeEnum | None = None,
         property_id: int | None = None,
         renter_id: int | None = None,
