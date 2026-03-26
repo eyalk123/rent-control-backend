@@ -9,11 +9,11 @@ class ExpenseCategoryService:
     def __init__(self, expense_category_repository: ExpenseCategoryRepository):
         self.expense_category_repository = expense_category_repository
 
-    def list_active(self, owner_id: int) -> list[ExpenseCategoryRead]:
+    def list_active(self, owner_id: str) -> list[ExpenseCategoryRead]:
         categories = self.expense_category_repository.get_all_active_ordered(owner_id)
         return [ExpenseCategoryRead.model_validate(c) for c in categories]
 
-    def create(self, data: ExpenseCategoryCreate, owner_id: int) -> ExpenseCategoryRead:
+    def create(self, data: ExpenseCategoryCreate, owner_id: str) -> ExpenseCategoryRead:
         max_sort = self.expense_category_repository.get_max_sort_order()
         category = ExpenseCategory(
             key=None,

@@ -17,7 +17,7 @@ class SupplierService:
 
     def list_suppliers(
         self,
-        owner_id: int,
+        owner_id: str,
         category_id: int | None = None,
         q: str | None = None,
         include_inactive: bool = False,
@@ -30,13 +30,13 @@ class SupplierService:
         )
         return [SupplierRead.model_validate(s) for s in suppliers]
 
-    def get_supplier(self, supplier_id: int, owner_id: int) -> SupplierRead | None:
+    def get_supplier(self, supplier_id: int, owner_id: str) -> SupplierRead | None:
         supplier = self.supplier_repository.get_by_id(supplier_id, owner_id)
         if supplier is None:
             return None
         return SupplierRead.model_validate(supplier)
 
-    def _validate_category_ids(self, category_ids: list[int], owner_id: int) -> None:
+    def _validate_category_ids(self, category_ids: list[int], owner_id: str) -> None:
         """Validate that all category_ids exist and are accessible to the owner."""
         for cat_id in category_ids:
             cat = self.expense_category_repository.get_by_id(cat_id)
@@ -51,7 +51,7 @@ class SupplierService:
                     detail=f"Expense category {cat_id} not found",
                 )
 
-    def create_supplier(self, data: SupplierCreate, owner_id: int) -> SupplierRead:
+    def create_supplier(self, data: SupplierCreate, owner_id: str) -> SupplierRead:
         self._validate_category_ids(data.category_ids, owner_id)
         supplier = Supplier(
             owner_id=owner_id,
@@ -68,7 +68,7 @@ class SupplierService:
         self,
         supplier_id: int,
         data: SupplierUpdate,
-        owner_id: int,
+        owner_id: str,
     ) -> SupplierRead | None:
         if data.category_ids is not None:
             self._validate_category_ids(data.category_ids, owner_id)
