@@ -63,6 +63,7 @@ class RenterService:
             insurance_type=data.insurance_type,
             insurance_amount=data.insurance_amount,
             contact_id=data.contact_id,
+            extra_contacts=[c.model_dump() for c in data.extra_contacts] if data.extra_contacts else None,
         )
         return self.renter_repository.create(renter)
 
@@ -80,6 +81,8 @@ class RenterService:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
         if "lease_years" in update_dict:
             update_dict["lease_years"] = _encode_lease_years(data.lease_years)
+        if "extra_contacts" in update_dict and update_dict["extra_contacts"] is not None:
+            update_dict["extra_contacts"] = [c.model_dump() for c in data.extra_contacts]
         lease_start = update_dict.get("lease_start", renter.lease_start)
         if "lease_years" in update_dict or "lease_start" in update_dict:
             lease_years_raw = update_dict.get("lease_years")
