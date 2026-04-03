@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Column, Date, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -24,6 +24,7 @@ class Renter(Base):
     insurance_type = Column(String, nullable=True)
     insurance_amount = Column(Float, nullable=True)
     contact_id = Column(String(255), nullable=True)
+    extra_contacts = Column(JSON, nullable=True)
 
     property = relationship("Property", back_populates="renters")
     transactions = relationship("Transaction", back_populates="renter")

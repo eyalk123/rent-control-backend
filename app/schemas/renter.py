@@ -18,6 +18,11 @@ class LeaseYear(BaseModel):
     type: LeaseYearType
 
 
+class ExtraContact(BaseModel):
+    name: str
+    phone: str
+
+
 def _parse_lease_years(v):
     if v is None:
         return []
@@ -47,6 +52,7 @@ class RenterCreate(BaseModel):
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
+    extra_contacts: Optional[list[ExtraContact]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,6 +78,7 @@ class RenterUpdate(BaseModel):
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
+    extra_contacts: Optional[list[ExtraContact]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -98,6 +105,7 @@ class RenterRead(BaseModel):
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
+    extra_contacts: Optional[list[ExtraContact]] = None
     property: Optional[PropertyBriefRead] = None
 
     model_config = ConfigDict(from_attributes=True)
