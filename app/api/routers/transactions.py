@@ -66,6 +66,19 @@ def create_revenue(
     return transaction_service.create_revenue(data, owner_id=current_user["user_id"])
 
 
+@router.delete("/{transaction_id}", status_code=204)
+def delete_transaction(
+    transaction_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    transaction_service: Annotated[TransactionService, Depends(get_transaction_service)],
+):
+    """Deletes a transaction by id."""
+    deleted = transaction_service.delete_transaction(transaction_id, owner_id=current_user["user_id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return None
+
+
 @router.post("/expense", response_model=TransactionRead, status_code=201)
 def create_expense(
     data: TransactionCreateExpense,

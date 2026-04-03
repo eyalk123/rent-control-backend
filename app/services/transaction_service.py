@@ -132,6 +132,9 @@ class TransactionService:
         created = self.transaction_repository.create(transaction)
         return self.get_transaction(created.id, owner_id)
 
+    def delete_transaction(self, transaction_id: int, owner_id: str) -> bool:
+        return self.transaction_repository.delete(transaction_id, owner_id)
+
     def create_expense(self, data: TransactionCreateExpense, owner_id: str) -> TransactionRead:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
