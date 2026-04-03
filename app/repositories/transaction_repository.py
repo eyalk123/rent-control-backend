@@ -97,3 +97,11 @@ class TransactionRepository:
             Transaction.created_at.desc(),
         ).limit(limit).offset(offset)
         return list(self.session.scalars(stmt).all())
+
+    def delete(self, transaction_id: int, owner_id: str) -> bool:
+        transaction = self.get_by_id(transaction_id, owner_id)
+        if transaction is None:
+            return False
+        self.session.delete(transaction)
+        self.session.commit()
+        return True
