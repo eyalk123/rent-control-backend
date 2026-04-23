@@ -46,6 +46,7 @@ class PropertyCreate(BaseModel):
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
+    inventory_notes: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,6 +71,7 @@ class PropertyUpdate(BaseModel):
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
+    inventory_notes: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -115,6 +117,7 @@ class PropertyRead(BaseModel):
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
+    inventory_notes: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
 
