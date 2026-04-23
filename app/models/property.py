@@ -33,6 +33,7 @@ class Property(Base):
     water_meter_tax = Column(Float, nullable=True)
     property_tax = Column(Float, nullable=True)
     house_committee = Column(Float, nullable=True)
+    inventory_notes = Column(Text, nullable=True)
     currency_code = Column(String, nullable=True)
 
     renters = relationship("Renter", back_populates="property", foreign_keys="Renter.property_id")
