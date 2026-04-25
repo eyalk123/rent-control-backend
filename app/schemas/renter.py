@@ -54,6 +54,7 @@ class RenterCreate(BaseModel):
     contact_id: Optional[str] = None
     extra_contacts: Optional[list[ExtraContact]] = None
     full_contract_url: Optional[str] = None
+    id_image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,6 +82,7 @@ class RenterUpdate(BaseModel):
     contact_id: Optional[str] = None
     extra_contacts: Optional[list[ExtraContact]] = None
     full_contract_url: Optional[str] = None
+    id_image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -109,6 +111,7 @@ class RenterRead(BaseModel):
     contact_id: Optional[str] = None
     extra_contacts: Optional[list[ExtraContact]] = None
     full_contract_url: Optional[str] = None
+    id_image_url: Optional[str] = None
     property: Optional[PropertyBriefRead] = None
 
     model_config = ConfigDict(from_attributes=True)

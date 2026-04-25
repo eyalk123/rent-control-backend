@@ -65,6 +65,7 @@ class RenterService:
             contact_id=data.contact_id,
             extra_contacts=[c.model_dump() for c in data.extra_contacts] if data.extra_contacts else None,
             full_contract_url=data.full_contract_url,
+            id_image_url=data.id_image_url,
         )
         return self.renter_repository.create(renter)
 
