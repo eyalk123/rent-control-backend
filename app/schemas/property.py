@@ -37,7 +37,7 @@ class PropertyCreate(BaseModel):
     zip_code: str
     type: PropertyType
     sq_ft: int
-    purchase_price: float
+    purchase_price: float = 0.0
     image_url: Optional[str] = None
     number_of_rooms: Optional[int] = None
     parking_numbers: Optional[list[str]] = None
