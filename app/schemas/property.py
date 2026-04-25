@@ -47,6 +47,7 @@ class PropertyCreate(BaseModel):
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
+    basic_contract_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,6 +73,7 @@ class PropertyUpdate(BaseModel):
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
+    basic_contract_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -118,6 +120,7 @@ class PropertyRead(BaseModel):
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
+    basic_contract_url: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
 
