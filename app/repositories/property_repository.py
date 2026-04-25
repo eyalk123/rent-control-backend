@@ -41,6 +41,7 @@ class PropertyRepository:
             "water_meter_tax",
             "property_tax",
             "house_committee",
+            "basic_contract_url",
         }
         for key, value in data.items():
             if hasattr(property, key) and (value is not None or key in nullable_fields):

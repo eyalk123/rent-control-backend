@@ -45,6 +45,7 @@ class PropertyService:
             property_tax=data.property_tax,
             house_committee=data.house_committee,
             property_owner=data.property_owner,
+            basic_contract_url=data.basic_contract_url,
         )
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)
