@@ -35,6 +35,7 @@ class Property(Base):
     house_committee = Column(Float, nullable=True)
     inventory_notes = Column(Text, nullable=True)
     basic_contract_url = Column(String, nullable=True)
+    land_registry_url = Column(String, nullable=True)
     currency_code = Column(String, nullable=True)
 
     renters = relationship("Renter", back_populates="property", foreign_keys="Renter.property_id")
