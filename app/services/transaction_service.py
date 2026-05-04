@@ -11,10 +11,12 @@ from app.repositories.renter_repository import RenterRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.schemas.transaction import (
+    MonthSummaryItem,
     PaymentMethod,
     TransactionCreateExpense,
     TransactionCreateRevenue,
     TransactionRead,
+    TransactionSummaryResponse,
     TransactionType,
 )
 
@@ -131,6 +133,42 @@ class TransactionService:
         )
         created = self.transaction_repository.create(transaction)
         return self.get_transaction(created.id, owner_id)
+
+    def get_summary(self, owner_id: str) -> TransactionSummaryResponse:
+        today = date.today()
+        # First day of the month 5 months ago (covers 6 months total including current)
+        year, month = today.year, today.month - 5
+        if month <= 0:
+            month += 12
+            year -= 1
+        from_date = date(year, month, 1)
+
+        rows = self.transaction_repository.get_monthly_summary(owner_id, from_date)
+        by_key = {
+            f"{int(row.year):04d}-{int(row.month):02d}": row
+            for row in rows
+        }
+
+        buckets: list[MonthSummaryItem] = []
+        for i in range(5, -1, -1):
+            y, m = today.year, today.month - i
+            if m <= 0:
+                m += 12
+                y -= 1
+            key = f"{y:04d}-{m:02d}"
+            row = by_key.get(key)
+            revenue = float(row.revenue) if row else 0.0
+            expenses = float(row.expenses) if row else 0.0
+            buckets.append(MonthSummaryItem(
+                key=key,
+                year=y,
+                month=m,
+                revenue=revenue,
+                expenses=expenses,
+                profit=revenue - expenses,
+            ))
+
+        return TransactionSummaryResponse(six_month_buckets=buckets)
 
     def delete_transaction(self, transaction_id: int, owner_id: str) -> bool:
         return self.transaction_repository.delete(transaction_id, owner_id)

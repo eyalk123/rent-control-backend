@@ -8,6 +8,7 @@ from app.schemas.transaction import (
     TransactionCreateExpense,
     TransactionCreateRevenue,
     TransactionRead,
+    TransactionSummaryResponse,
 )
 from app.services.transaction_service import TransactionService
 
@@ -39,6 +40,15 @@ def list_transactions(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/summary", response_model=TransactionSummaryResponse)
+def get_transactions_summary(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    transaction_service: Annotated[TransactionService, Depends(get_transaction_service)],
+):
+    """Return 6-month revenue/expense aggregates for the current user."""
+    return transaction_service.get_summary(owner_id=current_user["user_id"])
 
 
 @router.get("/{transaction_id}", response_model=TransactionRead)

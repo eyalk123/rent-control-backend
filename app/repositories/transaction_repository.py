@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import Integer, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.expense_category import ExpenseCategory
@@ -97,6 +97,30 @@ class TransactionRepository:
             Transaction.created_at.desc(),
         ).limit(limit).offset(offset)
         return list(self.session.scalars(stmt).all())
+
+    def get_monthly_summary(self, owner_id: str, from_date: date) -> list:
+        year_col = func.extract('year', Transaction.date_of_payment).cast(Integer)
+        month_col = func.extract('month', Transaction.date_of_payment).cast(Integer)
+        stmt = (
+            select(
+                year_col.label('year'),
+                month_col.label('month'),
+                func.sum(
+                    case((Transaction.type == TransactionTypeEnum.REVENUE, Transaction.amount), else_=0)
+                ).label('revenue'),
+                func.sum(
+                    case((Transaction.type == TransactionTypeEnum.EXPENSE, Transaction.amount), else_=0)
+                ).label('expenses'),
+            )
+            .join(Property, Transaction.property_id == Property.id)
+            .where(
+                Property.owner_id == owner_id,
+                Transaction.date_of_payment >= from_date,
+            )
+            .group_by(year_col, month_col)
+            .order_by(year_col, month_col)
+        )
+        return list(self.session.execute(stmt).all())
 
     def delete(self, transaction_id: int, owner_id: str) -> bool:
         transaction = self.get_by_id(transaction_id, owner_id)

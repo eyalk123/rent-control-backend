@@ -77,3 +77,16 @@ class TransactionRead(BaseModel):
     supplier_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class MonthSummaryItem(BaseModel):
+    key: str  # "YYYY-MM"
+    year: int
+    month: int
+    revenue: float
+    expenses: float
+    profit: float
+
+
+class TransactionSummaryResponse(BaseModel):
+    six_month_buckets: list[MonthSummaryItem]  # 6 items, oldest → newest, padded with zeros
