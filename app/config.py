@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     S3_BUCKET: str = "mock-bucket"
     DEFAULT_CURRENCY: str = "ILS"
     FIREBASE_PROJECT_ID: str = ""
+    FIREBASE_STORAGE_BUCKET: str = ""  # e.g. your-project.appspot.com
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

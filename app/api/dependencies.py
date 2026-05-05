@@ -20,6 +20,7 @@ from app.services.property_service import PropertyService
 from app.services.renter_service import RenterService
 from app.services.supplier_service import SupplierService
 from app.services.transaction_service import TransactionService
+from app.services.user_service import UserService
 
 _bearer = HTTPBearer()
 _google_request = google_requests.Request(session=http_requests.Session())
@@ -102,6 +103,10 @@ def get_supplier_service(
     ],
 ) -> SupplierService:
     return SupplierService(supplier_repository, expense_category_repository)
+
+
+def get_user_service(db: Annotated[Session, Depends(get_db)]) -> UserService:
+    return UserService(db)
 
 
 def get_transaction_service(
