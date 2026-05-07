@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     DEFAULT_CURRENCY: str = "ILS"
     FIREBASE_PROJECT_ID: str = ""
     FIREBASE_STORAGE_BUCKET: str = ""  # e.g. your-project.appspot.com
+    FIREBASE_SERVICE_ACCOUNT_JSON: str = ""  # full service account key JSON as a string
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

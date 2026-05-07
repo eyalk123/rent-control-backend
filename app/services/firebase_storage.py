@@ -19,18 +19,20 @@ def _blob_path_from_url(url: str) -> str | None:
 
 
 def _get_bucket():
-    from app.config import settings
+    import json
     import firebase_admin
     from firebase_admin import credentials, storage
+    from app.config import settings
 
-    bucket_name = getattr(settings, "FIREBASE_STORAGE_BUCKET", None)
-    if not bucket_name:
+    bucket_name = settings.FIREBASE_STORAGE_BUCKET
+    sa_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON
+    if not bucket_name or not sa_json:
         return None
 
     try:
         app = firebase_admin.get_app()
     except ValueError:
-        cred = credentials.ApplicationDefault()
+        cred = credentials.Certificate(json.loads(sa_json))
         app = firebase_admin.initialize_app(cred, {"storageBucket": bucket_name})
 
     return storage.bucket(app=app)
