@@ -125,6 +125,7 @@ class TransactionService:
         property_address = f"{property.address}, {property.city}" if property.city else property.address
         renter_name_snap = f"{renter.first_name} {renter.last_name}".strip() if renter else None
         transaction = Transaction(
+            owner_id=owner_id,
             type=TransactionTypeEnum.REVENUE,
             property_id=data.property_id,
             renter_id=data.renter_id,
@@ -208,6 +209,7 @@ class TransactionService:
             if renter:
                 renter_name_snap = f"{renter.first_name} {renter.last_name}".strip()
         transaction = Transaction(
+            owner_id=owner_id,
             type=TransactionTypeEnum.EXPENSE,
             property_id=data.property_id,
             renter_id=data.renter_id,

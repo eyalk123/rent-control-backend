@@ -47,6 +47,7 @@ class Transaction(Base):
         nullable=True,
     )
     notes = Column(Text, nullable=True)
+    owner_id = Column(String, nullable=False)
     property_address = Column(Text, nullable=True)
     renter_name = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

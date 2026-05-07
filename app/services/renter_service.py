@@ -100,4 +100,7 @@ class RenterService:
         if renter is None:
             return False
         self._check_renter_access(renter, owner_id)
-        return self.renter_repository.delete(renter_id)
+        from app.services.firebase_storage import delete_file_urls
+        delete_file_urls([renter.full_contract_url, renter.id_image_url])
+        self.renter_repository.delete_obj(renter)
+        return True

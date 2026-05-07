@@ -28,10 +28,9 @@ class TransactionRepository:
     ) -> Transaction | None:
         stmt = (
             select(Transaction)
-            .join(Property, Transaction.property_id == Property.id)
             .where(
                 Transaction.id == transaction_id,
-                Property.owner_id == owner_id,
+                Transaction.owner_id == owner_id,
             )
             .options(
                 selectinload(Transaction.property),
@@ -56,11 +55,11 @@ class TransactionRepository:
     ) -> list[Transaction]:
         stmt = (
             select(Transaction)
-            .join(Property, Transaction.property_id == Property.id)
+            .outerjoin(Property, Transaction.property_id == Property.id)
             .outerjoin(Renter, Transaction.renter_id == Renter.id)
             .outerjoin(ExpenseCategory, Transaction.category_id == ExpenseCategory.id)
             .outerjoin(Supplier, Transaction.supplier_id == Supplier.id)
-            .where(Property.owner_id == owner_id)
+            .where(Transaction.owner_id == owner_id)
             .options(
                 selectinload(Transaction.property),
                 selectinload(Transaction.renter),
@@ -87,6 +86,8 @@ class TransactionRepository:
                     Property.address.ilike(search),
                     Property.city.ilike(search),
                     Property.property_owner.ilike(search),
+                    Transaction.property_address.ilike(search),
+                    Transaction.renter_name.ilike(search),
                     ExpenseCategory.key.ilike(search),
                     Supplier.name.ilike(search),
                     Transaction.notes.ilike(search),
@@ -112,9 +113,8 @@ class TransactionRepository:
                     case((Transaction.type == TransactionTypeEnum.EXPENSE, Transaction.amount), else_=0)
                 ).label('expenses'),
             )
-            .join(Property, Transaction.property_id == Property.id)
             .where(
-                Property.owner_id == owner_id,
+                Transaction.owner_id == owner_id,
                 Transaction.date_of_payment >= from_date,
             )
             .group_by(year_col, month_col)

@@ -58,9 +58,12 @@ class RenterRepository:
         renter = self.get_by_id(renter_id)
         if renter is None:
             return False
+        self.delete_obj(renter)
+        return True
+
+    def delete_obj(self, renter: Renter) -> None:
         self.session.delete(renter)
         self.session.commit()
-        return True
 
     def get_by_property_id(
         self,

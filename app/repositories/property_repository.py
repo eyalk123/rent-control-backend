@@ -55,13 +55,14 @@ class PropertyRepository:
         property = self.get_by_id(property_id, owner_id)
         if property is None:
             return False
-        # Unassign renters first
-        stmt = update(Renter).where(Renter.property_id == property_id).values(property_id=None)
+        self.delete_obj(property)
+        return True
+
+    def delete_obj(self, property: Property) -> None:
+        stmt = update(Renter).where(Renter.property_id == property.id).values(property_id=None)
         self.session.execute(stmt)
-        # Delete property
         self.session.delete(property)
         self.session.commit()
-        return True
 
     def update_image_url(self, property_id: int, owner_id: str, image_url: str) -> Property | None:
         stmt = (

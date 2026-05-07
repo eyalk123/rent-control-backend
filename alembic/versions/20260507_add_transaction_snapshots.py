@@ -24,12 +24,13 @@ def upgrade() -> None:
     op.drop_constraint("transactions_property_id_fkey", "transactions", type_="foreignkey")
     op.alter_column("transactions", "property_id", nullable=True)
     op.create_foreign_key(
-        None, "transactions", "properties", ["property_id"], ["id"], ondelete="SET NULL"
+        "transactions_property_id_fkey",
+        "transactions", "properties", ["property_id"], ["id"], ondelete="SET NULL",
     )
 
 
 def downgrade() -> None:
-    op.drop_constraint(None, "transactions", type_="foreignkey")
+    op.drop_constraint("transactions_property_id_fkey", "transactions", type_="foreignkey")
     op.alter_column("transactions", "property_id", nullable=False)
     op.create_foreign_key(
         "transactions_property_id_fkey",

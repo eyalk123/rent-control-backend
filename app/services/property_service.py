@@ -68,7 +68,13 @@ class PropertyService:
         return self.property_repository.get_by_id(property_id, owner_id)
 
     def delete_property(self, property_id: int, owner_id: str) -> bool:
-        return self.property_repository.delete(property_id, owner_id)
+        property = self.property_repository.get_by_id(property_id, owner_id)
+        if property is None:
+            return False
+        from app.services.firebase_storage import delete_file_urls
+        delete_file_urls([property.image_url, property.basic_contract_url, property.land_registry_url])
+        self.property_repository.delete_obj(property)
+        return True
 
     def upload_property_image(self, property_id: int, file: UploadFile, owner_id: str):
         property = self.property_repository.get_by_id(property_id, owner_id)

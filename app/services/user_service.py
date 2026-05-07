@@ -59,28 +59,14 @@ class UserService:
 
     def _delete_firebase_storage(self, owner_id: str) -> None:
         try:
-            from app.config import settings
-            bucket_name = getattr(settings, "FIREBASE_STORAGE_BUCKET", None)
-            if not bucket_name:
+            from app.services.firebase_storage import _get_bucket
+            bucket = _get_bucket()
+            if bucket is None:
                 logger.info("FIREBASE_STORAGE_BUCKET not set — skipping Storage cleanup for %s", owner_id)
                 return
-
-            import firebase_admin
-            from firebase_admin import credentials, storage
-
-            # Initialize app only once
-            try:
-                app = firebase_admin.get_app()
-            except ValueError:
-                cred = credentials.ApplicationDefault()
-                app = firebase_admin.initialize_app(cred, {"storageBucket": bucket_name})
-
-            bucket = storage.bucket(app=app)
             blobs = list(bucket.list_blobs(prefix=f"{owner_id}/"))
             for blob in blobs:
                 blob.delete()
             logger.info("Deleted %d Storage files for user %s", len(blobs), owner_id)
-
         except Exception as exc:
-            # Storage cleanup is best-effort; don't fail account deletion over it
             logger.warning("Firebase Storage cleanup failed for %s: %s", owner_id, exc)
