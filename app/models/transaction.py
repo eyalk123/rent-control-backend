@@ -26,7 +26,7 @@ class Transaction(Base):
         Enum(TransactionTypeEnum, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
     )
-    property_id = Column(Integer, ForeignKey("properties.id", ondelete="CASCADE"), nullable=False)
+    property_id = Column(Integer, ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
     renter_id = Column(Integer, ForeignKey("renters.id", ondelete="SET NULL"), nullable=True)
     payment_method = Column(
         Enum(PaymentMethodEnum, values_callable=lambda x: [e.value for e in x]),
@@ -47,6 +47,8 @@ class Transaction(Base):
         nullable=True,
     )
     notes = Column(Text, nullable=True)
+    property_address = Column(Text, nullable=True)
+    renter_name = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

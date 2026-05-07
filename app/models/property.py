@@ -39,4 +39,4 @@ class Property(Base):
     currency_code = Column(String, nullable=True)
 
     renters = relationship("Renter", back_populates="property", foreign_keys="Renter.property_id")
-    transactions = relationship("Transaction", back_populates="property", foreign_keys="Transaction.property_id")
+    transactions = relationship("Transaction", back_populates="property", foreign_keys="Transaction.property_id", passive_deletes=True)

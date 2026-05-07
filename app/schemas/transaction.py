@@ -59,7 +59,7 @@ class TransactionCreateExpense(BaseModel):
 class TransactionRead(BaseModel):
     id: int
     type: TransactionType
-    property_id: int
+    property_id: Optional[int] = None
     renter_id: Optional[int] = None
     payment_method: Optional[PaymentMethod] = None
     date_of_payment: date

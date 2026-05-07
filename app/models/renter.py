@@ -29,4 +29,4 @@ class Renter(Base):
     id_image_url = Column(String, nullable=True)
 
     property = relationship("Property", back_populates="renters")
-    transactions = relationship("Transaction", back_populates="renter")
+    transactions = relationship("Transaction", back_populates="renter", passive_deletes=True)

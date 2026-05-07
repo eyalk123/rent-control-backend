@@ -37,12 +37,15 @@ class TransactionService:
         self.supplier_repository = supplier_repository
 
     def _transaction_to_read(self, t: Transaction) -> TransactionRead:
-        property_name = None
         if t.property:
             property_name = f"{t.property.address}, {t.property.city}" if t.property.city else t.property.address
-        renter_name = None
-        if t.renter:
-            renter_name = f"{t.renter.first_name} {t.renter.last_name}".strip()
+        else:
+            property_name = t.property_address
+        renter_name = (
+            f"{t.renter.first_name} {t.renter.last_name}".strip()
+            if t.renter
+            else t.renter_name
+        )
         category_name = (t.category.key or t.category.name) if t.category else None
         supplier_name = t.supplier.name if t.supplier else None
         return TransactionRead(
@@ -106,6 +109,7 @@ class TransactionService:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
+        renter = None
         if data.renter_id is not None:
             renter = self.renter_repository.get_by_id(data.renter_id)
             if renter is None or renter.property_id != data.property_id:
@@ -118,6 +122,8 @@ class TransactionService:
         payment_method = (
             PaymentMethodEnum(data.payment_method.value) if data.payment_method else None
         )
+        property_address = f"{property.address}, {property.city}" if property.city else property.address
+        renter_name_snap = f"{renter.first_name} {renter.last_name}".strip() if renter else None
         transaction = Transaction(
             type=TransactionTypeEnum.REVENUE,
             property_id=data.property_id,
@@ -130,6 +136,8 @@ class TransactionService:
             category_id=None,
             supplier_id=None,
             notes=data.notes,
+            property_address=property_address,
+            renter_name=renter_name_snap,
         )
         created = self.transaction_repository.create(transaction)
         return self.get_transaction(created.id, owner_id)
@@ -193,6 +201,12 @@ class TransactionService:
                     detail="Supplier does not belong to the selected category",
                 )
         currency_code = property.currency_code or settings.DEFAULT_CURRENCY
+        property_address = f"{property.address}, {property.city}" if property.city else property.address
+        renter_name_snap = None
+        if data.renter_id is not None:
+            renter = self.renter_repository.get_by_id(data.renter_id)
+            if renter:
+                renter_name_snap = f"{renter.first_name} {renter.last_name}".strip()
         transaction = Transaction(
             type=TransactionTypeEnum.EXPENSE,
             property_id=data.property_id,
@@ -205,6 +219,8 @@ class TransactionService:
             category_id=data.category_id,
             supplier_id=data.supplier_id,
             notes=data.notes,
+            property_address=property_address,
+            renter_name=renter_name_snap,
         )
         created = self.transaction_repository.create(transaction)
         return self.get_transaction(created.id, owner_id)
