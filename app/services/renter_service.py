@@ -38,9 +38,8 @@ class RenterService:
         return renter
 
     def _check_renter_access(self, renter: Renter, owner_id: str) -> None:
-        if renter.property_id is not None and renter.property is not None:
-            if renter.property.owner_id != owner_id:
-                raise HTTPException(status_code=403, detail="Access denied")
+        if renter.owner_id is not None and renter.owner_id != owner_id:
+            raise HTTPException(status_code=403, detail="Access denied")
 
     def create_renter(self, data: RenterCreate, owner_id: str):
         if data.property_id is not None:
@@ -49,6 +48,7 @@ class RenterService:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
         lease_end = _compute_lease_end(data.lease_start, len(data.lease_years))
         renter = Renter(
+            owner_id=owner_id,
             property_id=data.property_id,
             first_name=data.first_name,
             last_name=data.last_name,

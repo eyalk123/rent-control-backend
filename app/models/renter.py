@@ -27,6 +27,7 @@ class Renter(Base):
     extra_contacts = Column(JSON, nullable=True)
     full_contract_url = Column(String, nullable=True)
     id_image_url = Column(String, nullable=True)
+    owner_id = Column(String, nullable=True)
 
     property = relationship("Property", back_populates="renters")
     transactions = relationship("Transaction", back_populates="renter", passive_deletes=True)

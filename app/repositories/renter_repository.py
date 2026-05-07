@@ -14,7 +14,7 @@ class RenterRepository:
     def get_all(self, owner_id: str | None = None) -> list[Renter]:
         stmt = select(Renter).options(selectinload(Renter.property))
         if owner_id is not None:
-            stmt = stmt.join(Property).where(Property.owner_id == owner_id)
+            stmt = stmt.where(Renter.owner_id == owner_id)
         return list(self.session.scalars(stmt).all())
 
     def get_by_id(self, renter_id: int) -> Renter | None:
