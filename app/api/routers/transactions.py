@@ -9,6 +9,8 @@ from app.schemas.transaction import (
     TransactionCreateRevenue,
     TransactionRead,
     TransactionSummaryResponse,
+    TransactionUpdateExpense,
+    TransactionUpdateRevenue,
 )
 from app.services.transaction_service import TransactionService
 
@@ -74,6 +76,34 @@ def create_revenue(
 ):
     """Create a revenue transaction."""
     return transaction_service.create_revenue(data, owner_id=current_user["user_id"])
+
+
+@router.patch("/revenue/{transaction_id}", response_model=TransactionRead)
+def update_revenue(
+    transaction_id: int,
+    data: TransactionUpdateRevenue,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    transaction_service: Annotated[TransactionService, Depends(get_transaction_service)],
+):
+    """Partially update a revenue transaction."""
+    updated = transaction_service.update_revenue(transaction_id, data, owner_id=current_user["user_id"])
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return updated
+
+
+@router.patch("/expense/{transaction_id}", response_model=TransactionRead)
+def update_expense(
+    transaction_id: int,
+    data: TransactionUpdateExpense,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    transaction_service: Annotated[TransactionService, Depends(get_transaction_service)],
+):
+    """Partially update an expense transaction."""
+    updated = transaction_service.update_expense(transaction_id, data, owner_id=current_user["user_id"])
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return updated
 
 
 @router.delete("/{transaction_id}", status_code=204)

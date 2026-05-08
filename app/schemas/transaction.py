@@ -79,6 +79,45 @@ class TransactionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
+class TransactionUpdateRevenue(BaseModel):
+    property_id: Optional[int] = None
+    renter_id: Optional[int] = None
+    amount: Optional[float] = None
+    date_of_payment: Optional[date] = None
+    month_for: Optional[date] = None
+    payment_method: Optional[PaymentMethod] = None
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError("amount must be greater than 0")
+        return v
+
+
+class TransactionUpdateExpense(BaseModel):
+    property_id: Optional[int] = None
+    renter_id: Optional[int] = None
+    amount: Optional[float] = None
+    date_of_payment: Optional[date] = None
+    payment_method: Optional[PaymentMethod] = None
+    category_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError("amount must be greater than 0")
+        return v
+
+
 class MonthSummaryItem(BaseModel):
     key: str  # "YYYY-MM"
     year: int

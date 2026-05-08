@@ -18,6 +18,8 @@ from app.schemas.transaction import (
     TransactionRead,
     TransactionSummaryResponse,
     TransactionType,
+    TransactionUpdateExpense,
+    TransactionUpdateRevenue,
 )
 
 
@@ -178,6 +180,86 @@ class TransactionService:
             ))
 
         return TransactionSummaryResponse(six_month_buckets=buckets)
+
+    def update_revenue(self, transaction_id: int, data: TransactionUpdateRevenue, owner_id: str) -> TransactionRead | None:
+        fields: dict = {}
+        if data.property_id is not None:
+            property = self.property_repository.get_by_id(data.property_id, owner_id)
+            if property is None:
+                raise HTTPException(status_code=404, detail="Property not found")
+            fields["property_id"] = data.property_id
+            fields["property_address"] = (
+                f"{property.address}, {property.city}" if property.city else property.address
+            )
+        if data.renter_id is not None:
+            renter = self.renter_repository.get_by_id(data.renter_id)
+            if renter is None:
+                raise HTTPException(status_code=400, detail="Renter not found")
+            fields["renter_id"] = data.renter_id
+            fields["renter_name"] = f"{renter.first_name} {renter.last_name}".strip()
+        elif "renter_id" in data.model_fields_set and data.renter_id is None:
+            fields["renter_id"] = None
+            fields["renter_name"] = None
+        if data.amount is not None:
+            fields["amount"] = Decimal(str(data.amount))
+        if data.date_of_payment is not None:
+            fields["date_of_payment"] = data.date_of_payment
+        if data.month_for is not None:
+            fields["month_for"] = data.month_for
+        if data.payment_method is not None:
+            fields["payment_method"] = PaymentMethodEnum(data.payment_method.value)
+        elif "payment_method" in data.model_fields_set and data.payment_method is None:
+            fields["payment_method"] = None
+        if "notes" in data.model_fields_set:
+            fields["notes"] = data.notes
+        updated = self.transaction_repository.update(transaction_id, owner_id, fields)
+        if updated is None:
+            return None
+        return self._transaction_to_read(updated)
+
+    def update_expense(self, transaction_id: int, data: TransactionUpdateExpense, owner_id: str) -> TransactionRead | None:
+        fields: dict = {}
+        if data.property_id is not None:
+            property = self.property_repository.get_by_id(data.property_id, owner_id)
+            if property is None:
+                raise HTTPException(status_code=404, detail="Property not found")
+            fields["property_id"] = data.property_id
+            fields["property_address"] = (
+                f"{property.address}, {property.city}" if property.city else property.address
+            )
+        if data.category_id is not None:
+            category = self.expense_category_repository.get_by_id(data.category_id)
+            if category is None:
+                raise HTTPException(status_code=400, detail="Expense category not found")
+            fields["category_id"] = data.category_id
+        if data.supplier_id is not None:
+            supplier = self.supplier_repository.get_by_id(data.supplier_id, owner_id)
+            if supplier is None:
+                raise HTTPException(status_code=400, detail="Supplier not found")
+            fields["supplier_id"] = data.supplier_id
+        elif "supplier_id" in data.model_fields_set and data.supplier_id is None:
+            fields["supplier_id"] = None
+        if data.renter_id is not None:
+            renter = self.renter_repository.get_by_id(data.renter_id)
+            if renter is None:
+                raise HTTPException(status_code=400, detail="Renter not found")
+            fields["renter_id"] = data.renter_id
+            fields["renter_name"] = f"{renter.first_name} {renter.last_name}".strip()
+        elif "renter_id" in data.model_fields_set and data.renter_id is None:
+            fields["renter_id"] = None
+            fields["renter_name"] = None
+        if data.amount is not None:
+            fields["amount"] = Decimal(str(data.amount))
+        if data.date_of_payment is not None:
+            fields["date_of_payment"] = data.date_of_payment
+        if data.payment_method is not None:
+            fields["payment_method"] = PaymentMethodEnum(data.payment_method.value)
+        if "notes" in data.model_fields_set:
+            fields["notes"] = data.notes
+        updated = self.transaction_repository.update(transaction_id, owner_id, fields)
+        if updated is None:
+            return None
+        return self._transaction_to_read(updated)
 
     def delete_transaction(self, transaction_id: int, owner_id: str) -> bool:
         return self.transaction_repository.delete(transaction_id, owner_id)

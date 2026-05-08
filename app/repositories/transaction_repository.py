@@ -122,6 +122,16 @@ class TransactionRepository:
         )
         return list(self.session.execute(stmt).all())
 
+    def update(self, transaction_id: int, owner_id: str, fields: dict) -> Transaction | None:
+        transaction = self.get_by_id(transaction_id, owner_id)
+        if transaction is None:
+            return None
+        for key, value in fields.items():
+            setattr(transaction, key, value)
+        self.session.commit()
+        self.session.refresh(transaction)
+        return transaction
+
     def delete(self, transaction_id: int, owner_id: str) -> bool:
         transaction = self.get_by_id(transaction_id, owner_id)
         if transaction is None:
