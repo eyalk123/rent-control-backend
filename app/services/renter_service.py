@@ -46,7 +46,7 @@ class RenterService:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
             if property is None:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
-        lease_end = _compute_lease_end(data.lease_start, len(data.lease_years))
+        lease_end = _compute_lease_end(data.lease_start, len(data.lease_years)) if data.lease_start else None
         renter = Renter(
             owner_id=owner_id,
             property_id=data.property_id,
@@ -92,7 +92,7 @@ class RenterService:
                 count = len(json.loads(lease_years_raw))
             else:
                 count = len(json.loads(renter.lease_years))
-            update_dict["lease_end"] = _compute_lease_end(lease_start, count)
+            update_dict["lease_end"] = _compute_lease_end(lease_start, count) if lease_start else None
         return self.renter_repository.update(renter, update_dict)
 
     def delete_renter(self, renter_id: int, owner_id: str) -> bool:
