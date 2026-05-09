@@ -9,6 +9,7 @@ class PropertyTypeEnum(str, enum.Enum):
     APARTMENT = "apartment"
     HOUSE = "house"
     COMMERCIAL = "commercial"
+    GARDEN_APARTMENT = "garden_apartment"
 
 
 class Property(Base):
@@ -37,6 +38,8 @@ class Property(Base):
     basic_contract_url = Column(String, nullable=True)
     land_registry_url = Column(String, nullable=True)
     currency_code = Column(String, nullable=True)
+    floor = Column(Integer, nullable=True)
+    apartment = Column(String, nullable=True)
 
     renters = relationship("Renter", back_populates="property", foreign_keys="Renter.property_id")
     transactions = relationship("Transaction", back_populates="property", foreign_keys="Transaction.property_id", passive_deletes=True)

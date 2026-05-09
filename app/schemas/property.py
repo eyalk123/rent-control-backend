@@ -9,6 +9,7 @@ class PropertyType(str, Enum):
     Apartment = "apartment"
     House = "house"
     Commercial = "commercial"
+    GardenApartment = "garden_apartment"
 
 
 def _normalize_optional_str(v):
@@ -49,6 +50,8 @@ class PropertyCreate(BaseModel):
     inventory_notes: Optional[str] = None
     basic_contract_url: Optional[str] = None
     land_registry_url: Optional[str] = None
+    floor: Optional[int] = None
+    apartment: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -76,6 +79,8 @@ class PropertyUpdate(BaseModel):
     inventory_notes: Optional[str] = None
     basic_contract_url: Optional[str] = None
     land_registry_url: Optional[str] = None
+    floor: Optional[int] = None
+    apartment: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -124,6 +129,8 @@ class PropertyRead(BaseModel):
     inventory_notes: Optional[str] = None
     basic_contract_url: Optional[str] = None
     land_registry_url: Optional[str] = None
+    floor: Optional[int] = None
+    apartment: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
 
