@@ -137,3 +137,18 @@ class PropertyRenterSummary(BaseModel):
     monthly_rent: float
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OverdueRenterRead(BaseModel):
+    renter_id: int
+    first_name: str
+    last_name: str
+    property_id: Optional[int]
+    property_address: Optional[str]
+    property_city: Optional[str]
+    property_owner: Optional[str]
+    monthly_amount: float
+    payment_day_of_month: int
+    days_overdue: int
+
+    model_config = ConfigDict(from_attributes=True)

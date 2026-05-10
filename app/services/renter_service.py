@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from app.models.renter import Renter
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.schemas.renter import RenterCreate, RenterUpdate
+from app.schemas.renter import OverdueRenterRead, RenterCreate, RenterUpdate
 
 
 def _compute_lease_end(lease_start: date, lease_years_count: int) -> date:
@@ -94,6 +94,44 @@ class RenterService:
                 count = len(json.loads(renter.lease_years))
             update_dict["lease_end"] = _compute_lease_end(lease_start, count) if lease_start else None
         return self.renter_repository.update(renter, update_dict)
+
+    def get_overdue_this_month(
+        self,
+        owner_id: str,
+        property_owner: str | None = None,
+    ) -> list[OverdueRenterRead]:
+        import calendar
+
+        today = date.today()
+        renters = self.renter_repository.get_overdue_this_month(
+            owner_id=owner_id,
+            property_owner=property_owner,
+        )
+
+        result = []
+        for r in renters:
+            last_day = calendar.monthrange(today.year, today.month)[1]
+            pay_day = min(r.payment_day_of_month, last_day)
+            expected = date(today.year, today.month, pay_day)
+            days_overdue = (today - expected).days
+
+            lease_data = json.loads(r.lease_years) if isinstance(r.lease_years, str) else (r.lease_years or [])
+            monthly_amount = lease_data[0]["amount"] if lease_data else 0.0
+
+            prop = r.property
+            result.append(OverdueRenterRead(
+                renter_id=r.id,
+                first_name=r.first_name,
+                last_name=r.last_name,
+                property_id=r.property_id,
+                property_address=prop.address if prop else None,
+                property_city=prop.city if prop else None,
+                property_owner=prop.property_owner if prop else None,
+                monthly_amount=monthly_amount,
+                payment_day_of_month=r.payment_day_of_month,
+                days_overdue=days_overdue,
+            ))
+        return result
 
     def delete_renter(self, renter_id: int, owner_id: str) -> bool:
         renter = self.renter_repository.get_by_id(renter_id)

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.dependencies import get_current_user, get_renter_service
-from app.schemas.renter import RenterCreate, RenterListRead, RenterRead, RenterUpdate
+from app.schemas.renter import OverdueRenterRead, RenterCreate, RenterListRead, RenterRead, RenterUpdate
 from app.services.renter_service import RenterService
 
 router = APIRouter()
@@ -17,6 +17,19 @@ def list_renters(
     """Returns a list of all renters with associated property details."""
     renters = renter_service.list_renters(owner_id=current_user["user_id"])
     return renters
+
+
+@router.get("/overdue", response_model=list[OverdueRenterRead])
+def get_overdue_renters(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    renter_service: Annotated[RenterService, Depends(get_renter_service)],
+    property_owner: str | None = None,
+):
+    """Renters with no revenue recorded for the current month whose payment date has passed."""
+    return renter_service.get_overdue_this_month(
+        owner_id=current_user["user_id"],
+        property_owner=property_owner,
+    )
 
 
 @router.get("/{renter_id}", response_model=RenterRead)
