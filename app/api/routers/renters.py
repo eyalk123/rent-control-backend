@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.dependencies import get_current_user, get_renter_service
-from app.schemas.renter import OverdueRenterRead, RenterCreate, RenterListRead, RenterRead, RenterUpdate
+from app.schemas.renter import ExpiringRenterRead, OverdueRenterRead, RenterCreate, RenterListRead, RenterRead, RenterUpdate
 from app.services.renter_service import RenterService
 
 router = APIRouter()
@@ -29,6 +29,19 @@ def get_overdue_renters(
     return renter_service.get_overdue_this_month(
         owner_id=current_user["user_id"],
         property_owner=property_owner,
+    )
+
+
+@router.get("/expiring", response_model=list[ExpiringRenterRead])
+def get_expiring_renters(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    renter_service: Annotated[RenterService, Depends(get_renter_service)],
+    days_until: int = 90,
+):
+    """Renters whose lease ends within the next `days_until` days."""
+    return renter_service.get_expiring_leases(
+        owner_id=current_user["user_id"],
+        days_until=days_until,
     )
 
 

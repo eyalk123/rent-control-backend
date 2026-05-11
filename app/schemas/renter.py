@@ -152,3 +152,17 @@ class OverdueRenterRead(BaseModel):
     days_overdue: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ExpiringRenterRead(BaseModel):
+    renter_id: int
+    first_name: str
+    last_name: str
+    property_id: Optional[int]
+    property_address: Optional[str]
+    property_city: Optional[str]
+    property_owner: Optional[str]
+    lease_end_date: date
+    days_until_expiry: int
+
+    model_config = ConfigDict(from_attributes=True)

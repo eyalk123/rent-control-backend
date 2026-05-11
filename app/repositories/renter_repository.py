@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -107,6 +107,28 @@ class RenterRepository:
         if property_owner is not None:
             stmt = stmt.where(Property.property_owner == property_owner)
 
+        return list(self.session.scalars(stmt).all())
+
+    def get_expiring_leases(
+        self,
+        owner_id: str,
+        days_until: int = 90,
+    ) -> list[Renter]:
+        today = date.today()
+        cutoff = today + timedelta(days=days_until)
+
+        stmt = (
+            select(Renter)
+            .join(Property, Renter.property_id == Property.id)
+            .options(selectinload(Renter.property))
+            .where(
+                Renter.owner_id == owner_id,
+                Renter.lease_start <= today,
+                Renter.lease_end > today,
+                Renter.lease_end <= cutoff,
+            )
+            .order_by(Renter.lease_end.asc())
+        )
         return list(self.session.scalars(stmt).all())
 
     def get_by_property_id(

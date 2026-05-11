@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from app.models.renter import Renter
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.schemas.renter import OverdueRenterRead, RenterCreate, RenterUpdate
+from app.schemas.renter import ExpiringRenterRead, OverdueRenterRead, RenterCreate, RenterUpdate
 
 
 def _compute_lease_end(lease_start: date, lease_years_count: int) -> date:
@@ -130,6 +130,33 @@ class RenterService:
                 monthly_amount=monthly_amount,
                 payment_day_of_month=r.payment_day_of_month,
                 days_overdue=days_overdue,
+            ))
+        return result
+
+    def get_expiring_leases(
+        self,
+        owner_id: str,
+        days_until: int = 90,
+    ) -> list[ExpiringRenterRead]:
+        today = date.today()
+        renters = self.renter_repository.get_expiring_leases(
+            owner_id=owner_id,
+            days_until=days_until,
+        )
+        result = []
+        for r in renters:
+            days_left = (r.lease_end - today).days
+            prop = r.property
+            result.append(ExpiringRenterRead(
+                renter_id=r.id,
+                first_name=r.first_name,
+                last_name=r.last_name,
+                property_id=r.property_id,
+                property_address=prop.address if prop else None,
+                property_city=prop.city if prop else None,
+                property_owner=prop.property_owner if prop else None,
+                lease_end_date=r.lease_end,
+                days_until_expiry=days_left,
             ))
         return result
 
