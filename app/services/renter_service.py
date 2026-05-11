@@ -129,6 +129,7 @@ class RenterService:
                 property_owner=prop.property_owner if prop else None,
                 monthly_amount=monthly_amount,
                 payment_day_of_month=r.payment_day_of_month,
+                payment_type=r.payment_type,
                 days_overdue=days_overdue,
             ))
         return result

@@ -149,6 +149,7 @@ class OverdueRenterRead(BaseModel):
     property_owner: Optional[str]
     monthly_amount: float
     payment_day_of_month: int
+    payment_type: Optional[str]
     days_overdue: int
 
     model_config = ConfigDict(from_attributes=True)
