@@ -26,7 +26,7 @@ MONTH_NAMES = [
 
 
 def _fmt(amount: Decimal) -> str:
-    return f"₪{amount:,.0f}"
+    return f"ILS {amount:,.0f}"
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +238,7 @@ class _PDF(FPDF):
 
     def header(self):
         self.set_font("Helvetica", "B", 12)
-        self.cell(0, 8, f"{self._title} — {self._year}", align="C", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 8, f"{self._title} - {self._year}", align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def footer(self):
@@ -470,7 +470,7 @@ def generate_income_expense_csv(data: IncomeExpenseReportResponse) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
 
-    writer.writerow([f"Income & Expense Report — {data.year}"])
+    writer.writerow([f"Income & Expense Report - {data.year}"])
     writer.writerow([])
     writer.writerow(["Owner", "Property", "Month", "Revenue", "Expenses", "Net"])
 
@@ -518,7 +518,7 @@ def generate_expense_log_csv(data: ExpenseLogReportResponse) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
 
-    writer.writerow([f"Expense Log — {data.year}"])
+    writer.writerow([f"Expense Log - {data.year}"])
     writer.writerow([])
 
     # Part 1: transaction list
