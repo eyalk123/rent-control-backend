@@ -11,6 +11,7 @@ from app.models.base import Base
 from app.models.expense_category import ExpenseCategory
 from app.models.property import Property
 from app.models.renter import Renter
+from app.models.report_export import ReportExport
 from app.models.supplier import Supplier
 from app.models.transaction import Transaction
 

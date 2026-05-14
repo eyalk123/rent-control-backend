@@ -13,6 +13,7 @@ from app.database import get_db
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
+from app.repositories.report_export_repository import ReportExportRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services.expense_category_service import ExpenseCategoryService
@@ -103,6 +104,10 @@ def get_supplier_service(
     ],
 ) -> SupplierService:
     return SupplierService(supplier_repository, expense_category_repository)
+
+
+def get_report_export_repository(db: Annotated[Session, Depends(get_db)]) -> ReportExportRepository:
+    return ReportExportRepository(db)
 
 
 def get_user_service(db: Annotated[Session, Depends(get_db)]) -> UserService:

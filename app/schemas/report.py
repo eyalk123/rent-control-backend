@@ -1,6 +1,7 @@
+from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class MonthCell(BaseModel):
@@ -62,3 +63,13 @@ class ExpenseLogReportResponse(BaseModel):
     categories: list[str]  # ordered list of all category names
     grand_total_by_category: dict[str, Decimal]
     grand_total: Decimal
+
+
+class ReportExportRead(BaseModel):
+    id: int
+    report_type: str
+    year: int
+    format: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
