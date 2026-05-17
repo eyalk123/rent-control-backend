@@ -31,7 +31,9 @@ class Property(Base):
     number_of_rooms = Column(Integer, nullable=True)
     parking_numbers = Column(Text, nullable=True)  # JSON array of strings
     electricity_meter_number = Column(String, nullable=True)
-    water_meter_tax = Column(Float, nullable=True)
+    electricity_account_number = Column(String, nullable=True)
+    water_meter_number = Column(String, nullable=True)
+    water_account_number = Column(String, nullable=True)
     property_tax = Column(Float, nullable=True)
     house_committee = Column(Float, nullable=True)
     inventory_notes = Column(Text, nullable=True)

@@ -43,7 +43,9 @@ class PropertyCreate(BaseModel):
     number_of_rooms: Optional[int] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
-    water_meter_tax: Optional[float] = None
+    electricity_account_number: Optional[str] = None
+    water_meter_number: Optional[str] = None
+    water_account_number: Optional[str] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
@@ -72,7 +74,9 @@ class PropertyUpdate(BaseModel):
     number_of_rooms: Optional[int] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
-    water_meter_tax: Optional[float] = None
+    electricity_account_number: Optional[str] = None
+    water_meter_number: Optional[str] = None
+    water_account_number: Optional[str] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
@@ -122,7 +126,9 @@ class PropertyRead(BaseModel):
     number_of_rooms: Optional[int] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
-    water_meter_tax: Optional[float] = None
+    electricity_account_number: Optional[str] = None
+    water_meter_number: Optional[str] = None
+    water_account_number: Optional[str] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
     property_owner: Optional[str] = None
