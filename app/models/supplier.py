@@ -21,6 +21,7 @@ class Supplier(Base):
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
+    bank_account = Column(String(50), nullable=True)
 
     categories = relationship(
         "ExpenseCategory",

@@ -60,6 +60,7 @@ class SupplierService:
             phone=data.phone,
             email=data.email,
             notes=data.notes,
+            bank_account=data.bank_account,
         )
         created = self.supplier_repository.create(supplier, data.category_ids)
         return SupplierRead.model_validate(created)
@@ -80,6 +81,7 @@ class SupplierService:
             phone=data.phone,
             email=data.email,
             notes=data.notes,
+            bank_account=data.bank_account,
             category_ids=data.category_ids,
             is_active=data.is_active,
         )

@@ -10,6 +10,7 @@ class SupplierRead(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     notes: Optional[str] = None
+    bank_account: Optional[str] = None
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
@@ -26,6 +27,7 @@ class SupplierRead(BaseModel):
                 phone=data.phone,
                 email=data.email,
                 notes=data.notes,
+                bank_account=data.bank_account,
                 is_active=data.is_active,
             )
         return handler(data)
@@ -37,6 +39,7 @@ class SupplierCreate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     notes: Optional[str] = None
+    bank_account: Optional[str] = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -58,5 +61,6 @@ class SupplierUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     notes: Optional[str] = None
+    bank_account: Optional[str] = None
     category_ids: Optional[list[int]] = None
     is_active: Optional[bool] = None

@@ -69,6 +69,7 @@ class SupplierRepository:
         phone: str | None = None,
         email: str | None = None,
         notes: str | None = None,
+        bank_account: str | None = None,
         category_ids: list[int] | None = None,
         is_active: bool | None = None,
     ) -> Supplier | None:
@@ -83,6 +84,8 @@ class SupplierRepository:
             supplier.email = email
         if notes is not None:
             supplier.notes = notes
+        if bank_account is not None:
+            supplier.bank_account = bank_account
         if is_active is not None:
             supplier.is_active = is_active
         if category_ids is not None:
