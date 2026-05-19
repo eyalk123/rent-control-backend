@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
+from app.repositories.property_file_repository import PropertyFileRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.report_export_repository import ReportExportRepository
@@ -51,6 +52,10 @@ def get_current_user(
 
 def get_property_repository(db: Annotated[Session, Depends(get_db)]) -> PropertyRepository:
     return PropertyRepository(db)
+
+
+def get_property_file_repository(db: Annotated[Session, Depends(get_db)]) -> PropertyFileRepository:
+    return PropertyFileRepository(db)
 
 
 def get_renter_repository(db: Annotated[Session, Depends(get_db)]) -> RenterRepository:

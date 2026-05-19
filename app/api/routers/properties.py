@@ -2,8 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from app.api.dependencies import get_current_user, get_property_service
+from app.api.dependencies import get_current_user, get_property_file_repository, get_property_service
+from app.repositories.property_file_repository import PropertyFileRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas.property_file import PropertyFileCreate, PropertyFileRead
 from app.schemas.renter import PropertyRenterSummary
 from app.services.property_service import PropertyService
 
@@ -81,6 +83,48 @@ def delete_property(
     deleted = property_service.delete_property(property_id, owner_id=current_user["user_id"])
     if not deleted:
         raise HTTPException(status_code=404, detail="Property not found")
+    return None
+
+
+@router.get("/{property_id}/files", response_model=list[PropertyFileRead])
+def list_property_files(
+    property_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+    file_repo: Annotated[PropertyFileRepository, Depends(get_property_file_repository)],
+):
+    if not property_service.get_property(property_id, owner_id=current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Property not found")
+    return file_repo.get_by_property(property_id)
+
+
+@router.post("/{property_id}/files/bulk", response_model=list[PropertyFileRead], status_code=201)
+def bulk_create_property_files(
+    property_id: int,
+    files: list[PropertyFileCreate],
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+    file_repo: Annotated[PropertyFileRepository, Depends(get_property_file_repository)],
+):
+    if not property_service.get_property(property_id, owner_id=current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Property not found")
+    return file_repo.bulk_create(property_id, [f.model_dump() for f in files])
+
+
+@router.delete("/{property_id}/files/{file_id}", status_code=204)
+def delete_property_file(
+    property_id: int,
+    file_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+    file_repo: Annotated[PropertyFileRepository, Depends(get_property_file_repository)],
+):
+    if not property_service.get_property(property_id, owner_id=current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Property not found")
+    file = file_repo.get_by_id(file_id, property_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    file_repo.delete(file)
     return None
 
 
