@@ -45,6 +45,7 @@ class TransactionCreateExpense(BaseModel):
     category_id: int
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
+    receipt_image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -69,6 +70,7 @@ class TransactionRead(BaseModel):
     category_id: Optional[int] = None
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
+    receipt_image_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     property_name: Optional[str] = None
@@ -107,6 +109,7 @@ class TransactionUpdateExpense(BaseModel):
     category_id: Optional[int] = None
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
+    receipt_image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

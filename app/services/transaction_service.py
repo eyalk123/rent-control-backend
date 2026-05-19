@@ -63,6 +63,7 @@ class TransactionService:
             category_id=t.category_id,
             supplier_id=t.supplier_id,
             notes=t.notes,
+            receipt_image_url=t.receipt_image_url,
             created_at=t.created_at,
             updated_at=t.updated_at,
             property_name=property_name,
@@ -256,6 +257,8 @@ class TransactionService:
             fields["payment_method"] = PaymentMethodEnum(data.payment_method.value)
         if "notes" in data.model_fields_set:
             fields["notes"] = data.notes
+        if "receipt_image_url" in data.model_fields_set:
+            fields["receipt_image_url"] = data.receipt_image_url
         updated = self.transaction_repository.update(transaction_id, owner_id, fields)
         if updated is None:
             return None
@@ -303,6 +306,7 @@ class TransactionService:
             category_id=data.category_id,
             supplier_id=data.supplier_id,
             notes=data.notes,
+            receipt_image_url=data.receipt_image_url,
             property_address=property_address,
             renter_name=renter_name_snap,
         )
