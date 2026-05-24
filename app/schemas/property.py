@@ -28,6 +28,7 @@ class PropertyBriefRead(BaseModel):
     address: str
     city: str
     type: PropertyType
+    image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
