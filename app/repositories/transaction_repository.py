@@ -9,6 +9,7 @@ from app.models.property import Property
 from app.models.renter import Renter
 from app.models.supplier import Supplier
 from app.models.transaction import Transaction, TransactionTypeEnum
+from typing import Optional
 
 
 class TransactionRepository:
@@ -36,6 +37,7 @@ class TransactionRepository:
                 selectinload(Transaction.property),
                 selectinload(Transaction.renter),
                 selectinload(Transaction.category),
+                selectinload(Transaction.categories),
                 selectinload(Transaction.supplier),
             )
         )
@@ -64,6 +66,7 @@ class TransactionRepository:
                 selectinload(Transaction.property),
                 selectinload(Transaction.renter),
                 selectinload(Transaction.category),
+                selectinload(Transaction.categories),
                 selectinload(Transaction.supplier),
             )
         )
@@ -122,12 +125,14 @@ class TransactionRepository:
         )
         return list(self.session.execute(stmt).all())
 
-    def update(self, transaction_id: int, owner_id: str, fields: dict) -> Transaction | None:
+    def update(self, transaction_id: int, owner_id: str, fields: dict, new_categories: Optional[list] = None) -> Transaction | None:
         transaction = self.get_by_id(transaction_id, owner_id)
         if transaction is None:
             return None
         for key, value in fields.items():
             setattr(transaction, key, value)
+        if new_categories is not None:
+            transaction.categories = new_categories
         self.session.commit()
         self.session.refresh(transaction)
         return transaction

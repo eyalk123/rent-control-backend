@@ -14,7 +14,8 @@ class ExpenseCategory(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     sort_order = Column(Integer, nullable=False, default=0)
 
-    transactions = relationship("Transaction", back_populates="category")
+    transactions = relationship("Transaction", back_populates="category", foreign_keys="Transaction.category_id")
+    transaction_many = relationship("Transaction", secondary="transaction_categories", back_populates="categories")
     suppliers = relationship(
         "Supplier",
         secondary="supplier_categories",

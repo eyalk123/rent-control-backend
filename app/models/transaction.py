@@ -1,10 +1,17 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Table, Text
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
+
+transaction_categories = Table(
+    "transaction_categories",
+    Base.metadata,
+    Column("transaction_id", Integer, ForeignKey("transactions.id", ondelete="CASCADE"), primary_key=True),
+    Column("category_id", Integer, ForeignKey("expense_categories.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class TransactionTypeEnum(str, enum.Enum):
@@ -56,7 +63,8 @@ class Transaction(Base):
 
     property = relationship("Property", back_populates="transactions")
     renter = relationship("Renter", back_populates="transactions")
-    category = relationship("ExpenseCategory", back_populates="transactions")
+    category = relationship("ExpenseCategory", back_populates="transactions", foreign_keys=[category_id])
+    categories = relationship("ExpenseCategory", secondary="transaction_categories", back_populates="transaction_many")
     supplier = relationship("Supplier", back_populates="transactions")
 
     __table_args__ = (

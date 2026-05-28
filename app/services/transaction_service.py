@@ -48,7 +48,10 @@ class TransactionService:
             if t.renter
             else t.renter_name
         )
-        category_name = (t.category.key or t.category.name) if t.category else None
+        category_ids = [c.id for c in t.categories] if t.categories else []
+        category_id = category_ids[0] if category_ids else t.category_id
+        first_cat = t.categories[0] if t.categories else t.category
+        category_name = (first_cat.key or first_cat.name) if first_cat else None
         supplier_name = t.supplier.name if t.supplier else None
         return TransactionRead(
             id=t.id,
@@ -60,7 +63,8 @@ class TransactionService:
             month_for=t.month_for,
             amount=t.amount,
             currency_code=t.currency_code,
-            category_id=t.category_id,
+            category_id=category_id,
+            category_ids=category_ids,
             supplier_id=t.supplier_id,
             notes=t.notes,
             receipt_image_url=t.receipt_image_url,
@@ -220,6 +224,7 @@ class TransactionService:
 
     def update_expense(self, transaction_id: int, data: TransactionUpdateExpense, owner_id: str) -> TransactionRead | None:
         fields: dict = {}
+        new_categories = None
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
             if property is None:
@@ -228,11 +233,17 @@ class TransactionService:
             fields["property_address"] = (
                 f"{property.address}, {property.city}" if property.city else property.address
             )
-        if data.category_id is not None:
-            category = self.expense_category_repository.get_by_id(data.category_id)
-            if category is None:
-                raise HTTPException(status_code=400, detail="Expense category not found")
-            fields["category_id"] = data.category_id
+        if data.category_ids is not None:
+            if len(data.category_ids) == 0:
+                raise HTTPException(status_code=400, detail="At least one category is required")
+            category_objects = []
+            for cid in data.category_ids:
+                cat = self.expense_category_repository.get_by_id(cid)
+                if cat is None:
+                    raise HTTPException(status_code=400, detail=f"Expense category {cid} not found")
+                category_objects.append(cat)
+            new_categories = category_objects
+            fields["category_id"] = data.category_ids[0]
         if data.supplier_id is not None:
             supplier = self.supplier_repository.get_by_id(data.supplier_id, owner_id)
             if supplier is None:
@@ -259,7 +270,7 @@ class TransactionService:
             fields["notes"] = data.notes
         if "receipt_image_url" in data.model_fields_set:
             fields["receipt_image_url"] = data.receipt_image_url
-        updated = self.transaction_repository.update(transaction_id, owner_id, fields)
+        updated = self.transaction_repository.update(transaction_id, owner_id, fields, new_categories=new_categories)
         if updated is None:
             return None
         return self._transaction_to_read(updated)
@@ -271,20 +282,23 @@ class TransactionService:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
-        category = self.expense_category_repository.get_by_id(data.category_id)
-        if category is None:
-            raise HTTPException(status_code=400, detail="Expense category not found")
+        category_objects = []
+        for cid in data.category_ids:
+            cat = self.expense_category_repository.get_by_id(cid)
+            if cat is None:
+                raise HTTPException(status_code=400, detail=f"Expense category {cid} not found")
+            category_objects.append(cat)
         if data.supplier_id is not None:
             supplier = self.supplier_repository.get_by_id(data.supplier_id, owner_id)
             if supplier is None:
                 raise HTTPException(status_code=400, detail="Supplier not found")
             if not supplier.is_active:
                 raise HTTPException(status_code=400, detail="Supplier is inactive")
-            category_ids = [c.id for c in supplier.categories]
-            if data.category_id not in category_ids:
+            supplier_cat_ids = [c.id for c in supplier.categories]
+            if not any(cid in supplier_cat_ids for cid in data.category_ids):
                 raise HTTPException(
                     status_code=400,
-                    detail="Supplier does not belong to the selected category",
+                    detail="Supplier does not belong to any of the selected categories",
                 )
         currency_code = property.currency_code or settings.DEFAULT_CURRENCY
         property_address = f"{property.address}, {property.city}" if property.city else property.address
@@ -303,12 +317,13 @@ class TransactionService:
             month_for=None,
             amount=Decimal(str(data.amount)),
             currency_code=currency_code,
-            category_id=data.category_id,
+            category_id=data.category_ids[0],
             supplier_id=data.supplier_id,
             notes=data.notes,
             receipt_image_url=data.receipt_image_url,
             property_address=property_address,
             renter_name=renter_name_snap,
         )
+        transaction.categories = category_objects
         created = self.transaction_repository.create(transaction)
         return self.get_transaction(created.id, owner_id)

@@ -42,7 +42,7 @@ class TransactionCreateExpense(BaseModel):
     amount: float
     date_of_payment: date
     payment_method: PaymentMethod
-    category_id: int
+    category_ids: list[int] = Field(min_length=1)
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: Optional[str] = None
@@ -68,6 +68,7 @@ class TransactionRead(BaseModel):
     amount: Decimal
     currencyCode: str = Field(validation_alias="currency_code")
     category_id: Optional[int] = None
+    category_ids: list[int] = []
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: Optional[str] = None
@@ -106,7 +107,7 @@ class TransactionUpdateExpense(BaseModel):
     amount: Optional[float] = None
     date_of_payment: Optional[date] = None
     payment_method: Optional[PaymentMethod] = None
-    category_id: Optional[int] = None
+    category_ids: Optional[list[int]] = None
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: Optional[str] = None
