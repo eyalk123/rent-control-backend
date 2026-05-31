@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.dependencies import get_current_user, get_property_file_repository, get_property_service
 from app.repositories.property_file_repository import PropertyFileRepository
@@ -126,17 +126,3 @@ def delete_property_file(
         raise HTTPException(status_code=404, detail="File not found")
     file_repo.delete(file)
     return None
-
-
-@router.post("/{property_id}/image", response_model=PropertyRead)
-def upload_image(
-    property_id: int,
-    file: Annotated[UploadFile, File()],
-    current_user: Annotated[dict, Depends(get_current_user)],
-    property_service: Annotated[PropertyService, Depends(get_property_service)],
-):
-    """Uploads an image for the property (multipart/form-data). Mocks S3 upload."""
-    property = property_service.upload_property_image(property_id, file, owner_id=current_user["user_id"])
-    if property is None:
-        raise HTTPException(status_code=404, detail="Property not found")
-    return property

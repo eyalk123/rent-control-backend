@@ -1,7 +1,5 @@
 import json
 
-from fastapi import UploadFile
-
 from app.models.property import Property, PropertyTypeEnum
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
@@ -79,14 +77,6 @@ class PropertyService:
         delete_file_urls([property.image_url, property.basic_contract_url, property.land_registry_url])
         self.property_repository.delete_obj(property)
         return True
-
-    def upload_property_image(self, property_id: int, file: UploadFile, owner_id: str):
-        property = self.property_repository.get_by_id(property_id, owner_id)
-        if property is None:
-            return None
-        mock_url = f"https://mock-bucket.s3.amazonaws.com/properties/{property_id}/{file.filename}"
-        self.property_repository.update_image_url(property_id, owner_id, mock_url)
-        return self.property_repository.get_by_id(property_id, owner_id)
 
     def get_property_renters(self, property_id: int, owner_id: str):
         """Return renters linked to the property (active leases only) for e.g. add-revenue form."""

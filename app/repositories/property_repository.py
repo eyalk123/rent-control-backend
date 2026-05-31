@@ -67,16 +67,3 @@ class PropertyRepository:
         self.session.execute(stmt)
         self.session.delete(property)
         self.session.commit()
-
-    def update_image_url(self, property_id: int, owner_id: str, image_url: str) -> Property | None:
-        stmt = (
-            select(Property)
-            .where(Property.id == property_id, Property.owner_id == owner_id)
-        )
-        property = self.session.scalar(stmt)
-        if property is None:
-            return None
-        property.image_url = image_url
-        self.session.commit()
-        self.session.refresh(property)
-        return property
