@@ -5,11 +5,14 @@ to a single endpoint. Sends are best-effort: any failure is swallowed and logged
 so a push problem never breaks the request that triggered it.
 """
 import logging
+from collections import defaultdict
+from typing import Callable
 
 import requests
 
 from app.config import settings
 from app.repositories.device_token_repository import DeviceTokenRepository
+from app.services.notification_messages import normalize_locale
 
 logger = logging.getLogger(__name__)
 
@@ -23,21 +26,32 @@ class PushService:
     def __init__(self, device_token_repository: DeviceTokenRepository):
         self.device_token_repository = device_token_repository
 
-    def send_push(self, owner_id: str, title: str, body: str, data: dict | None = None) -> int:
-        """Push to every device registered for an owner. Returns the number of
-        messages Expo accepted. Tokens Expo reports as dead are pruned."""
-        tokens = [t.token for t in self.device_token_repository.list_by_owner(owner_id)]
-        if not tokens:
+    def send_push(
+        self,
+        owner_id: str,
+        render: Callable[[str], tuple[str, str]],
+        data: dict | None = None,
+    ) -> int:
+        """Push to every device registered for an owner. ``render`` is called once
+        per device locale and returns the ``(title, body)`` for that locale, so each
+        device receives copy in its own language. Returns the number of messages Expo
+        accepted. Tokens Expo reports as dead are pruned."""
+        by_locale: dict[str, list[str]] = defaultdict(list)
+        for device in self.device_token_repository.list_by_owner(owner_id):
+            by_locale[normalize_locale(device.locale)].append(device.token)
+        if not by_locale:
             return 0
 
         accepted = 0
-        for start in range(0, len(tokens), _BATCH_SIZE):
-            batch = tokens[start:start + _BATCH_SIZE]
-            messages = [
-                {"to": token, "title": title, "body": body, "data": data or {}}
-                for token in batch
-            ]
-            accepted += self._post_batch(batch, messages)
+        for locale, tokens in by_locale.items():
+            title, body = render(locale)
+            for start in range(0, len(tokens), _BATCH_SIZE):
+                batch = tokens[start:start + _BATCH_SIZE]
+                messages = [
+                    {"to": token, "title": title, "body": body, "data": data or {}}
+                    for token in batch
+                ]
+                accepted += self._post_batch(batch, messages)
         return accepted
 
     def _post_batch(self, tokens: list[str], messages: list[dict]) -> int:

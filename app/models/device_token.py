@@ -22,6 +22,9 @@ class DeviceToken(Base):
         Enum(DevicePlatformEnum, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
     )
+    # App language for this device (e.g. "en", "he"). Nullable for legacy rows;
+    # the reminder job falls back to English when unset.
+    locale = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     last_used_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
