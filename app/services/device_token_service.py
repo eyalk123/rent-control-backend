@@ -12,6 +12,7 @@ class DeviceTokenService:
             token=data.token,
             owner_id=owner_id,
             platform=data.platform,
+            locale=data.locale,
         )
 
     def unregister(self, token: str, owner_id: str) -> bool:

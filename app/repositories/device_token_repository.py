@@ -10,19 +10,29 @@ class DeviceTokenRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def upsert(self, token: str, owner_id: str, platform: DevicePlatformEnum) -> DeviceToken:
+    def upsert(
+        self,
+        token: str,
+        owner_id: str,
+        platform: DevicePlatformEnum,
+        locale: str | None = None,
+    ) -> DeviceToken:
         """Register a token. A token is globally unique, so re-registering the same
-        token (e.g. a new sign-in on the same device) re-points it at the current
-        owner and refreshes ``last_used_at`` rather than creating a duplicate row."""
+        token (e.g. a new sign-in on the same device, or a language change) re-points
+        it at the current owner, refreshes ``locale``/``last_used_at`` rather than
+        creating a duplicate row."""
         existing = self.session.scalar(select(DeviceToken).where(DeviceToken.token == token))
         if existing is not None:
             existing.owner_id = owner_id
             existing.platform = platform
+            existing.locale = locale
             existing.last_used_at = datetime.utcnow()
             self.session.commit()
             self.session.refresh(existing)
             return existing
-        device_token = DeviceToken(token=token, owner_id=owner_id, platform=platform)
+        device_token = DeviceToken(
+            token=token, owner_id=owner_id, platform=platform, locale=locale
+        )
         self.session.add(device_token)
         self.session.commit()
         self.session.refresh(device_token)

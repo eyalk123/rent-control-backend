@@ -25,12 +25,30 @@ def test_register_device_token(client, db_session):
     assert [t.token for t in tokens] == ["ExponentPushToken[a]"]
 
 
+def test_register_device_token_stores_locale(client, db_session):
+    resp = client.post(
+        "/device-tokens",
+        json={"token": "ExponentPushToken[a]", "platform": "ios", "locale": "he"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["locale"] == "he"
+    tokens = DeviceTokenRepository(db_session).list_by_owner(OWNER_A)
+    assert tokens[0].locale == "he"
+
+
 def test_register_device_token_is_idempotent(client, db_session):
-    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "ios"})
-    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "android"})
+    client.post(
+        "/device-tokens",
+        json={"token": "ExponentPushToken[a]", "platform": "ios", "locale": "en"},
+    )
+    client.post(
+        "/device-tokens",
+        json={"token": "ExponentPushToken[a]", "platform": "android", "locale": "he"},
+    )
     tokens = DeviceTokenRepository(db_session).list_by_owner(OWNER_A)
     assert len(tokens) == 1
     assert tokens[0].platform.value == "android"  # re-register updates in place
+    assert tokens[0].locale == "he"  # ...including a language change
 
 
 def test_unregister_device_token(client, db_session):
@@ -107,6 +125,33 @@ def test_run_reminders_sends_overdue_and_expiring(client, db_session, captured_p
     assert resp.json()["sent"] == {"overdue": 1, "lease_expiring": 1}
     types = sorted(m["data"]["type"] for m in captured_pushes)
     assert types == ["lease_expiring", "overdue"]
+
+
+@freeze_time("2026-06-15")
+def test_run_reminders_localizes_per_device(client, db_session, captured_pushes):
+    """Two devices on the same owner in different languages each get their own copy;
+    a device with no stored locale falls back to English."""
+    today = date(2026, 6, 15)
+    client.post(
+        "/device-tokens",
+        json={"token": "ExponentPushToken[he]", "platform": "ios", "locale": "he"},
+    )
+    client.post(
+        "/device-tokens",
+        json={"token": "ExponentPushToken[en]", "platform": "android", "locale": "en"},
+    )
+    client.post("/device-tokens", json={"token": "ExponentPushToken[none]", "platform": "web"})
+    _seed_overdue_and_expiring(db_session, today)
+
+    resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
+    assert resp.status_code == 200
+
+    overdue = {m["to"]: m for m in captured_pushes if m["data"]["type"] == "overdue"}
+    assert overdue["ExponentPushToken[he]"]["title"] == "שכר דירה באיחור"
+    assert overdue["ExponentPushToken[en]"]["title"] == "Rent overdue"
+    assert overdue["ExponentPushToken[none]"]["title"] == "Rent overdue"  # fallback
+    assert "באיחור" in overdue["ExponentPushToken[he]"]["body"]
+    assert overdue["ExponentPushToken[en]"]["body"].startswith("Rent from ")
 
 
 @freeze_time("2026-06-15")

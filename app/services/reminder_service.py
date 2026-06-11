@@ -11,6 +11,7 @@ from app.config import settings
 from app.models.notification_log import NotificationTypeEnum
 from app.repositories.device_token_repository import DeviceTokenRepository
 from app.repositories.notification_log_repository import NotificationLogRepository
+from app.services.notification_messages import render_lease_expiring, render_overdue
 from app.services.push_service import PushService
 from app.services.renter_service import RenterService
 
@@ -57,8 +58,7 @@ class ReminderService:
             label = _renter_label(r.first_name, r.last_name, r.property_address)
             self.push_service.send_push(
                 owner_id=owner_id,
-                title="Rent overdue · שכר דירה באיחור",
-                body=f"Rent from {label} is overdue.",
+                render=lambda locale, label=label: render_overdue(locale, label=label),
                 data={"type": "overdue", "renterId": r.renter_id, "route": f"/renters/{r.renter_id}"},
             )
             self.notification_log_repository.mark_sent(
@@ -81,8 +81,9 @@ class ReminderService:
             label = _renter_label(r.first_name, r.last_name, r.property_address)
             self.push_service.send_push(
                 owner_id=owner_id,
-                title="Lease expiring · חוזה מסתיים",
-                body=f"Lease for {label} expires in {r.days_until_expiry} days.",
+                render=lambda locale, label=label, days=r.days_until_expiry: render_lease_expiring(
+                    locale, label=label, days=days
+                ),
                 data={
                     "type": "lease_expiring",
                     "renterId": r.renter_id,
