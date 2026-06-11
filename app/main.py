@@ -1,7 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import expense_categories, properties, renters, reports, suppliers, transactions, users
+from app.api.routers import (
+    device_tokens,
+    expense_categories,
+    internal,
+    properties,
+    renters,
+    reports,
+    suppliers,
+    transactions,
+    users,
+)
 from app.config import settings
 
 app = FastAPI(title="Property Management API")
@@ -21,6 +31,8 @@ app.include_router(expense_categories.router, prefix="/expense-categories", tags
 app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(reports.router, prefix="/reports", tags=["reports"])
+app.include_router(device_tokens.router, prefix="/device-tokens", tags=["device-tokens"])
+app.include_router(internal.router, prefix="/internal", tags=["internal"])
 
 
 @app.get("/health")

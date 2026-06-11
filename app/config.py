@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     # Mobile clients are unaffected (CORS is a browser-only mechanism).
     # In Railway set e.g. "https://app.example.com,https://web.up.railway.app".
     CORS_ORIGINS: str = "http://localhost:5173"
+    # Push notifications (Expo Push Service).
+    # Optional access token; only required when Expo "Enhanced Security" is enabled.
+    EXPO_ACCESS_TOKEN: str = ""
+    # Shared secret guarding POST /internal/run-reminders (sent as the X-Cron-Secret header).
+    # Leave empty to disable the endpoint (it will reject every request).
+    REMINDER_CRON_SECRET: str = ""
+    # How many days ahead of lease_end an "expiring lease" reminder is sent.
+    LEASE_EXPIRY_REMINDER_DAYS: int = 30
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
