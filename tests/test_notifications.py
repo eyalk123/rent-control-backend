@@ -70,10 +70,15 @@ def test_cannot_unregister_other_owners_token(client_factory, db_session):
 
 # --- reminder job ------------------------------------------------------------
 
+class _Captured(list):
+    """A list of all messages sent, plus a count of HTTP POSTs made to Expo."""
+    post_calls = 0
+
+
 @pytest.fixture
 def captured_pushes(monkeypatch):
     """Mock the Expo HTTP call; record every message sent and return ok tickets."""
-    sent: list[dict] = []
+    sent = _Captured()
 
     class _FakeResponse:
         def __init__(self, messages):
@@ -86,6 +91,7 @@ def captured_pushes(monkeypatch):
             return {"data": [{"status": "ok", "id": "ticket"} for _ in self._messages]}
 
     def _fake_post(url, json=None, headers=None, timeout=None):
+        sent.post_calls += 1
         sent.extend(json or [])
         return _FakeResponse(json or [])
 
@@ -152,6 +158,28 @@ def test_run_reminders_localizes_per_device(client, db_session, captured_pushes)
     assert overdue["ExponentPushToken[none]"]["title"] == "Rent overdue"  # fallback
     assert "באיחור" in overdue["ExponentPushToken[he]"]["body"]
     assert overdue["ExponentPushToken[en]"]["body"].startswith("Rent from ")
+
+
+@freeze_time("2026-06-15")
+def test_run_reminders_batches_into_one_post(client, db_session, captured_pushes):
+    """Many overdue renters are sent in a single Expo POST, not one per renter."""
+    today = date(2026, 6, 15)
+    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "ios"})
+    prop = make_property(db_session)
+    for i in range(5):
+        make_renter(
+            db_session,
+            property_id=prop.id,
+            first_name=f"Late{i}",
+            lease_start=today - timedelta(days=100),
+            lease_end=today + timedelta(days=200),
+            payment_day_of_month=1,
+        )
+
+    resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
+    assert resp.json()["sent"]["overdue"] == 5
+    assert len(captured_pushes) == 5  # one message per renter
+    assert captured_pushes.post_calls == 1  # ...all in a single HTTP request
 
 
 @freeze_time("2026-06-15")
