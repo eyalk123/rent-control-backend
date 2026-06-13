@@ -49,6 +49,8 @@ class PropertyService:
             land_registry_url=data.land_registry_url,
             floor=data.floor,
             apartment=data.apartment,
+            block=data.block,
+            plot=data.plot,
         )
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)

@@ -47,6 +47,8 @@ class PropertyRepository:
             "land_registry_url",
             "floor",
             "apartment",
+            "block",
+            "plot",
         }
         for key, value in data.items():
             if hasattr(property, key) and (value is not None or key in nullable_fields):

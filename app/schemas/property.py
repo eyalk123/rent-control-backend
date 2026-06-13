@@ -55,6 +55,8 @@ class PropertyCreate(BaseModel):
     land_registry_url: Optional[str] = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
+    block: Optional[str] = None
+    plot: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -86,6 +88,8 @@ class PropertyUpdate(BaseModel):
     land_registry_url: Optional[str] = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
+    block: Optional[str] = None
+    plot: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -138,6 +142,8 @@ class PropertyRead(BaseModel):
     land_registry_url: Optional[str] = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
+    block: Optional[str] = None
+    plot: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
 
