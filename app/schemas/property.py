@@ -28,6 +28,8 @@ class PropertyBriefRead(BaseModel):
     address: str
     city: str
     type: PropertyType
+    floor: Optional[int] = None
+    apartment: Optional[str] = None
     image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
