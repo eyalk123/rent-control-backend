@@ -14,7 +14,7 @@ class Renter(Base):
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
     phone = Column(String, nullable=False)
-    email = Column(String, nullable=False)
+    email = Column(String, nullable=True)
     lease_years = Column(Text, nullable=False)  # JSON array of {amount, type}
     lease_start = Column(Date, nullable=True)
     lease_end = Column(Date, nullable=True)  # computed internally from lease_start + len(lease_years)

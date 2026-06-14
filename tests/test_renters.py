@@ -28,6 +28,14 @@ def test_create_renter_without_property(client):
     assert body["lease_years"] == [{"amount": 18000, "type": "contract"}]
 
 
+def test_create_renter_without_email(client):
+    payload = _renter_payload()
+    payload.pop("email")
+    resp = client.post("/renters", json=payload)
+    assert resp.status_code == 201
+    assert resp.json()["email"] is None
+
+
 def test_create_renter_computes_lease_end(client, db_session):
     prop = make_property(db_session)
     payload = _renter_payload(

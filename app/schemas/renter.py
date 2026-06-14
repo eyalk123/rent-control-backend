@@ -43,7 +43,7 @@ class RenterCreate(BaseModel):
     first_name: str
     last_name: str
     phone: str
-    email: str
+    email: Optional[str] = None
     lease_years: list[LeaseYear]
     lease_start: Optional[date] = None
     number_of_payments: Optional[int] = None
@@ -100,7 +100,7 @@ class RenterRead(BaseModel):
     first_name: str
     last_name: str
     phone: str
-    email: str
+    email: Optional[str] = None
     lease_years: list[LeaseYear]
     lease_start: Optional[date] = None
     number_of_payments: Optional[int] = None
