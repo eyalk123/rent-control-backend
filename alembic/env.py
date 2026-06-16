@@ -10,7 +10,9 @@ from app.config import settings
 from app.models.base import Base
 from app.models.device_token import DeviceToken
 from app.models.expense_category import ExpenseCategory
-from app.models.notification_log import NotificationLog
+from app.models.notification import Notification
+from app.models.notification_rule import NotificationRule
+from app.models.notification_settings import NotificationSettings
 from app.models.property import Property
 from app.models.property_file import PropertyFile
 from app.models.renter import Renter

@@ -99,13 +99,22 @@ class RenterService:
         self,
         owner_id: str,
         property_owner: str | None = None,
+        property_ids: list[int] | None = None,
+        property_owners: list[str] | None = None,
+        renter_ids: list[int] | None = None,
     ) -> list[OverdueRenterRead]:
         import calendar
 
         today = date.today()
+        # Back-compat: the existing /renters/overdue endpoint passes a single
+        # property_owner; fold it into the multi-value scope filter.
+        if property_owner is not None and not property_owners:
+            property_owners = [property_owner]
         renters = self.renter_repository.get_overdue_this_month(
             owner_id=owner_id,
-            property_owner=property_owner,
+            property_ids=property_ids,
+            property_owners=property_owners,
+            renter_ids=renter_ids,
         )
 
         result = []
@@ -138,11 +147,17 @@ class RenterService:
         self,
         owner_id: str,
         days_until: int = 90,
+        property_ids: list[int] | None = None,
+        property_owners: list[str] | None = None,
+        renter_ids: list[int] | None = None,
     ) -> list[ExpiringRenterRead]:
         today = date.today()
         renters = self.renter_repository.get_expiring_leases(
             owner_id=owner_id,
             days_until=days_until,
+            property_ids=property_ids,
+            property_owners=property_owners,
+            renter_ids=renter_ids,
         )
         result = []
         for r in renters:

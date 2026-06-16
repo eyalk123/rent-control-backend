@@ -17,8 +17,6 @@ class Settings(BaseSettings):
     # Shared secret guarding POST /internal/run-reminders (sent as the X-Cron-Secret header).
     # Leave empty to disable the endpoint (it will reject every request).
     REMINDER_CRON_SECRET: str = ""
-    # How many days ahead of lease_end an "expiring lease" reminder is sent.
-    LEASE_EXPIRY_REMINDER_DAYS: int = 30
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

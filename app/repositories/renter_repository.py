@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.property import Property
@@ -8,9 +8,33 @@ from app.models.renter import Renter
 from app.models.transaction import Transaction
 
 
+def _scope_conditions(
+    property_ids: list[int] | None,
+    property_owners: list[str] | None,
+    renter_ids: list[int] | None,
+) -> list:
+    """Build the positive-only, union scope filter shared by the overdue and
+    expiring queries. Returns a list to splat into ``.where(*conds)`` — empty
+    when no scope is given (matches all)."""
+    clauses = []
+    if property_ids:
+        clauses.append(Renter.property_id.in_(property_ids))
+    if property_owners:
+        clauses.append(Property.property_owner.in_(property_owners))
+    if renter_ids:
+        clauses.append(Renter.id.in_(renter_ids))
+    return [or_(*clauses)] if clauses else []
+
+
 class RenterRepository:
     def __init__(self, session: Session):
         self.session = session
+
+    def list_distinct_owner_ids(self) -> list[str]:
+        """Every owner that has at least one renter — the set the reminder job
+        evaluates (vs. only owners with a registered push device)."""
+        stmt = select(Renter.owner_id).where(Renter.owner_id.isnot(None)).distinct()
+        return list(self.session.scalars(stmt).all())
 
     def get_all(self, owner_id: str | None = None) -> list[Renter]:
         stmt = select(Renter).options(selectinload(Renter.property))
@@ -69,7 +93,9 @@ class RenterRepository:
     def get_overdue_this_month(
         self,
         owner_id: str,
-        property_owner: str | None = None,
+        property_ids: list[int] | None = None,
+        property_owners: list[str] | None = None,
+        renter_ids: list[int] | None = None,
     ) -> list[Renter]:
         today = date.today()
         first_of_month = date(today.year, today.month, 1)
@@ -102,10 +128,9 @@ class RenterRepository:
                 Renter.payment_day_of_month.isnot(None),
                 Renter.payment_day_of_month <= today.day,
                 Renter.id.notin_(paid_subq),
+                *_scope_conditions(property_ids, property_owners, renter_ids),
             )
         )
-        if property_owner is not None:
-            stmt = stmt.where(Property.property_owner == property_owner)
 
         return list(self.session.scalars(stmt).all())
 
@@ -113,6 +138,9 @@ class RenterRepository:
         self,
         owner_id: str,
         days_until: int = 90,
+        property_ids: list[int] | None = None,
+        property_owners: list[str] | None = None,
+        renter_ids: list[int] | None = None,
     ) -> list[Renter]:
         today = date.today()
         cutoff = today + timedelta(days=days_until)
@@ -126,8 +154,32 @@ class RenterRepository:
                 Renter.lease_start <= today,
                 Renter.lease_end > today,
                 Renter.lease_end <= cutoff,
+                *_scope_conditions(property_ids, property_owners, renter_ids),
             )
             .order_by(Renter.lease_end.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def get_active(
+        self,
+        owner_id: str,
+        property_ids: list[int] | None = None,
+        property_owners: list[str] | None = None,
+        renter_ids: list[int] | None = None,
+    ) -> list[Renter]:
+        """Renters with a currently-active lease in scope — used by the rule
+        preview to estimate how many renters a rule matches."""
+        today = date.today()
+        stmt = (
+            select(Renter)
+            .join(Property, Renter.property_id == Property.id)
+            .options(selectinload(Renter.property))
+            .where(
+                Renter.owner_id == owner_id,
+                Renter.lease_start <= today,
+                Renter.lease_end >= today,
+                *_scope_conditions(property_ids, property_owners, renter_ids),
+            )
         )
         return list(self.session.scalars(stmt).all())
 

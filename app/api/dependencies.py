@@ -12,7 +12,11 @@ from app.config import settings
 from app.database import get_db
 from app.repositories.device_token_repository import DeviceTokenRepository
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
-from app.repositories.notification_log_repository import NotificationLogRepository
+from app.repositories.notification_repository import NotificationRepository
+from app.repositories.notification_rule_repository import NotificationRuleRepository
+from app.repositories.notification_settings_repository import (
+    NotificationSettingsRepository,
+)
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
@@ -21,6 +25,8 @@ from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services.device_token_service import DeviceTokenService
 from app.services.expense_category_service import ExpenseCategoryService
+from app.services.notification_engine import NotificationEngine
+from app.services.notification_preferences_service import NotificationPreferencesService
 from app.services.property_service import PropertyService
 from app.services.push_service import PushService
 from app.services.reminder_service import ReminderService
@@ -150,10 +156,52 @@ def get_device_token_repository(
     return DeviceTokenRepository(db)
 
 
-def get_notification_log_repository(
+def get_notification_repository(
     db: Annotated[Session, Depends(get_db)],
-) -> NotificationLogRepository:
-    return NotificationLogRepository(db)
+) -> NotificationRepository:
+    return NotificationRepository(db)
+
+
+def get_notification_settings_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> NotificationSettingsRepository:
+    return NotificationSettingsRepository(db)
+
+
+def get_notification_rule_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> NotificationRuleRepository:
+    return NotificationRuleRepository(db)
+
+
+def get_notification_engine(
+    rule_repository: Annotated[NotificationRuleRepository, Depends(get_notification_rule_repository)],
+    settings_repository: Annotated[
+        NotificationSettingsRepository, Depends(get_notification_settings_repository)
+    ],
+    renter_service: Annotated[RenterService, Depends(get_renter_service)],
+    renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+) -> NotificationEngine:
+    return NotificationEngine(
+        rule_repository=rule_repository,
+        settings_repository=settings_repository,
+        renter_service=renter_service,
+        renter_repository=renter_repository,
+    )
+
+
+def get_notification_preferences_service(
+    rule_repository: Annotated[NotificationRuleRepository, Depends(get_notification_rule_repository)],
+    settings_repository: Annotated[
+        NotificationSettingsRepository, Depends(get_notification_settings_repository)
+    ],
+    engine: Annotated[NotificationEngine, Depends(get_notification_engine)],
+) -> NotificationPreferencesService:
+    return NotificationPreferencesService(
+        rule_repository=rule_repository,
+        settings_repository=settings_repository,
+        engine=engine,
+    )
 
 
 def get_device_token_service(
@@ -173,18 +221,22 @@ def get_push_service(
 
 
 def get_reminder_service(
-    renter_service: Annotated[RenterService, Depends(get_renter_service)],
-    push_service: Annotated[PushService, Depends(get_push_service)],
-    notification_log_repository: Annotated[
-        NotificationLogRepository, Depends(get_notification_log_repository)
+    engine: Annotated[NotificationEngine, Depends(get_notification_engine)],
+    notification_repository: Annotated[NotificationRepository, Depends(get_notification_repository)],
+    settings_repository: Annotated[
+        NotificationSettingsRepository, Depends(get_notification_settings_repository)
     ],
+    renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+    push_service: Annotated[PushService, Depends(get_push_service)],
     device_token_repository: Annotated[
         DeviceTokenRepository, Depends(get_device_token_repository)
     ],
 ) -> ReminderService:
     return ReminderService(
-        renter_service=renter_service,
+        engine=engine,
+        notification_repository=notification_repository,
+        settings_repository=settings_repository,
+        renter_repository=renter_repository,
         push_service=push_service,
-        notification_log_repository=notification_log_repository,
         device_token_repository=device_token_repository,
     )

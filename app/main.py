@@ -5,6 +5,8 @@ from app.api.routers import (
     device_tokens,
     expense_categories,
     internal,
+    notification_preferences,
+    notifications,
     properties,
     renters,
     reports,
@@ -32,6 +34,8 @@ app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(reports.router, prefix="/reports", tags=["reports"])
 app.include_router(device_tokens.router, prefix="/device-tokens", tags=["device-tokens"])
+app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+app.include_router(notification_preferences.router, tags=["notification-preferences"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 
 

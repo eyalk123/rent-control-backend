@@ -1,7 +1,9 @@
 from app.models.base import Base
 from app.models.device_token import DevicePlatformEnum, DeviceToken
 from app.models.expense_category import ExpenseCategory
-from app.models.notification_log import NotificationLog, NotificationTypeEnum
+from app.models.notification import Notification, NotificationTypeEnum
+from app.models.notification_rule import NotificationRule
+from app.models.notification_settings import NotificationSettings
 from app.models.property import Property, PropertyTypeEnum
 from app.models.renter import Renter
 from app.models.supplier import Supplier
@@ -16,8 +18,10 @@ __all__ = [
     "DevicePlatformEnum",
     "DeviceToken",
     "ExpenseCategory",
-    "NotificationLog",
+    "Notification",
     "NotificationTypeEnum",
+    "NotificationRule",
+    "NotificationSettings",
     "Property",
     "PropertyTypeEnum",
     "Renter",

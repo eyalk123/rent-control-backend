@@ -101,6 +101,8 @@ def captured_pushes(monkeypatch):
 
 
 def _seed_overdue_and_expiring(db_session, today):
+    """Seed exactly one overdue and one expiring renter that each match a single
+    default offset (overdue 1 day -> offset 0; lease 40 days out -> offset 90)."""
     prop = make_property(db_session)
     overdue = make_renter(
         db_session,
@@ -108,14 +110,14 @@ def _seed_overdue_and_expiring(db_session, today):
         first_name="Late",
         lease_start=today - timedelta(days=100),
         lease_end=today + timedelta(days=200),
-        payment_day_of_month=1,
+        payment_day_of_month=14,  # today is the 15th -> 1 day overdue
     )
     expiring = make_renter(
         db_session,
         property_id=prop.id,
         first_name="Soon",
         lease_start=today - timedelta(days=300),
-        lease_end=today + timedelta(days=20),  # within default 30-day window
+        lease_end=today + timedelta(days=40),  # 40 days out -> default offset 90 only
     )
     return overdue, expiring
 
@@ -128,7 +130,7 @@ def test_run_reminders_sends_overdue_and_expiring(client, db_session, captured_p
 
     resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
     assert resp.status_code == 200
-    assert resp.json()["sent"] == {"overdue": 1, "lease_expiring": 1}
+    assert resp.json()["sent"] == {"created": 2, "pushed": 2}
     types = sorted(m["data"]["type"] for m in captured_pushes)
     assert types == ["lease_expiring", "overdue"]
 
@@ -173,11 +175,11 @@ def test_run_reminders_batches_into_one_post(client, db_session, captured_pushes
             first_name=f"Late{i}",
             lease_start=today - timedelta(days=100),
             lease_end=today + timedelta(days=200),
-            payment_day_of_month=1,
+            payment_day_of_month=14,  # 1 day overdue -> a single default offset each
         )
 
     resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
-    assert resp.json()["sent"]["overdue"] == 5
+    assert resp.json()["sent"]["created"] == 5
     assert len(captured_pushes) == 5  # one message per renter
     assert captured_pushes.post_calls == 1  # ...all in a single HTTP request
 
@@ -189,21 +191,22 @@ def test_run_reminders_deduplicates_same_day(client, db_session, captured_pushes
     _seed_overdue_and_expiring(db_session, today)
 
     first = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
-    assert first.json()["sent"] == {"overdue": 1, "lease_expiring": 1}
+    assert first.json()["sent"] == {"created": 2, "pushed": 2}
     captured_pushes.clear()
 
     second = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
-    assert second.json()["sent"] == {"overdue": 0, "lease_expiring": 0}
+    assert second.json()["sent"] == {"created": 0, "pushed": 0}
     assert captured_pushes == []
 
 
 @freeze_time("2026-06-15")
-def test_run_reminders_skips_owners_without_devices(client, db_session, captured_pushes):
+def test_run_reminders_writes_feed_but_skips_push_without_devices(client, db_session, captured_pushes):
+    """No device -> the feed is still written (web reads it); only push is skipped."""
     today = date(2026, 6, 15)
     _seed_overdue_and_expiring(db_session, today)  # no device token registered
 
     resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
-    assert resp.json()["sent"] == {"overdue": 0, "lease_expiring": 0}
+    assert resp.json()["sent"] == {"created": 2, "pushed": 0}
     assert captured_pushes == []
 
 
