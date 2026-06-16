@@ -99,6 +99,31 @@ class NotificationRepository:
             self.session.refresh(notification)
         return notification
 
+    def dismiss_group(
+        self,
+        owner_id: str,
+        type: NotificationTypeEnum,
+        entity_id: int,
+        period_key: str,
+    ) -> int:
+        """Dismiss every non-dismissed row for one (type, renter, period). The
+        in-app feed collapses these offsets into a single item, so dismissing it
+        (or marking the rent paid) should clear them all at once."""
+        stmt = (
+            update(Notification)
+            .where(
+                Notification.owner_id == owner_id,
+                Notification.type == type,
+                Notification.entity_id == entity_id,
+                Notification.period_key == period_key,
+                Notification.dismissed_at.is_(None),
+            )
+            .values(dismissed_at=datetime.utcnow())
+        )
+        result = self.session.execute(stmt)
+        self.session.commit()
+        return result.rowcount or 0
+
     def mark_pushed(self, notification_ids: list[int]) -> None:
         if not notification_ids:
             return

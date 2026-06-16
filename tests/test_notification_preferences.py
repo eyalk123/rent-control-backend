@@ -20,6 +20,19 @@ def _seed_expiring(db_session, days_out=40, **kw):
     return prop
 
 
+def _seed_overdue(db_session, payment_day=10, **kw):
+    prop = make_property(db_session, **kw)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        first_name="Late",
+        lease_start=TODAY - timedelta(days=100),
+        lease_end=TODAY + timedelta(days=200),
+        payment_day_of_month=payment_day,  # 5 days overdue -> default offsets [0, 3] both fire
+    )
+    return prop
+
+
 # ── feed ──────────────────────────────────────────────────────────────────
 
 @freeze_time("2026-06-15")
@@ -55,6 +68,26 @@ def test_feed_dismiss_hides_item(client, db_session):
 
     assert client.post(f"/notifications/{item_id}/dismiss").status_code == 204
     # Re-reading regenerates candidates, but the dismissed row stays hidden.
+    assert client.get("/notifications").json() == []
+
+
+@freeze_time("2026-06-15")
+def test_feed_collapses_duplicate_offsets(client, db_session):
+    """Default rent-due offsets [0, 3] both fire for a renter 5 days overdue, but
+    the feed shows a single collapsed item (the most-urgent, latest offset)."""
+    _seed_overdue(db_session, payment_day=10)
+    overdue = [i for i in client.get("/notifications").json() if i["type"] == "overdue"]
+    assert len(overdue) == 1
+    assert overdue[0]["offset"] == 3
+
+
+@freeze_time("2026-06-15")
+def test_feed_dismiss_clears_whole_group(client, db_session):
+    """Dismissing the collapsed item clears every offset behind it, so the renter
+    doesn't reappear on the next read."""
+    _seed_overdue(db_session, payment_day=10)
+    item_id = client.get("/notifications").json()[0]["id"]
+    assert client.post(f"/notifications/{item_id}/dismiss").status_code == 204
     assert client.get("/notifications").json() == []
 
 

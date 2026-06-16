@@ -89,9 +89,9 @@ class ReminderService:
         return summary
 
     def _push(self, owner_id: str, created: list[tuple[Notification, Candidate]]) -> int:
-        settings = self.settings_repository.get(owner_id)
-        if settings is not None and not settings.push_enabled:
-            return 0
+        # Master toggle + per-event mute are already applied in evaluate_owner;
+        # push simply follows the same on/off as the in-app feed (no separate
+        # channel control). Send when the owner has a registered device.
         tokens_by_locale = self._tokens_by_locale(owner_id)
         if not tokens_by_locale:
             return 0

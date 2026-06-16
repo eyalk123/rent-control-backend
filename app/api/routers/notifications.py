@@ -9,12 +9,40 @@ from app.api.dependencies import (
     get_reminder_service,
     get_renter_repository,
 )
+from app.models.notification import Notification, NotificationTypeEnum
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.notification import NotificationRead
 from app.services.reminder_service import ReminderService
 
 router = APIRouter()
+
+
+def _collapse(rows: list[Notification]) -> list[tuple[Notification, bool]]:
+    """Reduce rows sharing (type, renter, period) to the single most-urgent one:
+    the latest reminder for overdue (highest offset), the soonest for an expiring
+    lease (lowest offset). Returns each winner paired with whether the whole group
+    is read (the item stays unread until every offset in it has been seen). Input
+    is newest-first; that order is preserved for the winners."""
+    groups: dict[tuple, list[Notification]] = {}
+    order: list[tuple] = []
+    for n in rows:
+        key = (n.type, n.entity_id, n.period_key)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(n)
+
+    out: list[tuple[Notification, bool]] = []
+    for key in order:
+        members = groups[key]
+        if key[0] == NotificationTypeEnum.LEASE_EXPIRING:
+            winner = min(members, key=lambda m: m.offset)
+        else:
+            winner = max(members, key=lambda m: m.offset)
+        group_read = all(m.read_at is not None for m in members)
+        out.append((winner, group_read))
+    return out
 
 
 @router.get("", response_model=list[NotificationRead])
@@ -26,13 +54,19 @@ def list_notifications(
     status: Literal["unread", "all"] = "all",
 ):
     """The in-app feed. Freshens itself on read (persists any newly-due rows, no
-    push) so the website stays current without waiting for the daily cron."""
+    push) so the website stays current without waiting for the daily cron.
+
+    Multiple offsets for the same (type, renter, period) — e.g. the default
+    rent-due offsets [0, 3] — are collapsed to a single, most-urgent item so the
+    feed reads as a to-handle list. Push (the cron path) still fires per offset."""
     owner_id = current_user["user_id"]
     reminder_service.generate_for_owner(owner_id)
 
+    representatives = _collapse(notification_repository.list_for_owner(owner_id))
+
     result: list[NotificationRead] = []
-    for n in notification_repository.list_for_owner(owner_id):
-        if status == "unread" and n.read_at is not None:
+    for n, group_read in representatives:
+        if status == "unread" and group_read:
             continue
         renter = renter_repository.get_by_id(n.entity_id)
         if renter is None:  # renter deleted — skip the dangling notification
@@ -48,7 +82,7 @@ def list_notifications(
             payment_type=renter.payment_type,
             offset=n.offset,
             data=json.loads(n.data) if n.data else {},
-            read=n.read_at is not None,
+            read=group_read,
             dismissed=n.dismissed_at is not None,
             created_at=n.sent_at,
         ))
@@ -81,6 +115,11 @@ def dismiss(
     current_user: Annotated[dict, Depends(get_current_user)],
     notification_repository: Annotated[NotificationRepository, Depends(get_notification_repository)],
 ):
-    if notification_repository.dismiss(notification_id, current_user["user_id"]) is None:
+    # The feed shows one collapsed item per (type, renter, period); dismissing it
+    # (or marking the rent paid) clears every offset in that group at once.
+    owner_id = current_user["user_id"]
+    row = notification_repository.get_for_owner(notification_id, owner_id)
+    if row is None:
         raise HTTPException(status_code=404, detail="Notification not found")
+    notification_repository.dismiss_group(owner_id, row.type, row.entity_id, row.period_key)
     return None

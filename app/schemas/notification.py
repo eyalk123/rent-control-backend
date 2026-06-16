@@ -45,8 +45,6 @@ class NotificationRead(BaseModel):
 
 class NotificationSettingsRead(BaseModel):
     master_enabled: bool
-    push_enabled: bool
-    inapp_enabled: bool
     muted_events: list[str]
 
     model_config = ConfigDict(from_attributes=True)
@@ -59,8 +57,6 @@ class NotificationSettingsRead(BaseModel):
 
 class NotificationSettingsUpdate(BaseModel):
     master_enabled: Optional[bool] = None
-    push_enabled: Optional[bool] = None
-    inapp_enabled: Optional[bool] = None
     muted_events: Optional[list[str]] = None
 
 

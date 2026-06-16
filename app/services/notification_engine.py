@@ -30,9 +30,6 @@ DEFAULT_RULES: dict[NotificationTypeEnum, list[int]] = {
 
 EVENT_TYPES = (NotificationTypeEnum.OVERDUE, NotificationTypeEnum.LEASE_EXPIRING)
 
-# Window (days) used by the preview to project "alerts in the next N days".
-PREVIEW_HORIZON_DAYS = 90
-
 
 @dataclass
 class RuleSpec:
@@ -202,7 +199,8 @@ class NotificationEngine:
         today: date | None = None,
     ) -> dict:
         """Estimate, without persisting, how many renters a draft rule matches
-        and roughly how many alerts it would produce over the next 90 days."""
+        and roughly how many reminders it would produce per cycle (one per
+        matched renter per offset)."""
         today = today or date.today()
         clean_offsets = sorted({o for o in offsets if o >= 0})
         scope = dict(
@@ -216,14 +214,9 @@ class NotificationEngine:
                 owner_id=owner_id, days_until=max(clean_offsets), **scope
             )
             matched = len(renters)
-            estimated = sum(
-                len([o for o in clean_offsets if r.days_until_expiry - o <= PREVIEW_HORIZON_DAYS])
-                for r in renters
-            )
-        else:  # OVERDUE — recurs monthly; approximate ~3 months in the 90-day horizon.
-            active = self.renter_repository.get_active(owner_id=owner_id, **scope)
-            matched = len(active)
-            months = max(1, PREVIEW_HORIZON_DAYS // 30)
-            estimated = matched * len(clean_offsets) * months
+        else:  # OVERDUE — any active renter in scope could trigger a rent reminder.
+            matched = len(self.renter_repository.get_active(owner_id=owner_id, **scope))
 
+        # One reminder per matched renter per offset (a single rent cycle / lease).
+        estimated = matched * len(clean_offsets)
         return {"matched_renters": matched, "estimated_alerts": estimated}

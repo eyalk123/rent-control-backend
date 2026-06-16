@@ -17,8 +17,6 @@ class NotificationSettings(Base):
 
     owner_id = Column(String, primary_key=True)
     master_enabled = Column(Boolean, nullable=False, default=True)
-    push_enabled = Column(Boolean, nullable=False, default=True)
-    inapp_enabled = Column(Boolean, nullable=False, default=True)
     muted_events = Column(Text, nullable=False, default="[]")  # JSON array of event-type strings
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -30,8 +30,6 @@ def upgrade() -> None:
         "notification_settings",
         sa.Column("owner_id", sa.String(), nullable=False),
         sa.Column("master_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("push_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("inapp_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("muted_events", sa.Text(), nullable=False, server_default="[]"),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),
