@@ -71,19 +71,29 @@ class SupplierService:
         data: SupplierUpdate,
         owner_id: str,
     ) -> SupplierRead | None:
-        if data.category_ids is not None:
-            self._validate_category_ids(data.category_ids, owner_id)
-        name = data.name.strip() if data.name and data.name.strip() else None
+        # Only the fields explicitly present in the request are applied, so a
+        # client can clear an optional field by sending it as null. Omitted
+        # fields are left untouched.
+        fields = data.model_dump(exclude_unset=True)
+
+        category_ids = fields.pop("category_ids", None)
+        if category_ids is not None:
+            self._validate_category_ids(category_ids, owner_id)
+
+        # name is non-nullable: ignore an empty/whitespace value instead of
+        # clearing it.
+        if "name" in fields:
+            name = fields["name"]
+            if name is None or not str(name).strip():
+                fields.pop("name")
+            else:
+                fields["name"] = str(name).strip()
+
         updated = self.supplier_repository.update(
             supplier_id,
             owner_id,
-            name=name,
-            phone=data.phone,
-            email=data.email,
-            notes=data.notes,
-            bank_account=data.bank_account,
-            category_ids=data.category_ids,
-            is_active=data.is_active,
+            fields=fields,
+            category_ids=category_ids,
         )
         if updated is None:
             return None

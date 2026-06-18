@@ -60,34 +60,22 @@ class SupplierRepository:
         self.session.commit()
         return self.get_by_id(supplier.id, supplier.owner_id) or supplier
 
+    _UPDATABLE_FIELDS = ("name", "phone", "email", "notes", "bank_account", "is_active")
+
     def update(
         self,
         supplier_id: int,
         owner_id: str,
         *,
-        name: str | None = None,
-        phone: str | None = None,
-        email: str | None = None,
-        notes: str | None = None,
-        bank_account: str | None = None,
+        fields: dict,
         category_ids: list[int] | None = None,
-        is_active: bool | None = None,
     ) -> Supplier | None:
         supplier = self.get_by_id(supplier_id, owner_id)
         if supplier is None:
             return None
-        if name is not None:
-            supplier.name = name
-        if phone is not None:
-            supplier.phone = phone
-        if email is not None:
-            supplier.email = email
-        if notes is not None:
-            supplier.notes = notes
-        if bank_account is not None:
-            supplier.bank_account = bank_account
-        if is_active is not None:
-            supplier.is_active = is_active
+        for key in self._UPDATABLE_FIELDS:
+            if key in fields:
+                setattr(supplier, key, fields[key])
         if category_ids is not None:
             self.session.execute(
                 supplier_categories.delete().where(supplier_categories.c.supplier_id == supplier_id)

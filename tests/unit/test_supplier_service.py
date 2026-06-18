@@ -69,3 +69,36 @@ def test_update_supplier_replaces_categories(db_session):
         supplier.id, SupplierUpdate(category_ids=[c2.id]), OWNER_A
     )
     assert read.category_ids == [c2.id]
+
+
+def test_update_supplier_clears_optional_fields_when_sent_null(db_session):
+    svc = _service(db_session)
+    supplier = make_supplier(
+        db_session, phone="050", email="a@b.com", notes="n", bank_account="12/345/678"
+    )
+    read = svc.update_supplier(
+        supplier.id,
+        SupplierUpdate(phone=None, email=None, notes=None, bank_account=None),
+        OWNER_A,
+    )
+    assert read.phone is None
+    assert read.email is None
+    assert read.notes is None
+    assert read.bank_account is None
+
+
+def test_update_supplier_leaves_omitted_fields_untouched(db_session):
+    svc = _service(db_session)
+    supplier = make_supplier(db_session, phone="050", bank_account="12/345/678")
+    # Only name is sent; phone/bank_account must be preserved.
+    read = svc.update_supplier(supplier.id, SupplierUpdate(name="Renamed"), OWNER_A)
+    assert read.name == "Renamed"
+    assert read.phone == "050"
+    assert read.bank_account == "12/345/678"
+
+
+def test_update_supplier_ignores_empty_name(db_session):
+    svc = _service(db_session)
+    supplier = make_supplier(db_session, name="Original")
+    read = svc.update_supplier(supplier.id, SupplierUpdate(name="   "), OWNER_A)
+    assert read.name == "Original"
