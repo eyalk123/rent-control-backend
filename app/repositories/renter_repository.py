@@ -68,6 +68,11 @@ class RenterRepository:
             "extra_contacts",
             "full_contract_url",
             "id_image_url",
+            "contract_term_years",
+            "option_years",
+            "base_rent",
+            "rent_escalation_mode",
+            "rent_escalation_value",
         }
         always_set_fields = {"lease_years", "lease_end"}
         for key, value in data.items():

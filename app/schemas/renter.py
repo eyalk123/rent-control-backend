@@ -13,6 +13,13 @@ class LeaseYearType(str, Enum):
     contract = "contract"
 
 
+class RentEscalationMode(str, Enum):
+    none = "none"
+    percent = "percent"
+    fixed = "fixed"
+    custom = "custom"
+
+
 class LeaseYear(BaseModel):
     amount: float
     type: LeaseYearType
@@ -46,6 +53,11 @@ class RenterCreate(BaseModel):
     email: Optional[str] = None
     lease_years: list[LeaseYear]
     lease_start: Optional[date] = None
+    contract_term_years: Optional[int] = None
+    option_years: Optional[int] = None
+    base_rent: Optional[float] = None
+    rent_escalation_mode: Optional[RentEscalationMode] = None
+    rent_escalation_value: Optional[float] = None
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
     payment_day_of_month: Optional[int] = None
@@ -74,6 +86,11 @@ class RenterUpdate(BaseModel):
     email: Optional[str] = None
     lease_years: Optional[list[LeaseYear]] = None
     lease_start: Optional[date] = None
+    contract_term_years: Optional[int] = None
+    option_years: Optional[int] = None
+    base_rent: Optional[float] = None
+    rent_escalation_mode: Optional[RentEscalationMode] = None
+    rent_escalation_value: Optional[float] = None
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
     payment_day_of_month: Optional[int] = None
@@ -103,6 +120,11 @@ class RenterRead(BaseModel):
     email: Optional[str] = None
     lease_years: list[LeaseYear]
     lease_start: Optional[date] = None
+    contract_term_years: Optional[int] = None
+    option_years: Optional[int] = None
+    base_rent: Optional[float] = None
+    rent_escalation_mode: Optional[RentEscalationMode] = None
+    rent_escalation_value: Optional[float] = None
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
     payment_day_of_month: Optional[int] = None

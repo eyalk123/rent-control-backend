@@ -57,6 +57,13 @@ class RenterService:
             lease_years=_encode_lease_years(data.lease_years),
             lease_start=data.lease_start,
             lease_end=lease_end,
+            contract_term_years=data.contract_term_years,
+            option_years=data.option_years,
+            base_rent=data.base_rent,
+            rent_escalation_mode=(
+                data.rent_escalation_mode.value if data.rent_escalation_mode else None
+            ),
+            rent_escalation_value=data.rent_escalation_value,
             number_of_payments=data.number_of_payments,
             payment_type=data.payment_type,
             payment_day_of_month=data.payment_day_of_month,

@@ -54,6 +54,50 @@ def test_create_renter_computes_lease_end(client, db_session):
     assert body["property"]["id"] == prop.id
 
 
+def test_create_renter_persists_lease_intent(client):
+    """The structured escalation intent round-trips so an edit re-opens with the
+    same rule instead of falling back to 'custom'."""
+    payload = _renter_payload(
+        lease_start="2025-01-01",
+        contract_term_years=2,
+        option_years=1,
+        base_rent=5000,
+        rent_escalation_mode="percent",
+        rent_escalation_value=5,
+        lease_years=[
+            {"amount": 5000, "type": "contract"},
+            {"amount": 5250, "type": "contract"},
+            {"amount": 5513, "type": "option"},
+        ],
+    )
+    created = client.post("/renters", json=payload)
+    assert created.status_code == 201
+    renter_id = created.json()["id"]
+
+    body = client.get(f"/renters/{renter_id}").json()
+    assert body["contract_term_years"] == 2
+    assert body["option_years"] == 1
+    assert body["base_rent"] == 5000
+    assert body["rent_escalation_mode"] == "percent"
+    assert body["rent_escalation_value"] == 5
+
+
+def test_update_renter_changes_lease_intent(client):
+    created = client.post(
+        "/renters",
+        json=_renter_payload(rent_escalation_mode="none", base_rent=5000),
+    )
+    renter_id = created.json()["id"]
+    resp = client.patch(
+        f"/renters/{renter_id}",
+        json={"rent_escalation_mode": "fixed", "rent_escalation_value": 200},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rent_escalation_mode"] == "fixed"
+    assert body["rent_escalation_value"] == 200
+
+
 def test_create_renter_foreign_property_forbidden(client_factory, db_session):
     prop = make_property(db_session, owner_id=OWNER_B)
     client_a = client_factory(OWNER_A)

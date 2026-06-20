@@ -18,6 +18,14 @@ class Renter(Base):
     lease_years = Column(Text, nullable=False)  # JSON array of {amount, type}
     lease_start = Column(Date, nullable=True)
     lease_end = Column(Date, nullable=True)  # computed internally from lease_start + len(lease_years)
+    # Structured lease-term intent (the form's higher-level inputs). lease_years
+    # stays the source of truth for rent math; these let an edit re-open with the
+    # same controls (term length, renewal options, escalation rule).
+    contract_term_years = Column(Integer, nullable=True)
+    option_years = Column(Integer, nullable=True)
+    base_rent = Column(Float, nullable=True)
+    rent_escalation_mode = Column(String, nullable=True)  # none | percent | fixed | custom
+    rent_escalation_value = Column(Float, nullable=True)
     number_of_payments = Column(Integer, nullable=True)
     payment_type = Column(String, nullable=True)
     payment_day_of_month = Column(Integer, nullable=True)
