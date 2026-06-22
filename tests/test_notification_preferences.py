@@ -16,6 +16,7 @@ def _seed_expiring(db_session, days_out=40, **kw):
         first_name="Soon",
         lease_start=TODAY - timedelta(days=300),
         lease_end=TODAY + timedelta(days=days_out),
+        payment_day_of_month=28,  # not yet due -> isolates the lease_expiring case
     )
     return prop
 

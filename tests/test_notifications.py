@@ -118,6 +118,7 @@ def _seed_overdue_and_expiring(db_session, today):
         first_name="Soon",
         lease_start=today - timedelta(days=300),
         lease_end=today + timedelta(days=40),  # 40 days out -> default offset 90 only
+        payment_day_of_month=28,  # not yet due -> isolates the lease_expiring case
     )
     return overdue, expiring
 

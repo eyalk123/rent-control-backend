@@ -170,7 +170,7 @@ class OverdueRenterRead(BaseModel):
     property_city: Optional[str]
     property_owner: Optional[str]
     monthly_amount: float
-    payment_day_of_month: int
+    payment_day_of_month: Optional[int]
     payment_type: Optional[str]
     days_overdue: int
 

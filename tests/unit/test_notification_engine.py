@@ -43,6 +43,7 @@ def _make_overdue(db_session, property_id, payment_day=14, **kw):
 
 
 def _make_expiring(db_session, property_id, days_out=40, **kw):
+    kw.setdefault("payment_day_of_month", 28)  # not yet due -> not also overdue
     return make_renter(
         db_session,
         property_id=property_id,
@@ -64,6 +65,16 @@ def test_defaults_fire_when_no_rules(db_session):
     assert set(by_type) == {NotificationTypeEnum.OVERDUE, NotificationTypeEnum.LEASE_EXPIRING}
     assert by_type[NotificationTypeEnum.OVERDUE].offset == 0
     assert by_type[NotificationTypeEnum.LEASE_EXPIRING].offset == 90
+
+
+@freeze_time("2026-06-15")
+def test_null_payment_day_fires_overdue_from_the_first(db_session):
+    prop = make_property(db_session)
+    _make_overdue(db_session, prop.id, payment_day=None)  # no payment day -> due on the 1st
+
+    overdue = [c for c in _engine(db_session).evaluate_owner(OWNER_A, TODAY)
+               if c.type == NotificationTypeEnum.OVERDUE]
+    assert sorted(c.offset for c in overdue) == [0, 3]  # 14 days overdue (since the 1st)
 
 
 @freeze_time("2026-06-15")

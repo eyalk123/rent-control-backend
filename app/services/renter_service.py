@@ -127,7 +127,7 @@ class RenterService:
         result = []
         for r in renters:
             last_day = calendar.monthrange(today.year, today.month)[1]
-            pay_day = min(r.payment_day_of_month, last_day)
+            pay_day = min(r.payment_day_of_month or 1, last_day)
             expected = date(today.year, today.month, pay_day)
             days_overdue = (today - expected).days
 

@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.property import Property
@@ -130,8 +130,9 @@ class RenterRepository:
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
                 Renter.lease_end >= today,
-                Renter.payment_day_of_month.isnot(None),
-                Renter.payment_day_of_month <= today.day,
+                # A missing payment day falls back to the 1st (backend-only; the
+                # column itself stays null and is never shown to the user).
+                func.coalesce(Renter.payment_day_of_month, 1) <= today.day,
                 Renter.id.notin_(paid_subq),
                 *_scope_conditions(property_ids, property_owners, renter_ids),
             )

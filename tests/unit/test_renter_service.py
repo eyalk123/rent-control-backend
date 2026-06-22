@@ -113,6 +113,24 @@ def test_overdue_excludes_future_payment_day(db_session):
     assert svc.get_overdue_this_month(OWNER_A) == []
 
 
+@freeze_time("2026-06-20")
+def test_overdue_null_payment_day_falls_back_to_first(db_session):
+    today = date(2026, 6, 20)
+    svc = _service(db_session)
+    prop = make_property(db_session)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=today - timedelta(days=60),
+        lease_end=today + timedelta(days=60),
+        payment_day_of_month=None,  # no payment day -> treated as due on the 1st
+        lease_years=[{"amount": 5000, "type": "contract"}],
+    )
+    [row] = svc.get_overdue_this_month(OWNER_A)
+    assert row.days_overdue == today.day - 1  # overdue since the 1st
+    assert row.payment_day_of_month is None  # fallback stays invisible
+
+
 @freeze_time("2026-06-15")
 def test_overdue_excludes_paid_renter(db_session):
     today = date(2026, 6, 15)
