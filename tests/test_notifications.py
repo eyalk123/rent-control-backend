@@ -210,6 +210,50 @@ def test_run_reminders_writes_feed_but_skips_push_without_devices(client, db_ses
     assert captured_pushes == []
 
 
+@freeze_time("2026-06-15")
+def test_run_reminders_pushes_rows_created_by_feed(client, db_session, captured_pushes):
+    """Regression: opening the app materializes feed rows without pushing. The cron must
+    still push those rows even though it didn't create them this run."""
+    today = date(2026, 6, 15)
+    _seed_overdue_and_expiring(db_session, today)
+
+    # Simulate the user opening the app: the feed persists rows but never pushes.
+    feed = client.get("/notifications")
+    assert feed.status_code == 200
+    assert captured_pushes == []
+
+    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "ios"})
+    resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
+    # created=0 (the feed already made them) but they're still pushed now.
+    assert resp.json()["sent"] == {"created": 0, "pushed": 2}
+    assert sorted(m["data"]["type"] for m in captured_pushes) == ["lease_expiring", "overdue"]
+
+
+def test_run_reminders_suppresses_stale_unpushed(client, db_session, captured_pushes):
+    """Un-pushed rows older than the freshness window are marked pushed, not sent late."""
+    from app.repositories.notification_repository import NotificationRepository
+    from datetime import datetime
+
+    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "ios"})
+
+    # The feed materializes rows on the 20th; no cron pushes them then.
+    with freeze_time("2026-06-20"):
+        _seed_overdue_and_expiring(db_session, date(2026, 6, 20))
+        client.get("/notifications")
+
+    # The cron only runs five days later — past the freshness window.
+    with freeze_time("2026-06-25"):
+        resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
+
+    assert resp.json()["sent"]["pushed"] == 0
+    assert captured_pushes == []
+    # The stale rows are marked pushed so they won't resurface on a later run.
+    leftover = NotificationRepository(db_session).list_unpushed_for_owner(
+        OWNER_A, datetime(2000, 1, 1)
+    )
+    assert leftover == []
+
+
 def test_run_reminders_rejects_bad_secret(client, monkeypatch):
     monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
     assert client.post("/internal/run-reminders", headers={"X-Cron-Secret": "wrong"}).status_code == 401

@@ -62,6 +62,41 @@ class NotificationRepository:
         stmt = stmt.order_by(Notification.sent_at.desc())
         return list(self.session.scalars(stmt).all())
 
+    def list_unpushed_for_owner(
+        self, owner_id: str, not_before: datetime
+    ) -> list[Notification]:
+        """Feed rows that still need a push: not yet pushed, not dismissed, and recent
+        enough (``sent_at >= not_before``). Drives the daily cron's push, so rows the
+        in-app feed materialized (which never push themselves) are picked up here."""
+        stmt = (
+            select(Notification)
+            .where(
+                Notification.owner_id == owner_id,
+                Notification.pushed_at.is_(None),
+                Notification.dismissed_at.is_(None),
+                Notification.sent_at >= not_before,
+            )
+            .order_by(Notification.sent_at.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def suppress_stale_unpushed(self, owner_id: str, before: datetime) -> int:
+        """Mark un-pushed rows older than ``before`` as pushed without sending them, so a
+        backlog (e.g. events generated while no device was registered) never floods the
+        user on a later run and isn't re-scanned. Returns rows affected."""
+        stmt = (
+            update(Notification)
+            .where(
+                Notification.owner_id == owner_id,
+                Notification.pushed_at.is_(None),
+                Notification.sent_at < before,
+            )
+            .values(pushed_at=datetime.utcnow())
+        )
+        result = self.session.execute(stmt)
+        self.session.commit()
+        return result.rowcount or 0
+
     def get_for_owner(self, notification_id: int, owner_id: str) -> Notification | None:
         stmt = select(Notification).where(
             Notification.id == notification_id,

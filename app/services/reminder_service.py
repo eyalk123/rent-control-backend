@@ -9,9 +9,10 @@ Two entry points share one generation path:
 The engine is side-effect free; persistence is deduped here via the feed's
 unique key, so the two paths never double-create.
 """
+import json
 import logging
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from app.models.notification import Notification
 from app.repositories.device_token_repository import DeviceTokenRepository
@@ -30,6 +31,11 @@ from app.models.notification import NotificationTypeEnum
 from app.services.push_service import PushService
 
 logger = logging.getLogger(__name__)
+
+# Only push rows generated within this many days. Older un-pushed rows are a stale
+# backlog (e.g. generated while no device was registered) and are suppressed rather
+# than sent late, so the cadence stays "today's reminders" not a flood.
+PUSH_FRESHNESS_DAYS = 2
 
 
 def _renter_label(first_name: str, last_name: str, address: str | None) -> str:
@@ -77,36 +83,46 @@ class ReminderService:
         return created
 
     def run_daily_reminders(self, today: date | None = None) -> dict:
-        """For every owner with renters: generate feed rows, then push those rows
-        to owners who have push enabled and a registered device. Returns a summary."""
+        """For every owner with renters: materialize any newly-due feed rows, suppress
+        stale un-pushed backlog, then push every still-un-pushed row (whether created by
+        this run or earlier by the in-app feed) to owners with a registered device.
+        Returns a summary."""
+        cutoff = datetime.utcnow() - timedelta(days=PUSH_FRESHNESS_DAYS)
         summary = {"created": 0, "pushed": 0}
         for owner_id in self.renter_repository.list_distinct_owner_ids():
-            created = self.generate_for_owner(owner_id, today)
-            summary["created"] += len(created)
-            if created:
-                summary["pushed"] += self._push(owner_id, created)
+            summary["created"] += len(self.generate_for_owner(owner_id, today))
+            self.notification_repository.suppress_stale_unpushed(owner_id, before=cutoff)
+            rows = self.notification_repository.list_unpushed_for_owner(
+                owner_id, not_before=cutoff
+            )
+            if rows:
+                summary["pushed"] += self._push(owner_id, rows)
         logger.info("Daily reminders: %s", summary)
         return summary
 
-    def _push(self, owner_id: str, created: list[tuple[Notification, Candidate]]) -> int:
-        # Master toggle + per-event mute are already applied in evaluate_owner;
-        # push simply follows the same on/off as the in-app feed (no separate
-        # channel control). Send when the owner has a registered device.
+    def _push(self, owner_id: str, rows: list[Notification]) -> int:
+        # Master toggle + per-event mute are already applied at generation time in
+        # evaluate_owner; push simply follows the same on/off as the in-app feed (no
+        # separate channel control). Send when the owner has a registered device.
         tokens_by_locale = self._tokens_by_locale(owner_id)
         if not tokens_by_locale:
             return 0
 
         messages: list[dict] = []
         pushed_ids: list[int] = []
-        for row, cand in created:
+        for row in rows:
+            renter = self.renter_repository.get_by_id(row.entity_id)
+            if renter is None:  # renter deleted — skip the dangling notification
+                continue
             data = {
-                "type": cand.type.value,
-                "renterId": cand.renter_id,
-                "route": f"/renters/{cand.renter_id}",
+                "type": row.type.value,
+                "renterId": row.entity_id,
+                "route": f"/renters/{row.entity_id}",
             }
-            label = _renter_label(cand.first_name, cand.last_name, cand.property_address)
+            address = renter.property.address if renter.property else None
+            label = _renter_label(renter.first_name, renter.last_name, address)
             for locale, tokens in tokens_by_locale.items():
-                title, body = self._render(cand, locale, label)
+                title, body = self._render(row, locale, label)
                 messages.extend(
                     {"to": t, "title": title, "body": body, "data": data} for t in tokens
                 )
@@ -117,10 +133,11 @@ class ReminderService:
         return len(pushed_ids)
 
     @staticmethod
-    def _render(cand: Candidate, locale: str, label: str) -> tuple[str, str]:
-        if cand.type == NotificationTypeEnum.LEASE_EXPIRING:
+    def _render(row: Notification, locale: str, label: str) -> tuple[str, str]:
+        if row.type == NotificationTypeEnum.LEASE_EXPIRING:
+            data = json.loads(row.data) if row.data else {}
             return render_lease_expiring(
-                locale, label=label, days=cand.data.get("days_until_expiry", 0)
+                locale, label=label, days=data.get("days_until_expiry", 0)
             )
         return render_overdue(locale, label=label)
 
