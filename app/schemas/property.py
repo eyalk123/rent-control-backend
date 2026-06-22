@@ -10,6 +10,7 @@ class PropertyType(str, Enum):
     House = "house"
     Commercial = "commercial"
     GardenApartment = "garden_apartment"
+    HousingUnit = "housing_unit"
 
 
 def _normalize_optional_str(v):

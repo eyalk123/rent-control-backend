@@ -10,6 +10,7 @@ class PropertyTypeEnum(str, enum.Enum):
     HOUSE = "house"
     COMMERCIAL = "commercial"
     GARDEN_APARTMENT = "garden_apartment"
+    HOUSING_UNIT = "housing_unit"
 
 
 class Property(Base):
