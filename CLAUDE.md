@@ -1,7 +1,7 @@
 # Rent Control Backend
 
 Property management API for tracking rental properties, renters, and financial transactions.
-Multi-tenant: all data is scoped to an authenticated owner via Clerk JWT.
+Multi-tenant: all data is scoped to an authenticated owner via a verified Firebase ID token.
 
 ## Tech Stack
 
@@ -10,7 +10,8 @@ Multi-tenant: all data is scoped to an authenticated owner via Clerk JWT.
 - **Alembic** — migrations (run before every server start)
 - **PostgreSQL** — primary database (via psycopg2-binary)
 - **Pydantic** v2 — validation and serialization
-- **Clerk** — authentication via JWKS JWT validation (PyJWT + cryptography)
+- **Firebase** — authentication (ID-token verification against `FIREBASE_PROJECT_ID`) and
+  file storage (Firebase Storage)
 - **Uvicorn** — ASGI server
 
 ## Key Directories
@@ -21,12 +22,12 @@ Multi-tenant: all data is scoped to an authenticated owner via Clerk JWT.
 | `app/config.py` | Pydantic `Settings` — reads all env vars from `.env` |
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/api/dependencies.py` | All DI factories: auth, repos, services |
-| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories) |
+| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens) plus `internal.py` (`/health`, `/internal/run-reminders`) |
 | `app/models/` | SQLAlchemy declarative models |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations |
 | `app/schemas/` | Pydantic schemas: `Create`, `Update`, `Read` variants per domain |
-| `alembic/versions/` | Migration history (8 migrations, latest: owner_id → String for Clerk) |
+| `alembic/versions/` | Migration history (`owner_id` is a String holding the auth provider's user id) |
 
 ## Commands
 
@@ -44,13 +45,18 @@ alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 ## Environment Variables
 
+All env vars are declared in `app/config.py` (`Settings`) — that file is the source of truth.
+
 | Variable | Required | Notes |
 |---|---|---|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `CLERK_JWKS_URL` | Yes | Clerk JWKS endpoint for JWT validation |
-| `CLERK_ISSUER` | Yes | Clerk issuer URL |
+| `FIREBASE_PROJECT_ID` | Yes | Audience for ID-token verification |
+| `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON as a string |
+| `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
-| `S3_BUCKET` | No | Currently mocked; default: `mock-bucket` |
+| `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
+| `REMINDER_CRON_SECRET` | No | Shared secret for `POST /internal/run-reminders` (`X-Cron-Secret` header); empty disables the endpoint |
 | `PORT` | No | Set by Railway automatically |
 
 ## Request Flow
