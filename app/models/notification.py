@@ -44,7 +44,9 @@ class Notification(Base):
     period_key = Column(String, nullable=False)
     offset = Column(Integer, nullable=False, default=0)
     data = Column(Text, nullable=True)  # JSON: days_overdue / days_until_expiry, amount, offset
-    sent_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # Call-time lambda (not a bare ``datetime.utcnow`` reference) so the default is
+    # re-evaluated on each insert — this lets freezegun-based tests control ``sent_at``.
+    sent_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
     pushed_at = Column(DateTime, nullable=True)
     read_at = Column(DateTime, nullable=True)
     dismissed_at = Column(DateTime, nullable=True)

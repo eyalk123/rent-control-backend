@@ -18,6 +18,24 @@ def _encode_lease_years(lease_years) -> str:
     return json.dumps([ly.model_dump() for ly in lease_years])
 
 
+def _payment_interval_months(number_of_payments: int | None) -> int:
+    """Months between rent payments, derived from the form's payments-per-year
+    field (12=monthly, 4=quarterly, 1=yearly). Null/invalid falls back to monthly."""
+    if not number_of_payments or number_of_payments <= 0:
+        return 1
+    return max(1, round(12 / number_of_payments))
+
+
+def _is_payment_due_month(lease_start: date | None, interval_months: int, today: date) -> bool:
+    """True when today's month is a payment month for a cycle anchored on
+    lease_start and repeating every interval_months. Monthly (interval 1) and a
+    missing lease_start are always due (preserves current behavior)."""
+    if lease_start is None or interval_months <= 1:
+        return True
+    months_elapsed = (today.year - lease_start.year) * 12 + (today.month - lease_start.month)
+    return months_elapsed >= 0 and months_elapsed % interval_months == 0
+
+
 class RenterService:
     def __init__(
         self,
@@ -126,13 +144,21 @@ class RenterService:
 
         result = []
         for r in renters:
+            interval = _payment_interval_months(r.number_of_payments)
+            # Skip months where rent isn't due for this renter's cadence (e.g. the
+            # off-months of a quarterly cycle, anchored on lease_start).
+            if not _is_payment_due_month(r.lease_start, interval, today):
+                continue
+
             last_day = calendar.monthrange(today.year, today.month)[1]
             pay_day = min(r.payment_day_of_month or 1, last_day)
             expected = date(today.year, today.month, pay_day)
             days_overdue = (today - expected).days
 
             lease_data = json.loads(r.lease_years) if isinstance(r.lease_years, str) else (r.lease_years or [])
-            monthly_amount = lease_data[0]["amount"] if lease_data else 0.0
+            base_amount = lease_data[0]["amount"] if lease_data else 0.0
+            # The amount owed this period spans `interval` months (e.g. 3x for quarterly).
+            monthly_amount = base_amount * interval
 
             prop = r.property
             result.append(OverdueRenterRead(
