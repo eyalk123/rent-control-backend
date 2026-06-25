@@ -5,7 +5,7 @@ import io
 import pytest
 from fastapi import HTTPException
 
-from app.schemas.document_extraction import ExtractedField, LeaseExtraction, LeaseYearGuess
+from app.schemas.document_extraction import FieldNote, LeaseExtraction, LeaseYearGuess
 from app.services.document_extraction_service import (
     DocumentExtractionService,
     _clean_extraction,
@@ -106,20 +106,21 @@ def test_unsupported_type_raises_415():
 def test_extract_lease_returns_result_with_meta(monkeypatch):
     svc = _service()
     draft = LeaseExtraction()
-    draft.property.city = ExtractedField(value="Tel Aviv", confidence="high")
-    draft.renter.base_rent = ExtractedField(value=5000.0, confidence="medium")
+    draft.property.city = "Tel Aviv"
+    draft.renter.base_rent = 5000.0
+    draft.notes = [FieldNote(section="renter", field="base_rent", confidence="medium", source_text="5,000 ₪")]
     fake = _FakeClient(_FakeResponse([_FakeToolUse(draft.model_dump())]))
     monkeypatch.setattr(svc, "_client", lambda: fake)
 
     result = svc.extract_lease(b"%PDF data", PDF_MEDIA)
 
-    assert result.extraction.property.city.value == "Tel Aviv"
-    assert result.extraction.renter.base_rent.value == 5000.0
+    assert result.extraction.property.city == "Tel Aviv"
+    assert result.extraction.renter.base_rent == 5000.0
     # Telemetry computed from the response + parsed tool input.
     assert result.meta.input_tokens == 1000
     assert result.meta.output_tokens == 500
     assert result.meta.fields_extracted == 2  # city + base_rent populated
-    assert result.meta.medium_confidence_count == 1
+    assert result.meta.medium_confidence_count == 1  # from the note
     assert result.meta.estimated_cost_usd is not None
     # A non-strict extraction tool was forced, and the PDF content block was sent.
     call = fake.messages.calls[0]
@@ -155,57 +156,51 @@ def test_missing_api_key_raises_503():
 
 def test_clean_drops_out_of_range_payment_day():
     e = LeaseExtraction()
-    e.renter.payment_day_of_month = ExtractedField(value=45, confidence="high")
+    e.renter.payment_day_of_month = 45
     _clean_extraction(e)
-    assert e.renter.payment_day_of_month.value is None
+    assert e.renter.payment_day_of_month is None
 
 
 def test_clean_keeps_valid_payment_day():
     e = LeaseExtraction()
-    e.renter.payment_day_of_month = ExtractedField(value=10, confidence="high")
+    e.renter.payment_day_of_month = 10
     _clean_extraction(e)
-    assert e.renter.payment_day_of_month.value == 10
+    assert e.renter.payment_day_of_month == 10
 
 
 def test_clean_drops_non_iso_lease_start():
     e = LeaseExtraction()
-    e.renter.lease_start = ExtractedField(value="see addendum", confidence="medium")
+    e.renter.lease_start = "see addendum"
     _clean_extraction(e)
-    assert e.renter.lease_start.value is None
+    assert e.renter.lease_start is None
 
 
 def test_clean_keeps_iso_lease_start():
     e = LeaseExtraction()
-    e.renter.lease_start = ExtractedField(value="2025-03-01", confidence="high")
+    e.renter.lease_start = "2025-03-01"
     _clean_extraction(e)
-    assert e.renter.lease_start.value == "2025-03-01"
-
-
-def test_clean_strips_source_text_on_high_confidence():
-    e = LeaseExtraction()
-    e.property.city = ExtractedField(value="Tel Aviv", confidence="high", source_text="עיר: תל אביב")
-    _clean_extraction(e)
-    assert e.property.city.value == "Tel Aviv"          # value kept
-    assert e.property.city.source_text is None          # snippet dropped
-
-
-def test_clean_keeps_source_text_on_non_high_confidence():
-    e = LeaseExtraction()
-    e.renter.base_rent = ExtractedField(value=5000.0, confidence="medium", source_text="5,000 ₪ לחודש")
-    e.property.address = ExtractedField(value="12 Herzl", confidence="low", source_text="רחוב הרצל 12")
-    _clean_extraction(e)
-    assert e.renter.base_rent.source_text == "5,000 ₪ לחודש"
-    assert e.property.address.source_text == "רחוב הרצל 12"
+    assert e.renter.lease_start == "2025-03-01"
 
 
 def test_clean_drops_negative_amounts():
     e = LeaseExtraction()
-    e.renter.base_rent = ExtractedField(value=-500.0, confidence="high")
-    e.property.sq_ft = ExtractedField(value=-80, confidence="high")
-    e.renter.lease_years = ExtractedField(
-        value=[LeaseYearGuess(amount=-1, type="contract")], confidence="high"
-    )
+    e.renter.base_rent = -500.0
+    e.property.sq_ft = -80
+    e.renter.lease_years = [LeaseYearGuess(amount=-1, type="contract")]
     _clean_extraction(e)
-    assert e.renter.base_rent.value is None
-    assert e.property.sq_ft.value is None
-    assert e.renter.lease_years.value is None
+    assert e.renter.base_rent is None
+    assert e.property.sq_ft is None
+    assert e.renter.lease_years is None
+
+
+def test_clean_drops_note_for_nulled_field():
+    e = LeaseExtraction()
+    e.renter.payment_day_of_month = 45  # invalid → will be nulled
+    e.renter.base_rent = 5000.0
+    e.notes = [
+        FieldNote(section="renter", field="payment_day_of_month", confidence="low", source_text="?"),
+        FieldNote(section="renter", field="base_rent", confidence="medium", source_text="5,000"),
+    ]
+    _clean_extraction(e)
+    # The note for the nulled field is removed; the one for a surviving field stays.
+    assert [n.field for n in e.notes] == ["base_rent"]

@@ -19,7 +19,6 @@ from fastapi import HTTPException, status
 from pydantic import ValidationError
 
 from app.schemas.document_extraction import (
-    ExtractedField,
     ExtractedProperty,
     ExtractedRenter,
     LeaseExtraction,
@@ -71,12 +70,9 @@ _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessing
 # Kept stable so it can be prompt-cached across requests.
 _SYSTEM_PROMPT = """You extract structured data from rental lease / property contracts to pre-fill a property-management app's forms. Documents are often in Hebrew (right-to-left) and may mix Hebrew, English, and numbers in tables — read them carefully and preserve the correct values.
 
-A single lease usually describes BOTH a property and a renter. Populate both sections from the one document. Leave a field's value null if the document does not contain it — never guess or invent values.
+A single lease usually describes BOTH a property and a renter. Populate both sections from the one document. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money/areas as plain numbers (no currency symbols or commas).
 
-For every field set:
-- value: the extracted value, or null if absent. Dates as ISO YYYY-MM-DD. Money/areas as plain numbers (no currency symbols or commas).
-- confidence: "high" if the value is stated explicitly, "medium" if inferred, "low" if uncertain or derived loosely.
-- source_text: ONLY when confidence is medium or low, the short verbatim snippet the value came from. Set it to null when confidence is high.
+Confidence: for any field you are NOT highly confident about (inferred, ambiguous, or loosely derived), append one entry to `notes` with its `section` ("property" or "renter"), `field` (the exact field name below), `confidence` ("medium" or "low"), and `source_text` (the short verbatim snippet it came from). Do NOT add a note for a field you're confident about, and never add a note for a null field.
 
 Property fields:
 - address, city, zip_code: the property's street address, city, and postal code.
@@ -258,18 +254,6 @@ class DocumentExtractionService:
         return ExtractionResult(extraction=extraction, meta=meta)
 
 
-def _drop(field: ExtractedField) -> None:
-    """Discard an extracted value that fails validation, so it never pre-fills a form.
-
-    Structured outputs already guarantee field *types* and *enum* values, so this only
-    needs to enforce the extra rules the JSON schema can't express (see the validators
-    on RenterCreate / the clients' Zod). A value that fails one of those is more likely
-    wrong than right — better a blank field the user fills than a pre-filled error.
-    """
-    field.value = None
-    field.confidence = "low"
-
-
 def _is_iso_date(value: str) -> bool:
     try:
         date.fromisoformat(value)
@@ -279,58 +263,50 @@ def _is_iso_date(value: str) -> bool:
 
 
 def _clean_property(p: ExtractedProperty) -> None:
-    for f in (p.sq_ft, p.number_of_rooms, p.floor, p.property_tax, p.house_committee):
-        if f.value is not None and f.value < 0:
-            _drop(f)
+    for name in ("sq_ft", "number_of_rooms", "floor", "property_tax", "house_committee"):
+        v = getattr(p, name)
+        if v is not None and v < 0:
+            setattr(p, name, None)
 
 
 def _clean_renter(r: ExtractedRenter) -> None:
     # Mirrors RenterCreate.payment_day_in_range (1..31).
-    if r.payment_day_of_month.value is not None and not (1 <= r.payment_day_of_month.value <= 31):
-        _drop(r.payment_day_of_month)
+    if r.payment_day_of_month is not None and not (1 <= r.payment_day_of_month <= 31):
+        r.payment_day_of_month = None
     # lease_start must be a real ISO date; the form/back end store it as a `date`.
-    if r.lease_start.value is not None and not _is_iso_date(r.lease_start.value):
-        _drop(r.lease_start)
-    for f in (r.base_rent, r.insurance_amount, r.rent_escalation_value, r.contract_term_years, r.option_years):
-        if f.value is not None and f.value < 0:
-            _drop(f)
-    if r.lease_years.value is not None:
-        # Drop the whole list if any year's amount is negative — partial lease schedules
-        # are confusing to review; the user re-enters a clean one.
-        if any(ly.amount < 0 for ly in r.lease_years.value):
-            _drop(r.lease_years)
-
-
-def _strip_high_confidence_sources(section: ExtractedProperty | ExtractedRenter) -> None:
-    """Drop source_text on high-confidence fields — the snippet is only shown for the
-    uncertain fields the user reviews. (The prompt also asks the model to skip it, which
-    saves output tokens; this just makes the result deterministic.)"""
-    for field in vars(section).values():
-        if isinstance(field, ExtractedField) and field.confidence == "high":
-            field.source_text = None
+    if r.lease_start is not None and not _is_iso_date(r.lease_start):
+        r.lease_start = None
+    for name in ("base_rent", "insurance_amount", "rent_escalation_value", "contract_term_years", "option_years"):
+        v = getattr(r, name)
+        if v is not None and v < 0:
+            setattr(r, name, None)
+    # Drop the whole schedule if any year's amount is negative — a partial/garbled
+    # schedule is confusing to review; the user re-enters a clean one.
+    if r.lease_years is not None and any(ly.amount < 0 for ly in r.lease_years):
+        r.lease_years = None
 
 
 def _clean_extraction(extraction: LeaseExtraction) -> LeaseExtraction:
-    """Null out extracted values that wouldn't survive form/back-end validation, and
-    keep source snippets only on the uncertain fields."""
+    """Null out extracted values that wouldn't survive form/back-end validation, then
+    drop any uncertainty notes whose field we just nulled."""
     _clean_property(extraction.property)
     _clean_renter(extraction.renter)
-    _strip_high_confidence_sources(extraction.property)
-    _strip_high_confidence_sources(extraction.renter)
+    extraction.notes = [
+        n for n in extraction.notes
+        if getattr(extraction.property if n.section == "property" else extraction.renter, n.field, None) is not None
+    ]
     return extraction
 
 
 def _field_stats(extraction: LeaseExtraction) -> tuple[int, int, int]:
-    """Count populated fields and how many were low/medium confidence (a quality signal)."""
-    extracted = low = medium = 0
+    """Count populated fields, and low/medium-confidence counts from the notes."""
+    extracted = 0
     for section in (extraction.property, extraction.renter):
-        for field in vars(section).values():
-            if isinstance(field, ExtractedField) and field.value is not None:
+        for value in vars(section).values():
+            if value is not None:
                 extracted += 1
-                if field.confidence == "low":
-                    low += 1
-                elif field.confidence == "medium":
-                    medium += 1
+    low = sum(1 for n in extraction.notes if n.confidence == "low")
+    medium = sum(1 for n in extraction.notes if n.confidence == "medium")
     return extracted, low, medium
 
 

@@ -1,39 +1,27 @@
 """Schemas for the document-extraction feature (POST /extract/lease).
 
-A lease/contract is sent to Claude, which returns a structured draft that the
-clients use to pre-fill the existing property and renter forms. Every extractable
-field is wrapped in :class:`ExtractedField` so the UI can show a confidence flag
-and the source snippet the value came from, and let the user review before saving.
+A lease/contract is sent to Claude, which returns a structured draft the clients use
+to pre-fill the existing property and renter forms. The shape is deliberately **flat**
+— a plain value per field — so the model can fill it reliably (a deeply nested
+per-field wrapper caused severe under-filling and exceeded the strict-grammar limit).
+Uncertainty is reported out-of-band via :class:`FieldNote`: the model adds a note ONLY
+for a field it isn't highly confident about, carrying the confidence and the source
+snippet. Fields without a note are treated as high-confidence (no review flag, no
+snippet) — matching the cost optimisation (snippets only where the user must verify).
 
-These schemas mirror the *subset* of fields collected by the property and renter
-forms (see ``app.schemas.property.PropertyCreate`` /
-``app.schemas.renter.RenterCreate``). Server-managed fields (``owner_id``) and
-file URLs (``basic_contract_url`` / ``full_contract_url`` / ``id_image_url`` /
-``image_url``) are intentionally excluded — the clients attach files to Firebase
-at submit time, not during extraction.
+These schemas mirror the *subset* of fields collected by the property and renter forms
+(see ``app.schemas.property.PropertyCreate`` / ``app.schemas.renter.RenterCreate``).
+Server-managed fields (``owner_id``) and file URLs are excluded — the clients attach
+files to Firebase at submit time, not during extraction.
 """
-from typing import Generic, Literal, Optional, TypeVar
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.property import PropertyType
 from app.schemas.renter import LeaseYearType, RentEscalationMode
 
-T = TypeVar("T")
-
-Confidence = Literal["high", "medium", "low"]
-
-
-class ExtractedField(BaseModel, Generic[T]):
-    """One extracted value plus how sure the model is and where it came from.
-
-    ``value`` is ``None`` when the document does not contain the field. The clients
-    highlight ``confidence == "low"`` so the user double-checks those before saving.
-    """
-
-    value: Optional[T] = None
-    confidence: Confidence = "low"
-    source_text: Optional[str] = None
+Confidence = Literal["medium", "low"]
 
 
 class LeaseYearGuess(BaseModel):
@@ -51,49 +39,58 @@ class ExtraContactGuess(BaseModel):
 
 
 class ExtractedProperty(BaseModel):
-    """Property fields extractable from a lease, each with confidence + source."""
+    """Property fields extractable from a lease (plain values; null if absent)."""
 
-    address: ExtractedField[str] = ExtractedField()
-    city: ExtractedField[str] = ExtractedField()
-    zip_code: ExtractedField[str] = ExtractedField()
-    type: ExtractedField[PropertyType] = ExtractedField()
-    sq_ft: ExtractedField[int] = ExtractedField()
-    number_of_rooms: ExtractedField[int] = ExtractedField()
-    parking_numbers: ExtractedField[list[str]] = ExtractedField()
-    floor: ExtractedField[int] = ExtractedField()
-    apartment: ExtractedField[str] = ExtractedField()
-    block: ExtractedField[str] = ExtractedField()
-    plot: ExtractedField[str] = ExtractedField()
-    property_owner: ExtractedField[str] = ExtractedField()
-    electricity_meter_number: ExtractedField[str] = ExtractedField()
-    electricity_account_number: ExtractedField[str] = ExtractedField()
-    water_meter_number: ExtractedField[str] = ExtractedField()
-    water_account_number: ExtractedField[str] = ExtractedField()
-    property_tax: ExtractedField[float] = ExtractedField()
-    house_committee: ExtractedField[float] = ExtractedField()
-    inventory_notes: ExtractedField[str] = ExtractedField()
+    address: Optional[str] = None
+    city: Optional[str] = None
+    zip_code: Optional[str] = None
+    type: Optional[PropertyType] = None
+    sq_ft: Optional[int] = None
+    number_of_rooms: Optional[int] = None
+    parking_numbers: Optional[list[str]] = None
+    floor: Optional[int] = None
+    apartment: Optional[str] = None
+    block: Optional[str] = None
+    plot: Optional[str] = None
+    property_owner: Optional[str] = None
+    electricity_meter_number: Optional[str] = None
+    electricity_account_number: Optional[str] = None
+    water_meter_number: Optional[str] = None
+    water_account_number: Optional[str] = None
+    property_tax: Optional[float] = None
+    house_committee: Optional[float] = None
+    inventory_notes: Optional[str] = None
 
 
 class ExtractedRenter(BaseModel):
-    """Renter / lease-term fields extractable from a lease."""
+    """Renter / lease-term fields extractable from a lease (plain values; null if absent)."""
 
-    first_name: ExtractedField[str] = ExtractedField()
-    last_name: ExtractedField[str] = ExtractedField()
-    phone: ExtractedField[str] = ExtractedField()
-    email: ExtractedField[str] = ExtractedField()
-    lease_start: ExtractedField[str] = ExtractedField()  # ISO date (YYYY-MM-DD)
-    lease_years: ExtractedField[list[LeaseYearGuess]] = ExtractedField()
-    contract_term_years: ExtractedField[int] = ExtractedField()
-    option_years: ExtractedField[int] = ExtractedField()
-    base_rent: ExtractedField[float] = ExtractedField()
-    rent_escalation_mode: ExtractedField[RentEscalationMode] = ExtractedField()
-    rent_escalation_value: ExtractedField[float] = ExtractedField()
-    number_of_payments: ExtractedField[int] = ExtractedField()
-    payment_type: ExtractedField[str] = ExtractedField()
-    payment_day_of_month: ExtractedField[int] = ExtractedField()
-    insurance_type: ExtractedField[str] = ExtractedField()
-    insurance_amount: ExtractedField[float] = ExtractedField()
-    extra_contacts: ExtractedField[list[ExtraContactGuess]] = ExtractedField()
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    lease_start: Optional[str] = None  # ISO date (YYYY-MM-DD)
+    lease_years: Optional[list[LeaseYearGuess]] = None
+    contract_term_years: Optional[int] = None
+    option_years: Optional[int] = None
+    base_rent: Optional[float] = None
+    rent_escalation_mode: Optional[RentEscalationMode] = None
+    rent_escalation_value: Optional[float] = None
+    number_of_payments: Optional[int] = None
+    payment_type: Optional[str] = None
+    payment_day_of_month: Optional[int] = None
+    insurance_type: Optional[str] = None
+    insurance_amount: Optional[float] = None
+    extra_contacts: Optional[list[ExtraContactGuess]] = None
+
+
+class FieldNote(BaseModel):
+    """Uncertainty note for a single extracted field the model wasn't sure about."""
+
+    section: Literal["property", "renter"]
+    field: str  # snake field name, e.g. "city" or "base_rent"
+    confidence: Confidence
+    source_text: Optional[str] = None
 
 
 class LeaseExtraction(BaseModel):
@@ -101,10 +98,12 @@ class LeaseExtraction(BaseModel):
 
     A single lease often contains both the property and the renter, so both are
     populated from one upload. Either may be empty if the document only covers one.
+    ``notes`` lists only the fields the model was unsure about.
     """
 
     property: ExtractedProperty = ExtractedProperty()
     renter: ExtractedRenter = ExtractedRenter()
+    notes: list[FieldNote] = []
 
 
 class LeaseExtractionResponse(BaseModel):
