@@ -16,6 +16,7 @@ from typing import Optional
 
 from anthropic import Anthropic
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 
 from app.schemas.document_extraction import (
     ExtractedField,
@@ -23,6 +24,16 @@ from app.schemas.document_extraction import (
     ExtractedRenter,
     LeaseExtraction,
 )
+
+# A non-strict tool the model fills with the extracted data. We deliberately avoid
+# structured outputs (messages.parse): the strict grammar compiler rejects a schema
+# this large. The schema is still used to validate the tool's output afterwards.
+_TOOL_NAME = "record_lease_extraction"
+_EXTRACTION_TOOL = {
+    "name": _TOOL_NAME,
+    "description": "Record the structured property and renter data extracted from the lease document.",
+    "input_schema": LeaseExtraction.model_json_schema(),
+}
 
 # USD per 1M tokens (input, output). Used for a rough cost estimate on the audit log.
 _PRICES: dict[str, tuple[float, float]] = {
@@ -173,7 +184,10 @@ class DocumentExtractionService:
         content_block = self._build_content_block(file_bytes, content_type)
         client = self._client()
 
-        response = client.messages.parse(
+        # Use a NON-strict tool (not structured-outputs / messages.parse): the strict
+        # grammar compiler rejects a schema this large ("compiled grammar is too large").
+        # The model fills the tool's schema best-effort and we validate it ourselves.
+        response = client.messages.create(
             model=self._model,
             max_tokens=8192,
             system=[
@@ -183,6 +197,8 @@ class DocumentExtractionService:
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
+            tools=[_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": _TOOL_NAME},
             messages=[
                 {
                     "role": "user",
@@ -195,7 +211,6 @@ class DocumentExtractionService:
                     ],
                 }
             ],
-            output_format=LeaseExtraction,
         )
 
         if response.stop_reason == "refusal":
@@ -203,14 +218,24 @@ class DocumentExtractionService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="The document could not be processed.",
             )
-        if response.parsed_output is None:
-            # e.g. stop_reason == "max_tokens" — output truncated before valid JSON.
+        tool_block = next(
+            (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
+        )
+        if tool_block is None:
+            # e.g. stop_reason == "max_tokens" — no complete tool call returned.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Could not extract structured data from the document.",
+            )
+        try:
+            parsed = LeaseExtraction.model_validate(tool_block.input)
+        except ValidationError:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Could not extract structured data from the document.",
             )
 
-        extraction = _clean_extraction(response.parsed_output)
+        extraction = _clean_extraction(parsed)
         extracted, low, medium = _field_stats(extraction)
         usage = response.usage
         input_tokens = getattr(usage, "input_tokens", None)

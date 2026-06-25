@@ -35,9 +35,8 @@ async def extract_lease(
     """
     file_bytes = await file.read()
     started = time.monotonic()
-    try:
-        result = service.extract_lease(file_bytes, file.content_type)
-    except HTTPException as exc:
+
+    def _log_failure(status_str: str, detail: str) -> None:
         # Best-effort failure log; never let logging mask the original error.
         try:
             log_repo.create(
@@ -47,14 +46,27 @@ async def extract_lease(
                     content_type=file.content_type,
                     file_size_bytes=len(file_bytes),
                     model=service.model_name,
-                    status="unsupported" if exc.status_code == 415 else "error",
-                    error_detail=str(exc.detail),
+                    status=status_str,
+                    error_detail=detail,
                     latency_ms=int((time.monotonic() - started) * 1000),
                 )
             )
         except Exception:
             pass
+
+    try:
+        result = service.extract_lease(file_bytes, file.content_type)
+    except HTTPException as exc:
+        _log_failure("unsupported" if exc.status_code == 415 else "error", str(exc.detail))
         raise
+    except Exception as exc:
+        # Convert any unexpected error (e.g. an Anthropic SDK error) into a proper
+        # response so it goes through CORS middleware and the client sees a real message
+        # instead of an opaque "CORS"/network failure.
+        _log_failure("error", f"{type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=502, detail="Document extraction failed. Please try again."
+        )
 
     meta = result.meta
     log = log_repo.create(

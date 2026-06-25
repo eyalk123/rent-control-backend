@@ -24,7 +24,7 @@ class _FakeMessages:
         self._response = response
         self.calls = []
 
-    def parse(self, **kwargs):
+    def create(self, **kwargs):
         self.calls.append(kwargs)
         return self._response
 
@@ -41,9 +41,17 @@ class _FakeUsage:
     cache_creation_input_tokens = 0
 
 
+class _FakeToolUse:
+    type = "tool_use"
+    name = "record_lease_extraction"
+
+    def __init__(self, tool_input):
+        self.input = tool_input
+
+
 class _FakeResponse:
-    def __init__(self, parsed_output, stop_reason="end_turn"):
-        self.parsed_output = parsed_output
+    def __init__(self, content, stop_reason="tool_use"):
+        self.content = content
         self.stop_reason = stop_reason
         self.usage = _FakeUsage()
 
@@ -100,36 +108,37 @@ def test_extract_lease_returns_result_with_meta(monkeypatch):
     draft = LeaseExtraction()
     draft.property.city = ExtractedField(value="Tel Aviv", confidence="high")
     draft.renter.base_rent = ExtractedField(value=5000.0, confidence="medium")
-    fake = _FakeClient(_FakeResponse(draft))
+    fake = _FakeClient(_FakeResponse([_FakeToolUse(draft.model_dump())]))
     monkeypatch.setattr(svc, "_client", lambda: fake)
 
     result = svc.extract_lease(b"%PDF data", PDF_MEDIA)
 
-    assert result.extraction is draft
-    # Telemetry computed from the response + draft.
+    assert result.extraction.property.city.value == "Tel Aviv"
+    assert result.extraction.renter.base_rent.value == 5000.0
+    # Telemetry computed from the response + parsed tool input.
     assert result.meta.input_tokens == 1000
     assert result.meta.output_tokens == 500
     assert result.meta.fields_extracted == 2  # city + base_rent populated
     assert result.meta.medium_confidence_count == 1
     assert result.meta.estimated_cost_usd is not None
-    # The PDF content block and the field schema were sent to Claude.
+    # A non-strict extraction tool was forced, and the PDF content block was sent.
     call = fake.messages.calls[0]
-    assert call["output_format"] is LeaseExtraction
+    assert call["tool_choice"]["name"] == "record_lease_extraction"
     assert call["messages"][0]["content"][0]["type"] == "document"
 
 
 def test_extract_lease_refusal_raises_422(monkeypatch):
     svc = _service()
-    fake = _FakeClient(_FakeResponse(None, stop_reason="refusal"))
+    fake = _FakeClient(_FakeResponse([], stop_reason="refusal"))
     monkeypatch.setattr(svc, "_client", lambda: fake)
     with pytest.raises(HTTPException) as exc:
         svc.extract_lease(b"%PDF", PDF_MEDIA)
     assert exc.value.status_code == 422
 
 
-def test_extract_lease_truncated_output_raises_422(monkeypatch):
+def test_extract_lease_no_tool_call_raises_422(monkeypatch):
     svc = _service()
-    fake = _FakeClient(_FakeResponse(None, stop_reason="max_tokens"))
+    fake = _FakeClient(_FakeResponse([], stop_reason="max_tokens"))
     monkeypatch.setattr(svc, "_client", lambda: fake)
     with pytest.raises(HTTPException) as exc:
         svc.extract_lease(b"%PDF", PDF_MEDIA)
