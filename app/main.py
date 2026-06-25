@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import (
     device_tokens,
+    document_extraction,
     expense_categories,
     internal,
     notification_preferences,
@@ -37,6 +38,7 @@ app.include_router(device_tokens.router, prefix="/device-tokens", tags=["device-
 app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 app.include_router(notification_preferences.router, tags=["notification-preferences"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
+app.include_router(document_extraction.router, prefix="/extract", tags=["extract"])
 
 
 @app.get("/health")

@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # Shared secret guarding POST /internal/run-reminders (sent as the X-Cron-Secret header).
     # Leave empty to disable the endpoint (it will reject every request).
     REMINDER_CRON_SECRET: str = ""
+    # Anthropic API key for the document-extraction feature (POST /extract/lease).
+    # Leave empty to disable the endpoint (it will reject every request with 503).
+    ANTHROPIC_API_KEY: str = ""
+    # Claude model used for lease extraction. Sonnet is the cost/accuracy default;
+    # switch to "claude-opus-4-8" if extraction accuracy on hard scans isn't enough.
+    EXTRACTION_MODEL: str = "claude-sonnet-4-6"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

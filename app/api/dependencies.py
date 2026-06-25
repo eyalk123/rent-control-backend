@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.repositories.device_token_repository import DeviceTokenRepository
+from app.repositories.document_extraction_log_repository import (
+    DocumentExtractionLogRepository,
+)
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.notification_rule_repository import NotificationRuleRepository
@@ -24,6 +27,7 @@ from app.repositories.report_export_repository import ReportExportRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services.device_token_service import DeviceTokenService
+from app.services.document_extraction_service import DocumentExtractionService
 from app.services.expense_category_service import ExpenseCategoryService
 from app.services.notification_engine import NotificationEngine
 from app.services.notification_preferences_service import NotificationPreferencesService
@@ -59,6 +63,19 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing uid claim")
 
     return {"user_id": user_id, "role": "owner"}
+
+
+def get_document_extraction_service() -> DocumentExtractionService:
+    return DocumentExtractionService(
+        api_key=settings.ANTHROPIC_API_KEY,
+        model=settings.EXTRACTION_MODEL,
+    )
+
+
+def get_document_extraction_log_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentExtractionLogRepository:
+    return DocumentExtractionLogRepository(db)
 
 
 def get_property_repository(db: Annotated[Session, Depends(get_db)]) -> PropertyRepository:
