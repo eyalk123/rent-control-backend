@@ -4,6 +4,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.expense_category import ExpenseCategory
+from app.models.owner import Owner
 from app.models.property import Property
 from app.models.renter import Renter
 from app.models.supplier import Supplier
@@ -52,9 +53,14 @@ class UserService:
             delete(Property).where(Property.owner_id == owner_id)
         )
 
+        # 7. Delete the owner's profile row
+        self.db.execute(
+            delete(Owner).where(Owner.id == owner_id)
+        )
+
         self.db.commit()
 
-        # 7. Firebase Storage cleanup (optional — requires FIREBASE_STORAGE_BUCKET env var)
+        # 8. Firebase Storage cleanup (optional — requires FIREBASE_STORAGE_BUCKET env var)
         self._delete_firebase_storage(owner_id)
 
     def _delete_firebase_storage(self, owner_id: str) -> None:

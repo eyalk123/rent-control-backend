@@ -5,6 +5,7 @@ from app.models.expense_category import ExpenseCategory
 from app.models.notification import Notification, NotificationTypeEnum
 from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings
+from app.models.owner import Owner
 from app.models.property import Property, PropertyTypeEnum
 from app.models.renter import Renter
 from app.models.supplier import Supplier
@@ -24,6 +25,7 @@ __all__ = [
     "NotificationTypeEnum",
     "NotificationRule",
     "NotificationSettings",
+    "Owner",
     "Property",
     "PropertyTypeEnum",
     "Renter",

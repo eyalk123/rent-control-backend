@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 import requests as http_requests
@@ -20,6 +21,7 @@ from app.repositories.notification_rule_repository import NotificationRuleReposi
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
@@ -38,6 +40,8 @@ from app.services.renter_service import RenterService
 from app.services.supplier_service import SupplierService
 from app.services.transaction_service import TransactionService
 from app.services.user_service import UserService
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer()
 _google_request = google_requests.Request(session=http_requests.Session())
@@ -62,7 +66,38 @@ def get_current_user(
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing uid claim")
 
-    return {"user_id": user_id, "role": "owner"}
+    # These claims are already present in the verified token — no extra network call.
+    return {
+        "user_id": user_id,
+        "role": "owner",
+        "email": payload.get("email"),
+        "name": payload.get("name"),
+        "picture": payload.get("picture"),
+    }
+
+
+def get_owner_repository(db: Annotated[Session, Depends(get_db)]) -> OwnerRepository:
+    return OwnerRepository(db)
+
+
+def get_current_owner(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+) -> dict:
+    """Refresh the owner's profile row from the token claims (throttled) and return the
+    same ``current_user`` dict. The upsert is best-effort telemetry — a write failure must
+    never break an otherwise-valid authenticated request.
+    """
+    try:
+        owner_repository.upsert(
+            uid=current_user["user_id"],
+            email=current_user.get("email"),
+            display_name=current_user.get("name"),
+            picture_url=current_user.get("picture"),
+        )
+    except Exception as exc:
+        logger.warning("Owner profile upsert failed for %s: %s", current_user["user_id"], exc)
+    return current_user
 
 
 def get_document_extraction_service() -> DocumentExtractionService:
