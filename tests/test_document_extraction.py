@@ -5,7 +5,7 @@ from app.api.dependencies import get_current_user, get_document_extraction_servi
 from app.database import get_db
 from app.main import app
 from app.models.document_extraction_log import DocumentExtractionLog
-from app.schemas.document_extraction import LeaseExtraction
+from app.schemas.document_extraction import ExtractedRenter, LeaseExtraction
 from app.services.document_extraction_service import ExtractionMeta, ExtractionResult
 from tests.conftest import OWNER_A, OWNER_B
 
@@ -48,9 +48,8 @@ def test_extract_lease_requires_auth(db_session):
 
 
 def test_extract_lease_returns_draft_and_creates_log(client, db_session):
-    draft = LeaseExtraction()
+    draft = LeaseExtraction(renters=[ExtractedRenter(first_name="Dana"), ExtractedRenter(first_name="Noa")])
     draft.property.city = "Tel Aviv"
-    draft.renter.first_name = "Dana"
 
     app.dependency_overrides[get_document_extraction_service] = lambda: _StubService(draft)
     try:
@@ -62,7 +61,7 @@ def test_extract_lease_returns_draft_and_creates_log(client, db_session):
         body = resp.json()
         assert "log_id" in body
         assert body["extraction"]["property"]["city"] == "Tel Aviv"
-        assert body["extraction"]["renter"]["first_name"] == "Dana"
+        assert [r["first_name"] for r in body["extraction"]["renters"]] == ["Dana", "Noa"]
 
         # An audit-log row was created with the call telemetry.
         log = db_session.get(DocumentExtractionLog, body["log_id"])

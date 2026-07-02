@@ -70,12 +70,12 @@ _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessing
 # Kept stable so it can be prompt-cached across requests.
 _SYSTEM_PROMPT = """You extract structured data from rental lease / property contracts to pre-fill a property-management app's forms. Documents are often in Hebrew (right-to-left) and may mix Hebrew, English, and numbers in tables — read them carefully and preserve the correct values.
 
-A single lease usually describes BOTH a property and a renter. Populate both sections from the one document. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money/areas as plain numbers (no currency symbols or commas).
+A single lease usually describes a property and one or more renters (co-tenants who sign the same lease). Populate the property once and add one entry to `renters` for EACH tenant. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money/areas as plain numbers (no currency symbols or commas).
 
-Confidence: for any field you are NOT highly confident about (inferred, ambiguous, or loosely derived), append one entry to `notes` with its `section` ("property" or "renter"), `field` (the exact field name below), `confidence` ("medium" or "low"), and `source_text` (the short verbatim snippet it came from). Do NOT add a note for a field you're confident about, and never add a note for a null field.
+Confidence: for any field you are NOT highly confident about (inferred, ambiguous, or loosely derived), append one entry to `notes` with its `section` ("property" or "renter"), `field` (the exact field name below), `renter_index` (for a renter field, the 0-based index of the renter in `renters`; null for a property field), `confidence` ("medium" or "low"), and `source_text` (the short verbatim snippet it came from). Do NOT add a note for a field you're confident about, and never add a note for a null field.
 
 Property fields:
-- address, city, zip_code: the property's street address, city, and postal code.
+- address, city, zip_code: the LEASED property's street address, city, and postal code — the place being rented (the "המושכר" / "הנכס" described in the property clause). This is NOT the landlord's or the tenant's own residential/mailing address. If an address appears next to the owner's or a tenant's name in the parties/header block, that is a party's home address — do NOT use it as the property address.
 - type: one of apartment, house, commercial, garden_apartment, housing_unit.
 - sq_ft: floor area as a number (whatever unit the document uses).
 - number_of_rooms, floor: room count and floor number.
@@ -86,19 +86,22 @@ Property fields:
 - property_tax, house_committee: periodic property tax ("arnona") and building-committee ("vaad bayit") amounts.
 - inventory_notes: any inventory / contents description.
 
-Renter fields:
+Renter fields — one `renters` entry PER tenant. If several people sign as tenants, list them all; do not merge them or push them into extra_contacts.
 - first_name, last_name: the tenant's given and family name.
-- phone, email: tenant contact details.
+- phone: the tenant's PHONE number only. An Israeli phone is typically 9-10 digits starting with 0 (mobile 05X-XXXXXXX) or +972. Before filling this, check the number really looks like a phone. A 9-digit national ID number (תעודת זהות / ת"ז) is NOT a phone — if the only number you see near the tenant is an ID, leave phone null rather than putting the ID here.
+- email: tenant email address.
 - lease_start: the lease commencement date (ISO YYYY-MM-DD).
 - payment_type: payment method described (e.g. bank transfer, checks).
 - payment_day_of_month: day of month rent is due (1-31).
-- insurance_type, insurance_amount: required insurance type and its amount.
+- insurance_type: the required security/collateral type — exactly one of "bank_guarantee" (ערבות בנקאית) or "wire_transfer" (פיקדון / העברה בנקאית / cash deposit). insurance_amount: its amount (usually stated right next to the type). Return null for insurance_type if it isn't one of those two.
 - number_of_payments: installments per year (e.g. 12 for monthly).
-- extra_contacts: additional contacts (e.g. guarantors), each {name, phone}.
+- extra_contacts: NON-tenant contacts only, e.g. guarantors (ערבים), each {name, phone}. People who sign as tenants belong in `renters`, not here.
+
+Joint vs. per-tenant rent: most leases with several tenants state ONE joint rent for all of them together (they are jointly liable, "ביחד ולחוד"), not a separate amount per tenant. When the rent is joint, set `rent_is_joint` true, put that single first-year MONTHLY total in top-level `joint_monthly_rent`, and leave every renter's `base_rent` null (still fill the shared lease-term fields — escalation, years, insurance, payment — identically on each renter). Only when the document gives each tenant their OWN distinct amount, set `rent_is_joint` false and fill each renter's own `base_rent`. For a single-tenant lease, set `rent_is_joint` false and fill that renter's `base_rent`.
 
 Lease term — describe it as INTENT; the app rebuilds the year-by-year schedule from these:
 - contract_term_years: number of binding (contract) years. option_years: number of renewal-option years.
-- base_rent: the FIRST-YEAR MONTHLY rent (a single monthly figure, never annual).
+- base_rent: the FIRST-YEAR MONTHLY rent (a single monthly figure, never annual). Leave null when rent_is_joint is true (use joint_monthly_rent instead).
 - rent_escalation_mode: how the monthly rent changes each year — "none" (flat, same every year), "percent" (rises a fixed % each year), "fixed" (rises a fixed money amount each year), or "custom" (irregular per-year amounts that follow no single rule).
 - rent_escalation_value: the percent (for "percent") or the money amount (for "fixed"). Null for "none"/"custom".
 - lease_years: leave EMPTY unless rent_escalation_mode is "custom". When custom, list one row per lease year, each {amount: that year's MONTHLY rent in the SAME unit as base_rent, type: "contract" or "option"}, and set contract_term_years + option_years to equal the number of rows.
@@ -269,6 +272,16 @@ def _clean_property(p: ExtractedProperty) -> None:
             setattr(p, name, None)
 
 
+# Security/collateral type the renter form accepts; other free text is dropped.
+_SECURITY_TYPES = {"bank_guarantee", "wire_transfer"}
+
+
+def _looks_like_israeli_id(value: str) -> bool:
+    """A bare 9-digit number is almost certainly a national ID (ת\"ז), not a phone."""
+    digits = "".join(ch for ch in value if ch.isdigit())
+    return len(digits) == 9 and digits == value.strip()
+
+
 def _clean_renter(r: ExtractedRenter) -> None:
     # Mirrors RenterCreate.payment_day_in_range (1..31).
     if r.payment_day_of_month is not None and not (1 <= r.payment_day_of_month <= 31):
@@ -284,16 +297,33 @@ def _clean_renter(r: ExtractedRenter) -> None:
     # schedule is confusing to review; the user re-enters a clean one.
     if r.lease_years is not None and any(ly.amount < 0 for ly in r.lease_years):
         r.lease_years = None
+    # Insurance/security type must be one of the enum values the renter form accepts.
+    if r.insurance_type is not None and r.insurance_type not in _SECURITY_TYPES:
+        r.insurance_type = None
+    # Guard against the national ID being mistaken for a phone (see the prompt).
+    if r.phone is not None and _looks_like_israeli_id(r.phone):
+        r.phone = None
 
 
 def _clean_extraction(extraction: LeaseExtraction) -> LeaseExtraction:
     """Null out extracted values that wouldn't survive form/back-end validation, then
     drop any uncertainty notes whose field we just nulled."""
     _clean_property(extraction.property)
-    _clean_renter(extraction.renter)
+    for renter in extraction.renters:
+        _clean_renter(renter)
+    if extraction.joint_monthly_rent is not None and extraction.joint_monthly_rent < 0:
+        extraction.joint_monthly_rent = None
+
+    def _note_target(n):
+        if n.section == "property":
+            return extraction.property
+        if n.renter_index is not None and 0 <= n.renter_index < len(extraction.renters):
+            return extraction.renters[n.renter_index]
+        return None
+
     extraction.notes = [
         n for n in extraction.notes
-        if getattr(extraction.property if n.section == "property" else extraction.renter, n.field, None) is not None
+        if (_t := _note_target(n)) is not None and getattr(_t, n.field, None) is not None
     ]
     return extraction
 
@@ -301,7 +331,7 @@ def _clean_extraction(extraction: LeaseExtraction) -> LeaseExtraction:
 def _field_stats(extraction: LeaseExtraction) -> tuple[int, int, int]:
     """Count populated fields, and low/medium-confidence counts from the notes."""
     extracted = 0
-    for section in (extraction.property, extraction.renter):
+    for section in (extraction.property, *extraction.renters):
         for value in vars(section).values():
             if value is not None:
                 extracted += 1

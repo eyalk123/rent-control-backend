@@ -79,6 +79,8 @@ class ExtractedRenter(BaseModel):
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
     payment_day_of_month: Optional[int] = None
+    # Free text from the model, normalised to one of the security-type enum values
+    # ("bank_guarantee" / "wire_transfer") or nulled in _clean_renter.
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     extra_contacts: Optional[list[ExtraContactGuess]] = None
@@ -89,6 +91,8 @@ class FieldNote(BaseModel):
 
     section: Literal["property", "renter"]
     field: str  # snake field name, e.g. "city" or "base_rent"
+    # Which renter the note refers to (index into ``renters``); null for property notes.
+    renter_index: Optional[int] = None
     confidence: Confidence
     source_text: Optional[str] = None
 
@@ -96,13 +100,20 @@ class FieldNote(BaseModel):
 class LeaseExtraction(BaseModel):
     """The full structured draft returned by POST /extract/lease.
 
-    A single lease often contains both the property and the renter, so both are
-    populated from one upload. Either may be empty if the document only covers one.
-    ``notes`` lists only the fields the model was unsure about.
+    A single lease often contains a property and one or more renters (co-tenants),
+    so all are populated from one upload. Any part may be empty if the document only
+    covers one. ``notes`` lists only the fields the model was unsure about.
+
+    When the lease states a single joint rent for all tenants together (rather than a
+    separate amount per tenant), ``rent_is_joint`` is true and ``joint_monthly_rent``
+    holds that first-year monthly total; the client lets the user split it across the
+    renters. When false, each renter carries their own ``base_rent``.
     """
 
     property: ExtractedProperty = ExtractedProperty()
-    renter: ExtractedRenter = ExtractedRenter()
+    renters: list[ExtractedRenter] = []
+    rent_is_joint: bool = False
+    joint_monthly_rent: Optional[float] = None
     notes: list[FieldNote] = []
 
 

@@ -5,7 +5,12 @@ import io
 import pytest
 from fastapi import HTTPException
 
-from app.schemas.document_extraction import FieldNote, LeaseExtraction, LeaseYearGuess
+from app.schemas.document_extraction import (
+    ExtractedRenter,
+    FieldNote,
+    LeaseExtraction,
+    LeaseYearGuess,
+)
 from app.services.document_extraction_service import (
     DocumentExtractionService,
     _clean_extraction,
@@ -17,6 +22,11 @@ DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 
 def _service(api_key="test-key"):
     return DocumentExtractionService(api_key=api_key, model="claude-opus-4-8")
+
+
+def _one_renter() -> LeaseExtraction:
+    """A LeaseExtraction seeded with a single renter (the common single-tenant case)."""
+    return LeaseExtraction(renters=[ExtractedRenter()])
 
 
 class _FakeMessages:
@@ -105,17 +115,17 @@ def test_unsupported_type_raises_415():
 
 def test_extract_lease_returns_result_with_meta(monkeypatch):
     svc = _service()
-    draft = LeaseExtraction()
+    draft = _one_renter()
     draft.property.city = "Tel Aviv"
-    draft.renter.base_rent = 5000.0
-    draft.notes = [FieldNote(section="renter", field="base_rent", confidence="medium", source_text="5,000 ₪")]
+    draft.renters[0].base_rent = 5000.0
+    draft.notes = [FieldNote(section="renter", field="base_rent", renter_index=0, confidence="medium", source_text="5,000 ₪")]
     fake = _FakeClient(_FakeResponse([_FakeToolUse(draft.model_dump())]))
     monkeypatch.setattr(svc, "_client", lambda: fake)
 
     result = svc.extract_lease(b"%PDF data", PDF_MEDIA)
 
     assert result.extraction.property.city == "Tel Aviv"
-    assert result.extraction.renter.base_rent == 5000.0
+    assert result.extraction.renters[0].base_rent == 5000.0
     # Telemetry computed from the response + parsed tool input.
     assert result.meta.input_tokens == 1000
     assert result.meta.output_tokens == 500
@@ -155,52 +165,111 @@ def test_missing_api_key_raises_503():
 # --- validation cleaning (don't hand the user values that would error on submit) ---
 
 def test_clean_drops_out_of_range_payment_day():
-    e = LeaseExtraction()
-    e.renter.payment_day_of_month = 45
+    e = _one_renter()
+    e.renters[0].payment_day_of_month = 45
     _clean_extraction(e)
-    assert e.renter.payment_day_of_month is None
+    assert e.renters[0].payment_day_of_month is None
 
 
 def test_clean_keeps_valid_payment_day():
-    e = LeaseExtraction()
-    e.renter.payment_day_of_month = 10
+    e = _one_renter()
+    e.renters[0].payment_day_of_month = 10
     _clean_extraction(e)
-    assert e.renter.payment_day_of_month == 10
+    assert e.renters[0].payment_day_of_month == 10
 
 
 def test_clean_drops_non_iso_lease_start():
-    e = LeaseExtraction()
-    e.renter.lease_start = "see addendum"
+    e = _one_renter()
+    e.renters[0].lease_start = "see addendum"
     _clean_extraction(e)
-    assert e.renter.lease_start is None
+    assert e.renters[0].lease_start is None
 
 
 def test_clean_keeps_iso_lease_start():
-    e = LeaseExtraction()
-    e.renter.lease_start = "2025-03-01"
+    e = _one_renter()
+    e.renters[0].lease_start = "2025-03-01"
     _clean_extraction(e)
-    assert e.renter.lease_start == "2025-03-01"
+    assert e.renters[0].lease_start == "2025-03-01"
 
 
 def test_clean_drops_negative_amounts():
-    e = LeaseExtraction()
-    e.renter.base_rent = -500.0
+    e = _one_renter()
+    e.renters[0].base_rent = -500.0
     e.property.sq_ft = -80
-    e.renter.lease_years = [LeaseYearGuess(amount=-1, type="contract")]
+    e.renters[0].lease_years = [LeaseYearGuess(amount=-1, type="contract")]
     _clean_extraction(e)
-    assert e.renter.base_rent is None
+    assert e.renters[0].base_rent is None
     assert e.property.sq_ft is None
-    assert e.renter.lease_years is None
+    assert e.renters[0].lease_years is None
 
 
 def test_clean_drops_note_for_nulled_field():
-    e = LeaseExtraction()
-    e.renter.payment_day_of_month = 45  # invalid → will be nulled
-    e.renter.base_rent = 5000.0
+    e = _one_renter()
+    e.renters[0].payment_day_of_month = 45  # invalid → will be nulled
+    e.renters[0].base_rent = 5000.0
     e.notes = [
-        FieldNote(section="renter", field="payment_day_of_month", confidence="low", source_text="?"),
-        FieldNote(section="renter", field="base_rent", confidence="medium", source_text="5,000"),
+        FieldNote(section="renter", field="payment_day_of_month", renter_index=0, confidence="low", source_text="?"),
+        FieldNote(section="renter", field="base_rent", renter_index=0, confidence="medium", source_text="5,000"),
     ]
     _clean_extraction(e)
     # The note for the nulled field is removed; the one for a surviving field stays.
     assert [n.field for n in e.notes] == ["base_rent"]
+
+
+def test_clean_drops_unknown_insurance_type():
+    e = _one_renter()
+    e.renters[0].insurance_type = "property insurance"  # not one of the enum values
+    _clean_extraction(e)
+    assert e.renters[0].insurance_type is None
+
+
+def test_clean_keeps_known_insurance_type():
+    e = _one_renter()
+    e.renters[0].insurance_type = "bank_guarantee"
+    _clean_extraction(e)
+    assert e.renters[0].insurance_type == "bank_guarantee"
+
+
+def test_clean_drops_national_id_mistaken_for_phone():
+    e = _one_renter()
+    e.renters[0].phone = "312345678"  # bare 9-digit national ID, not a phone
+    _clean_extraction(e)
+    assert e.renters[0].phone is None
+
+
+def test_clean_keeps_real_phone():
+    e = _one_renter()
+    e.renters[0].phone = "0521234567"  # 10-digit Israeli mobile
+    _clean_extraction(e)
+    assert e.renters[0].phone == "0521234567"
+
+
+def test_clean_drops_negative_joint_rent():
+    e = LeaseExtraction(renters=[ExtractedRenter(), ExtractedRenter()], rent_is_joint=True)
+    e.joint_monthly_rent = -100.0
+    _clean_extraction(e)
+    assert e.joint_monthly_rent is None
+
+
+def test_field_stats_counts_all_renters():
+    e = LeaseExtraction(
+        renters=[ExtractedRenter(first_name="Dana"), ExtractedRenter(first_name="Noa")],
+    )
+    e.property.city = "Tel Aviv"
+    result = _clean_extraction(e)
+    from app.services.document_extraction_service import _field_stats
+
+    extracted, _, _ = _field_stats(result)
+    assert extracted == 3  # city + two first_names
+
+
+def test_clean_scopes_notes_to_the_right_renter():
+    e = LeaseExtraction(renters=[ExtractedRenter(), ExtractedRenter(base_rent=4000.0)])
+    e.notes = [
+        # points at renter 0 whose base_rent is null → dropped
+        FieldNote(section="renter", field="base_rent", renter_index=0, confidence="low", source_text="?"),
+        # points at renter 1 whose base_rent is set → kept
+        FieldNote(section="renter", field="base_rent", renter_index=1, confidence="medium", source_text="4,000"),
+    ]
+    _clean_extraction(e)
+    assert [(n.field, n.renter_index) for n in e.notes] == [("base_rent", 1)]
