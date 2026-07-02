@@ -41,6 +41,11 @@ class ExtraContactGuess(BaseModel):
 class ExtractedProperty(BaseModel):
     """Property fields extractable from a lease (plain values; null if absent)."""
 
+    # Emitted FIRST (before `address`) so the model must locate the clause describing the
+    # rented property before committing to an address — this is the field order the tool
+    # schema exposes, and it markedly improves picking the property's address over a party's
+    # home address. Not shown in the forms; used only as the model's own grounding + a note.
+    address_evidence: Optional[str] = None
     address: Optional[str] = None
     city: Optional[str] = None
     zip_code: Optional[str] = None
