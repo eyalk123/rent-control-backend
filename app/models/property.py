@@ -1,5 +1,7 @@
 import enum
-from sqlalchemy import Column, Enum, Float, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import Column, DateTime, Enum, Float, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -45,6 +47,8 @@ class Property(Base):
     apartment = Column(String, nullable=True)
     block = Column(String, nullable=True)
     plot = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     renters = relationship("Renter", back_populates="property", foreign_keys="Renter.property_id")
     transactions = relationship("Transaction", back_populates="property", foreign_keys="Transaction.property_id", passive_deletes=True)
