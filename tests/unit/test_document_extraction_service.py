@@ -195,11 +195,11 @@ def test_clean_keeps_iso_lease_start():
 def test_clean_drops_negative_amounts():
     e = _one_renter()
     e.renters[0].base_rent = -500.0
-    e.property.sq_ft = -80
+    e.property.number_of_rooms = -3
     e.renters[0].lease_years = [LeaseYearGuess(amount=-1, type="contract")]
     _clean_extraction(e)
     assert e.renters[0].base_rent is None
-    assert e.property.sq_ft is None
+    assert e.property.number_of_rooms is None
     assert e.renters[0].lease_years is None
 
 

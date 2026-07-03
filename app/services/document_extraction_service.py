@@ -68,6 +68,20 @@ _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessing
 
 # One descriptive line per field — the "field schema" Claude maps the document onto.
 # Kept stable so it can be prompt-cached across requests.
+#
+# DISABLED extraction fields — rarely stated in a lease, so we don't spend tokens extracting
+# them. To re-enable one: uncomment its field in app/schemas/document_extraction.py AND paste
+# its bullet back into the matching (Property / Renter) section of _SYSTEM_PROMPT below.
+#   Property:
+#   - zip_code: the property's postal code (part of the address/city/zip group).
+#   - sq_ft: floor area as a number (whatever unit the document uses).
+#   - parking_numbers: list of parking spot identifiers.
+#   - block, plot: land registry block ("gush") / plot ("helka"). (Restore alongside `apartment`.)
+#   - electricity_meter_number, electricity_account_number, water_meter_number, water_account_number: utility identifiers.
+#   - property_tax, house_committee: periodic property tax ("arnona") and building-committee ("vaad bayit") amounts.
+#   - inventory_notes: any inventory / contents description.
+#   Renter:
+#   - email: tenant email address.
 _SYSTEM_PROMPT = """You extract structured data from rental lease / property contracts to pre-fill a property-management app's forms. Documents are often in Hebrew (right-to-left) and may mix Hebrew, English, and numbers in tables — read them carefully and preserve the correct values.
 
 A single lease usually describes a property and one or more renters (co-tenants who sign the same lease). Populate the property once and add one entry to `renters` for EACH tenant. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money/areas as plain numbers (no currency symbols or commas).
@@ -76,24 +90,18 @@ Confidence: for any field you are NOT highly confident about (inferred, ambiguou
 
 Property fields:
 - address_evidence: FILL THIS FIRST, before `address`. Copy the short verbatim phrase from the document that states WHERE THE RENTED PROPERTY IS — the clause describing the המושכר / הדירה / הנכס (e.g. "הדירה ברחוב הרצל 12 תל אביב"). Then derive `address`/`city` from this same phrase. Null only if the document truly never states the property's location.
-- address, city, zip_code: the address of the PROPERTY BEING RENTED (the demised premises) — NEVER a person's address. Read carefully; this is the most important field:
+- address, city: the address of the PROPERTY BEING RENTED (the demised premises) — NEVER a person's address. Read carefully; this is the most important field:
   * The rented property is called המושכר / הדירה / הנכס / הממכר. Its address is stated where the lease describes WHAT is being rented — usually the opening recitals ("הואיל והמשכיר הינו בעל הזכויות בדירה ברחוב ___ בעיר ___") or a dedicated clause ("המושכר: דירה ברחוב ___") or the "הואיל" / "מבוא" section. Take `address` and `city` from there.
   * Do NOT use any address from the parties block / signature area (the "בין ___ לבין ___" part). There each party's name is followed by "ת.ז ___" and "מרחוב ___" / "מ___" — those are the LANDLORD's and the TENANT's OWN home/mailing addresses. They are commonly the FIRST addresses in the document; taking one of them by mistake is the single most common error — do not.
   * If several street addresses appear, choose the one tied to המושכר/הדירה/הנכס, not the one tied to a person's name or ת.ז. If still unsure, pick the most likely property address and add a `notes` entry for `address` with its source_text.
 - type: one of apartment, house, commercial, garden_apartment, housing_unit.
-- sq_ft: floor area as a number (whatever unit the document uses).
 - number_of_rooms, floor: room count and floor number.
-- apartment, block, plot: apartment/unit number and land registry block ("gush") / plot ("helka").
-- parking_numbers: list of parking spot identifiers.
+- apartment: apartment/unit number.
 - property_owner: the landlord/owner's name.
-- electricity_meter_number, electricity_account_number, water_meter_number, water_account_number: utility identifiers.
-- property_tax, house_committee: periodic property tax ("arnona") and building-committee ("vaad bayit") amounts.
-- inventory_notes: any inventory / contents description.
 
 Renter fields — one `renters` entry PER tenant. If several people sign as tenants, list them all; do not merge them or push them into extra_contacts.
 - first_name, last_name: the tenant's given and family name.
 - phone: the tenant's PHONE number only. An Israeli phone is typically 9-10 digits starting with 0 (mobile 05X-XXXXXXX) or +972. Before filling this, check the number really looks like a phone. A 9-digit national ID number (תעודת זהות / ת"ז) is NOT a phone — if the only number you see near the tenant is an ID, leave phone null rather than putting the ID here.
-- email: tenant email address.
 - lease_start: the lease commencement date (ISO YYYY-MM-DD).
 - payment_type: payment method described (e.g. bank transfer, checks).
 - payment_day_of_month: day of month rent is due (1-31).
@@ -270,8 +278,9 @@ def _is_iso_date(value: str) -> bool:
 
 
 def _clean_property(p: ExtractedProperty) -> None:
+    # getattr default None so a currently-disabled (commented-out) field is simply skipped.
     for name in ("sq_ft", "number_of_rooms", "floor", "property_tax", "house_committee"):
-        v = getattr(p, name)
+        v = getattr(p, name, None)
         if v is not None and v < 0:
             setattr(p, name, None)
 

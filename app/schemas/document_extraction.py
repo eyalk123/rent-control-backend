@@ -48,23 +48,26 @@ class ExtractedProperty(BaseModel):
     address_evidence: Optional[str] = None
     address: Optional[str] = None
     city: Optional[str] = None
-    zip_code: Optional[str] = None
     type: Optional[PropertyType] = None
-    sq_ft: Optional[int] = None
     number_of_rooms: Optional[int] = None
-    parking_numbers: Optional[list[str]] = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
-    block: Optional[str] = None
-    plot: Optional[str] = None
     property_owner: Optional[str] = None
-    electricity_meter_number: Optional[str] = None
-    electricity_account_number: Optional[str] = None
-    water_meter_number: Optional[str] = None
-    water_account_number: Optional[str] = None
-    property_tax: Optional[float] = None
-    house_committee: Optional[float] = None
-    inventory_notes: Optional[str] = None
+    # --- DISABLED fields (rarely stated in a lease → not worth the extraction tokens).
+    # To re-enable, uncomment here AND move the matching bullet back into _SYSTEM_PROMPT
+    # (see the "DISABLED extraction fields" block in document_extraction_service.py).
+    # zip_code: Optional[str] = None
+    # sq_ft: Optional[int] = None
+    # parking_numbers: Optional[list[str]] = None
+    # block: Optional[str] = None
+    # plot: Optional[str] = None
+    # electricity_meter_number: Optional[str] = None
+    # electricity_account_number: Optional[str] = None
+    # water_meter_number: Optional[str] = None
+    # water_account_number: Optional[str] = None
+    # property_tax: Optional[float] = None
+    # house_committee: Optional[float] = None
+    # inventory_notes: Optional[str] = None
 
 
 class ExtractedRenter(BaseModel):
@@ -73,7 +76,8 @@ class ExtractedRenter(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
-    email: Optional[str] = None
+    # DISABLED (rarely in a lease). Re-enable here + restore its _SYSTEM_PROMPT bullet.
+    # email: Optional[str] = None
     lease_start: Optional[str] = None  # ISO date (YYYY-MM-DD)
     lease_years: Optional[list[LeaseYearGuess]] = None
     contract_term_years: Optional[int] = None
