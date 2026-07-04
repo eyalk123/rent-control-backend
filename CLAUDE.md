@@ -22,7 +22,7 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/config.py` | Pydantic `Settings` — reads all env vars from `.env` |
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/api/dependencies.py` | All DI factories: auth, repos, services |
-| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens) plus `internal.py` (`/health`, `/internal/run-reminders`) |
+| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`) |
 | `app/models/` | SQLAlchemy declarative models |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations |
@@ -56,7 +56,9 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
-| `REMINDER_CRON_SECRET` | No | Shared secret for `POST /internal/run-reminders` (`X-Cron-Secret` header); empty disables the endpoint |
+| `REMINDER_CRON_SECRET` | No | Shared secret for `POST /internal/run-reminders` and `POST /internal/run-cpi-indexing` (`X-Cron-Secret` header); empty disables them |
+| `CBS_API_BASE_URL` | No | CBS price-index API base; default `https://api.cbs.gov.il` (CPI rent linkage) |
+| `CPI_INDEX_ID` | No | CBS series id for CPI linkage; default `120010` (general Consumer Price Index) |
 | `PORT` | No | Set by Railway automatically |
 
 ## Request Flow

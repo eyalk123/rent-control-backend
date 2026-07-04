@@ -24,8 +24,11 @@ class Renter(Base):
     contract_term_years = Column(Integer, nullable=True)
     option_years = Column(Integer, nullable=True)
     base_rent = Column(Float, nullable=True)
-    rent_escalation_mode = Column(String, nullable=True)  # none | percent | fixed | custom
+    rent_escalation_mode = Column(String, nullable=True)  # none | percent | fixed | custom | cpi
     rent_escalation_value = Column(Float, nullable=True)
+    # Base CPI index frozen at signing (mode == "cpi" only). Rent for each lease
+    # year is base_rent * max(known_index / cpi_base_index, 1). Server-set.
+    cpi_base_index = Column(Float, nullable=True)
     number_of_payments = Column(Integer, nullable=True)
     payment_type = Column(String, nullable=True)
     payment_day_of_month = Column(Integer, nullable=True)

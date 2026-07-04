@@ -3,8 +3,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.api.dependencies import get_reminder_service
+from app.api.dependencies import get_cpi_indexing_service, get_reminder_service
 from app.config import settings
+from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.reminder_service import ReminderService
 
 router = APIRouter()
@@ -26,3 +27,14 @@ def run_reminders(
     day by an external scheduler with the X-Cron-Secret header."""
     sent = reminder_service.run_daily_reminders()
     return {"status": "ok", "sent": sent}
+
+
+@router.post("/run-cpi-indexing", dependencies=[Depends(verify_cron_secret)])
+def run_cpi_indexing(
+    cpi_indexing_service: Annotated[CpiIndexingService, Depends(get_cpi_indexing_service)],
+):
+    """Refresh the cached Consumer Price Index from the CBS API and recompute every
+    CPI-linked renter's rent schedule. Intended to be called ~monthly by an external
+    scheduler with the X-Cron-Secret header (the index updates monthly)."""
+    result = cpi_indexing_service.run_cpi_indexing()
+    return {"status": "ok", **result}

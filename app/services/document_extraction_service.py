@@ -114,8 +114,8 @@ Joint vs. per-tenant rent: most leases with several tenants state ONE joint rent
 Lease term — describe it as INTENT; the app rebuilds the year-by-year schedule from these:
 - contract_term_years: number of binding (contract) years. option_years: number of renewal-option years.
 - base_rent: the FIRST-YEAR MONTHLY rent (a single monthly figure, never annual). Leave null when rent_is_joint is true (use joint_monthly_rent instead).
-- rent_escalation_mode: how the monthly rent changes each year — "none" (flat, same every year), "percent" (rises a fixed % each year), "fixed" (rises a fixed money amount each year), or "custom" (irregular per-year amounts that follow no single rule).
-- rent_escalation_value: the percent (for "percent") or the money amount (for "fixed"). Null for "none"/"custom".
+- rent_escalation_mode: how the monthly rent changes each year — "none" (flat, same every year), "percent" (rises a fixed % each year), "fixed" (rises a fixed money amount each year), "cpi" (linked/indexed to the Consumer Price Index — מדד המחירים לצרכן / הצמדה למדד), or "custom" (irregular per-year amounts that follow no single rule). Use "cpi" whenever the rent is tied to the index (הצמדה למדד המחירים לצרכן), even if a minimum increase is also mentioned.
+- rent_escalation_value: the percent (for "percent") or the money amount (for "fixed"). Null for "none"/"custom"/"cpi".
 - lease_years: leave EMPTY unless rent_escalation_mode is "custom". When custom, list one row per lease year, each {amount: that year's MONTHLY rent in the SAME unit as base_rent, type: "contract" or "option"}, and set contract_term_years + option_years to equal the number of rows.
 
 Return only the structured data."""

@@ -21,6 +21,7 @@ from app.repositories.notification_rule_repository import NotificationRuleReposi
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
+from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.repositories.property_repository import PropertyRepository
@@ -28,6 +29,8 @@ from app.repositories.renter_repository import RenterRepository
 from app.repositories.report_export_repository import ReportExportRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
+from app.services.cbs_index_service import CbsIndexService
+from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.device_token_service import DeviceTokenService
 from app.services.document_extraction_service import DocumentExtractionService
 from app.services.expense_category_service import ExpenseCategoryService
@@ -125,6 +128,10 @@ def get_renter_repository(db: Annotated[Session, Depends(get_db)]) -> RenterRepo
     return RenterRepository(db)
 
 
+def get_cpi_index_repository(db: Annotated[Session, Depends(get_db)]) -> CpiIndexRepository:
+    return CpiIndexRepository(db)
+
+
 def get_property_service(
     property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
@@ -135,8 +142,27 @@ def get_property_service(
 def get_renter_service(
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
     property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
+    cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
 ) -> RenterService:
-    return RenterService(renter_repository, property_repository)
+    return RenterService(renter_repository, property_repository, cpi_index_repository)
+
+
+def get_cbs_index_service() -> CbsIndexService:
+    return CbsIndexService(
+        base_url=settings.CBS_API_BASE_URL, index_id=settings.CPI_INDEX_ID
+    )
+
+
+def get_cpi_indexing_service(
+    renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+    cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
+    cbs_service: Annotated[CbsIndexService, Depends(get_cbs_index_service)],
+) -> CpiIndexingService:
+    return CpiIndexingService(
+        renter_repository=renter_repository,
+        cpi_index_repository=cpi_index_repository,
+        cbs_service=cbs_service,
+    )
 
 
 def get_expense_category_repository(

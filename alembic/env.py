@@ -8,6 +8,7 @@ from alembic import context
 
 from app.config import settings
 from app.models.base import Base
+from app.models.cpi_index import CpiIndex
 from app.models.device_token import DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory

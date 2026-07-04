@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # Claude model used for lease extraction. Sonnet is the cost/accuracy default;
     # switch to "claude-opus-4-8" if extraction accuracy on hard scans isn't enough.
     EXTRACTION_MODEL: str = "claude-sonnet-4-6"
+    # CBS (Central Bureau of Statistics) public price-index API, used for CPI rent
+    # linkage. Keyless and free. CPI_INDEX_ID 120010 is the general Consumer Price
+    # Index. Refreshed monthly by POST /internal/run-cpi-indexing.
+    CBS_API_BASE_URL: str = "https://api.cbs.gov.il"
+    CPI_INDEX_ID: int = 120010
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

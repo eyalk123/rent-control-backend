@@ -18,6 +18,7 @@ class RentEscalationMode(str, Enum):
     percent = "percent"
     fixed = "fixed"
     custom = "custom"
+    cpi = "cpi"
 
 
 class LeaseYear(BaseModel):
@@ -125,6 +126,7 @@ class RenterRead(BaseModel):
     base_rent: Optional[float] = None
     rent_escalation_mode: Optional[RentEscalationMode] = None
     rent_escalation_value: Optional[float] = None
+    cpi_base_index: Optional[float] = None  # server-set; read-only
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
     payment_day_of_month: Optional[int] = None

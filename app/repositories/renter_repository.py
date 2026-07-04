@@ -36,6 +36,12 @@ class RenterRepository:
         stmt = select(Renter.owner_id).where(Renter.owner_id.isnot(None)).distinct()
         return list(self.session.scalars(stmt).all())
 
+    def get_by_escalation_mode(self, mode: str) -> list[Renter]:
+        """Every renter using a given rent-escalation mode, across all owners — the
+        set the CPI indexing job recomputes."""
+        stmt = select(Renter).where(Renter.rent_escalation_mode == mode)
+        return list(self.session.scalars(stmt).all())
+
     def get_all(self, owner_id: str | None = None) -> list[Renter]:
         stmt = select(Renter).options(selectinload(Renter.property))
         if owner_id is not None:
@@ -73,6 +79,7 @@ class RenterRepository:
             "base_rent",
             "rent_escalation_mode",
             "rent_escalation_value",
+            "cpi_base_index",
         }
         always_set_fields = {"lease_years", "lease_end"}
         for key, value in data.items():
