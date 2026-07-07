@@ -68,24 +68,53 @@ class _FakeResponse:
 
 # --- content block construction (per file type) ---
 
-def test_pdf_builds_document_block():
-    block = _service()._build_content_block(b"%PDF-1.4 data", PDF_MEDIA)
-    assert block["type"] == "document"
-    assert block["source"]["media_type"] == PDF_MEDIA
-    assert base64.standard_b64decode(block["source"]["data"]) == b"%PDF-1.4 data"
+def _make_pdf(pages_text: list[str]) -> bytes:
+    """Build a small real PDF (one page per string) with fpdf2 for rasterization tests."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    for text in pages_text:
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=16)
+        pdf.cell(0, 10, text)
+    return bytes(pdf.output())
+
+
+def test_pdf_renders_to_image_blocks():
+    blocks = _service()._build_content_blocks(_make_pdf(["Lease 13 Ein Harod"]), PDF_MEDIA)
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "image"
+    assert blocks[0]["source"]["media_type"] == "image/png"
+    # The rendered page is a real PNG (magic bytes), not the raw PDF text layer.
+    assert base64.standard_b64decode(blocks[0]["source"]["data"]).startswith(b"\x89PNG")
+
+
+def test_pdf_renders_one_image_block_per_page():
+    blocks = _service()._build_content_blocks(_make_pdf(["Page one", "Page two"]), PDF_MEDIA)
+    assert len(blocks) == 2
+    assert all(b["type"] == "image" for b in blocks)
+
+
+def test_corrupt_pdf_bytes_raise_422():
+    with pytest.raises(HTTPException) as exc:
+        _service()._build_content_blocks(b"not a pdf", PDF_MEDIA)
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.parametrize("media", ["image/png", "image/jpeg", "image/webp", "image/gif"])
 def test_image_builds_image_block(media):
-    block = _service()._build_content_block(b"\x89PNG bytes", media)
-    assert block["type"] == "image"
-    assert block["source"]["media_type"] == media
-    assert base64.standard_b64decode(block["source"]["data"]) == b"\x89PNG bytes"
+    blocks = _service()._build_content_blocks(b"\x89PNG bytes", media)
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "image"
+    assert blocks[0]["source"]["media_type"] == media
+    assert base64.standard_b64decode(blocks[0]["source"]["data"]) == b"\x89PNG bytes"
 
 
 def test_content_type_with_charset_suffix_is_handled():
-    block = _service()._build_content_block(b"%PDF", "application/pdf; charset=binary")
-    assert block["type"] == "document"
+    blocks = _service()._build_content_blocks(
+        _make_pdf(["Lease"]), "application/pdf; charset=binary"
+    )
+    assert blocks[0]["type"] == "image"
 
 
 def test_docx_builds_text_block_from_paragraphs_and_tables():
@@ -99,15 +128,16 @@ def test_docx_builds_text_block_from_paragraphs_and_tables():
     buf = io.BytesIO()
     doc.save(buf)
 
-    block = _service()._build_content_block(buf.getvalue(), DOCX_MEDIA)
-    assert block["type"] == "text"
-    assert "12 Herzl St" in block["text"]
-    assert "Rent | 5000" in block["text"]
+    blocks = _service()._build_content_blocks(buf.getvalue(), DOCX_MEDIA)
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "text"
+    assert "12 Herzl St" in blocks[0]["text"]
+    assert "Rent | 5000" in blocks[0]["text"]
 
 
 def test_unsupported_type_raises_415():
     with pytest.raises(HTTPException) as exc:
-        _service()._build_content_block(b"x", "text/csv")
+        _service()._build_content_blocks(b"x", "text/csv")
     assert exc.value.status_code == 415
 
 
@@ -122,7 +152,7 @@ def test_extract_lease_returns_result_with_meta(monkeypatch):
     fake = _FakeClient(_FakeResponse([_FakeToolUse(draft.model_dump())]))
     monkeypatch.setattr(svc, "_client", lambda: fake)
 
-    result = svc.extract_lease(b"%PDF data", PDF_MEDIA)
+    result = svc.extract_lease(_make_pdf(["Lease"]), PDF_MEDIA)
 
     assert result.extraction.property.city == "Tel Aviv"
     assert result.extraction.renters[0].base_rent == 5000.0
@@ -132,10 +162,11 @@ def test_extract_lease_returns_result_with_meta(monkeypatch):
     assert result.meta.fields_extracted == 2  # city + base_rent populated
     assert result.meta.medium_confidence_count == 1  # from the note
     assert result.meta.estimated_cost_usd is not None
-    # A non-strict extraction tool was forced, and the PDF content block was sent.
+    # A non-strict extraction tool was forced, and the PDF was sent as a rendered image
+    # (not a native document block that would carry the corrupt text layer).
     call = fake.messages.calls[0]
     assert call["tool_choice"]["name"] == "record_lease_extraction"
-    assert call["messages"][0]["content"][0]["type"] == "document"
+    assert call["messages"][0]["content"][0]["type"] == "image"
 
 
 def test_extract_lease_refusal_raises_422(monkeypatch):
@@ -143,7 +174,7 @@ def test_extract_lease_refusal_raises_422(monkeypatch):
     fake = _FakeClient(_FakeResponse([], stop_reason="refusal"))
     monkeypatch.setattr(svc, "_client", lambda: fake)
     with pytest.raises(HTTPException) as exc:
-        svc.extract_lease(b"%PDF", PDF_MEDIA)
+        svc.extract_lease(_make_pdf(["Lease"]), PDF_MEDIA)
     assert exc.value.status_code == 422
 
 
@@ -152,13 +183,13 @@ def test_extract_lease_no_tool_call_raises_422(monkeypatch):
     fake = _FakeClient(_FakeResponse([], stop_reason="max_tokens"))
     monkeypatch.setattr(svc, "_client", lambda: fake)
     with pytest.raises(HTTPException) as exc:
-        svc.extract_lease(b"%PDF", PDF_MEDIA)
+        svc.extract_lease(_make_pdf(["Lease"]), PDF_MEDIA)
     assert exc.value.status_code == 422
 
 
 def test_missing_api_key_raises_503():
     with pytest.raises(HTTPException) as exc:
-        _service(api_key="").extract_lease(b"%PDF", PDF_MEDIA)
+        _service(api_key="").extract_lease(_make_pdf(["Lease"]), PDF_MEDIA)
     assert exc.value.status_code == 503
 
 

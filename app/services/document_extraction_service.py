@@ -1,9 +1,17 @@
 """Lease document extraction via Claude (vision + structured output).
 
 The service is the only place that talks to the Anthropic API. It receives the
-raw upload bytes, builds the right content block for the file type (PDF and images
-go to Claude directly; DOCX is converted to text with python-docx), and asks Claude
+raw upload bytes, builds the right content blocks for the file type, and asks Claude
 to return a :class:`LeaseExtraction` conforming to our schema.
+
+PDFs are rasterized to page images (via PyMuPDF) and sent as `image` blocks rather
+than as a native `document` block. Some leases embed subsetted fonts with a broken
+ToUnicode map, so the PDF's hidden text layer reports wrong digits (rent, dates, unit
+numbers) even though the page *renders* correctly. Anthropic's native PDF handling
+feeds both the rendered pixels and that corrupt text layer to the model, and the model
+tends to trust the authoritative-looking text. Rendering to pixels ourselves drops the
+text layer entirely, so Claude reads only what a human sees. Images go to Claude
+directly; DOCX (real text, no glyph problem) is converted to text with python-docx.
 
 The file is processed in-memory and never written to disk or Firebase — clients hold
 the original and attach it to Firebase only when the reviewed form is submitted.
@@ -65,6 +73,12 @@ class ExtractionResult:
 _IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 _PDF_MEDIA_TYPE = "application/pdf"
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+# PDF page rendering. 200 DPI keeps small digits and dense tables sharp for the vision
+# model (the only real precision lever when reading from pixels). The page cap is a
+# defensive guard against pathological uploads — leases are a handful of pages.
+_RENDER_DPI = 200
+_MAX_PDF_PAGES = 20
 
 # One descriptive line per field — the "field schema" Claude maps the document onto.
 # Kept stable so it can be prompt-cached across requests.
@@ -138,29 +152,24 @@ class DocumentExtractionService:
             )
         return Anthropic(api_key=self._api_key)
 
-    def _build_content_block(self, file_bytes: bytes, content_type: str) -> dict:
-        """Turn the upload into a single Claude content block, by file type."""
+    def _build_content_blocks(self, file_bytes: bytes, content_type: str) -> list[dict]:
+        """Turn the upload into a list of Claude content blocks, by file type."""
         media_type = (content_type or "").split(";")[0].strip().lower()
 
         if media_type == _PDF_MEDIA_TYPE:
-            return {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": _PDF_MEDIA_TYPE,
-                    "data": base64.standard_b64encode(file_bytes).decode(),
-                },
-            }
+            # Rasterize to page images so the corrupt PDF text layer never reaches the
+            # model (see the module docstring).
+            return self._pdf_to_image_blocks(file_bytes)
 
         if media_type in _IMAGE_MEDIA_TYPES:
-            return {
+            return [{
                 "type": "image",
                 "source": {
                     "type": "base64",
                     "media_type": media_type,
                     "data": base64.standard_b64encode(file_bytes).decode(),
                 },
-            }
+            }]
 
         if media_type == _DOCX_MEDIA_TYPE:
             text = self._docx_to_text(file_bytes)
@@ -169,12 +178,52 @@ class DocumentExtractionService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="The document appears to be empty.",
                 )
-            return {"type": "text", "text": text}
+            return [{"type": "text", "text": text}]
 
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Unsupported file type. Upload a PDF, DOCX, or image (JPEG/PNG/GIF/WebP).",
         )
+
+    @staticmethod
+    def _pdf_to_image_blocks(file_bytes: bytes) -> list[dict]:
+        """Render each PDF page to a PNG image block. Bypasses the (sometimes corrupt)
+        embedded text layer by reading only the rendered pixels — see module docstring."""
+        import fitz  # PyMuPDF, imported lazily so the dep is only needed at runtime
+
+        try:
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The document could not be processed.",
+            )
+
+        zoom = _RENDER_DPI / 72
+        matrix = fitz.Matrix(zoom, zoom)
+        blocks: list[dict] = []
+        try:
+            for page in doc:
+                if len(blocks) >= _MAX_PDF_PAGES:
+                    break
+                pixmap = page.get_pixmap(matrix=matrix)
+                blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": base64.standard_b64encode(pixmap.tobytes("png")).decode(),
+                    },
+                })
+        finally:
+            doc.close()
+
+        if not blocks:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The document appears to be empty.",
+            )
+        return blocks
 
     @staticmethod
     def _docx_to_text(file_bytes: bytes) -> str:
@@ -192,7 +241,7 @@ class DocumentExtractionService:
 
     def extract_lease(self, file_bytes: bytes, content_type: str) -> ExtractionResult:
         """Extract a property + renter draft from a lease document, with call telemetry."""
-        content_block = self._build_content_block(file_bytes, content_type)
+        content_blocks = self._build_content_blocks(file_bytes, content_type)
         client = self._client()
 
         # Use a NON-strict tool (not structured-outputs / messages.parse): the strict
@@ -214,7 +263,7 @@ class DocumentExtractionService:
                 {
                     "role": "user",
                     "content": [
-                        content_block,
+                        *content_blocks,
                         {
                             "type": "text",
                             "text": "Extract the property and renter details from this lease document.",
