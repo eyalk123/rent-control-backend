@@ -5,9 +5,10 @@ import pytest
 from freezegun import freeze_time
 
 from app.config import settings
+from app.models.notification_settings import NotificationSettings
 from app.repositories.device_token_repository import DeviceTokenRepository
 from tests.conftest import OWNER_A, OWNER_B
-from tests.factories import make_property, make_renter
+from tests.factories import make_property, make_renter, make_transaction
 
 
 CRON_SECRET = "test-secret"
@@ -259,3 +260,159 @@ def test_run_reminders_rejects_bad_secret(client, monkeypatch):
     monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
     assert client.post("/internal/run-reminders", headers={"X-Cron-Secret": "wrong"}).status_code == 401
     assert client.post("/internal/run-reminders").status_code == 401
+
+
+# --- feed resolve-on-read (auto-dismiss when the condition clears) ------------
+
+def _types(feed_response) -> list[str]:
+    return [n["type"] for n in feed_response.json()]
+
+
+@freeze_time("2026-06-15")
+def test_feed_clears_overdue_after_payment(client, db_session):
+    """Recording the rent (a revenue txn for this month) drops the renter out of
+    'overdue', so the next feed read auto-dismisses the stale alert."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2026, 12, 31),
+        payment_day_of_month=14,  # today is the 15th -> 1 day overdue
+    )
+
+    assert _types(client.get("/notifications")) == ["overdue"]
+
+    # Rent gets paid for the current month, outside the alert's own pill.
+    make_transaction(
+        db_session,
+        property_id=prop.id,
+        renter_id=renter.id,
+        month_for=date(2026, 6, 1),
+    )
+
+    assert _types(client.get("/notifications")) == []
+
+
+@freeze_time("2026-06-15")
+def test_feed_clears_lease_expiring_after_extension(client, db_session):
+    """Extending the lease past the reminder window leaves the old lease_expiring
+    row with no backing candidate; the next feed read clears it."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2025, 6, 1),
+        lease_end=date(2026, 6, 15) + timedelta(days=40),  # 40 days out -> offset 90
+        payment_day_of_month=28,  # not yet due -> isolates lease_expiring
+    )
+
+    assert _types(client.get("/notifications")) == ["lease_expiring"]
+
+    # Lease extended well beyond the 90-day window.
+    renter.lease_end = date(2026, 6, 15) + timedelta(days=400)
+    db_session.commit()
+
+    assert _types(client.get("/notifications")) == []
+
+
+@freeze_time("2026-06-15")
+def test_feed_keeps_unresolved_alert(client, db_session):
+    """A still-overdue renter keeps producing the same candidate, so the row is
+    preserved across reads (guards against over-aggressive dismissal)."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2026, 12, 31),
+        payment_day_of_month=14,
+    )
+
+    assert _types(client.get("/notifications")) == ["overdue"]
+    assert _types(client.get("/notifications")) == ["overdue"]
+
+
+@freeze_time("2026-06-15")
+def test_feed_does_not_dismiss_when_notifications_disabled(client, db_session):
+    """Account-wide disable yields zero candidates; reconciliation must not read
+    that as 'everything resolved' and wipe existing rows."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2026, 12, 31),
+        payment_day_of_month=14,
+    )
+
+    assert _types(client.get("/notifications")) == ["overdue"]
+
+    db_session.add(NotificationSettings(owner_id=OWNER_A, master_enabled=False))
+    db_session.commit()
+
+    # Still surfaced (the feed itself ignores settings); crucially, not dismissed.
+    assert _types(client.get("/notifications")) == ["overdue"]
+
+
+def test_feed_refreshes_overdue_days_across_reads(client, db_session):
+    """The stored days_overdue is frozen at row creation; the feed must overwrite
+    it with the current value on each read so the count tracks reality."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session, property_id=prop.id,
+        lease_start=date(2026, 1, 1), lease_end=date(2026, 12, 31),
+        payment_day_of_month=1,  # due on the 1st
+    )
+
+    def days_shown():
+        feed = client.get("/notifications").json()
+        overdue = [n for n in feed if n["type"] == "overdue"]
+        return overdue[0]["data"]["days_overdue"] if overdue else None
+
+    with freeze_time("2026-06-15"):
+        assert days_shown() == 14  # first materialization
+    with freeze_time("2026-06-25"):
+        assert days_shown() == 24  # refreshed (was frozen at 14 before the fix)
+
+
+def test_feed_refreshes_lease_days_across_reads(client, db_session):
+    """Same for lease_expiring: days_until_expiry tracks the current value, which
+    also keeps the client-reconstructed lease-end date correct."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session, property_id=prop.id,
+        lease_start=date(2025, 1, 1), lease_end=date(2026, 9, 1),
+        payment_day_of_month=28,  # not yet due -> isolates lease_expiring
+    )
+
+    def days_shown():
+        feed = client.get("/notifications").json()
+        exp = [n for n in feed if n["type"] == "lease_expiring"]
+        return exp[0]["data"]["days_until_expiry"] if exp else None
+
+    with freeze_time("2026-06-15"):
+        assert days_shown() == 78  # only offset 90 in play; frozen here before fix
+    with freeze_time("2026-06-25"):
+        assert days_shown() == 68  # refreshed to the current value
+
+
+@freeze_time("2026-06-15")
+def test_feed_does_not_dismiss_muted_event(client, db_session):
+    """A muted event also produces no candidates; its existing rows stay put
+    rather than being treated as resolved."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2026, 12, 31),
+        payment_day_of_month=14,
+    )
+
+    assert _types(client.get("/notifications")) == ["overdue"]
+
+    db_session.add(NotificationSettings(owner_id=OWNER_A, muted_events='["overdue"]'))
+    db_session.commit()
+
+    assert _types(client.get("/notifications")) == ["overdue"]

@@ -12,6 +12,7 @@ unique key, so the two paths never double-create.
 import json
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from app.models.notification import Notification
@@ -31,6 +32,22 @@ from app.models.notification import NotificationTypeEnum
 from app.services.push_service import PushService
 
 logger = logging.getLogger(__name__)
+
+# The value fields inside a notification's ``data`` that go stale as time passes
+# (they're captured when the row is first created). The feed refreshes these from
+# the live candidate on read so the displayed count never lags reality.
+_VOLATILE_DATA_KEYS = ("days_overdue", "amount", "days_until_expiry")
+
+
+@dataclass
+class GenerationResult:
+    """The outcome of one ``generate_for_owner`` run: the rows created this run
+    (paired with their candidate, for rendering push) plus every candidate the
+    engine produced (so the feed can refresh frozen row data without re-evaluating)."""
+
+    created: list[tuple[Notification, Candidate]]
+    candidates: list[Candidate]
+
 
 # Only push rows generated within this many days. Older un-pushed rows are a stale
 # backlog (e.g. generated while no device was registered) and are suppressed rather
@@ -62,11 +79,15 @@ class ReminderService:
 
     def generate_for_owner(
         self, owner_id: str, today: date | None = None
-    ) -> list[tuple[Notification, Candidate]]:
-        """Persist any newly-due notifications for one owner (idempotent). Returns
-        the rows created this run paired with their candidate (for rendering push)."""
+    ) -> GenerationResult:
+        """Persist any newly-due notifications for one owner (idempotent), and
+        auto-dismiss any live alert whose condition has since resolved (rent paid,
+        lease extended). Returns the rows created this run plus every candidate the
+        engine produced this run."""
+        candidates = self.engine.evaluate_owner(owner_id, today)
+        self._dismiss_resolved(owner_id, candidates)
         created: list[tuple[Notification, Candidate]] = []
-        for cand in self.engine.evaluate_owner(owner_id, today):
+        for cand in candidates:
             if self.notification_repository.was_generated(
                 owner_id, cand.type, cand.renter_id, cand.period_key, cand.offset
             ):
@@ -80,7 +101,43 @@ class ReminderService:
                 data=cand.data,
             )
             created.append((row, cand))
-        return created
+        return GenerationResult(created=created, candidates=candidates)
+
+    @staticmethod
+    def live_data_by_group(candidates: list[Candidate]) -> dict[tuple, dict]:
+        """Map (type, renter, period) -> the candidate's freshly-computed data, so
+        the feed can overwrite a persisted row's stale counts (days overdue / days
+        until expiry / amount) with current values on read. Every offset in a group
+        carries the same volatile values, so any candidate for the group works."""
+        return {
+            (c.type, c.renter_id, c.period_key): c.data for c in candidates
+        }
+
+    def _dismiss_resolved(
+        self, owner_id: str, candidates: list[Candidate]
+    ) -> None:
+        """Dismiss any non-dismissed feed row whose underlying condition no longer
+        holds — i.e. its (type, renter, period) is no longer a live candidate. The
+        engine recomputes candidates from current renter state, so an extended lease
+        (its old period_key vanishes) or a paid rent (renter drops out of overdue)
+        leaves a row with no backing candidate, which we clear here.
+
+        Only event types that are actually in effect are reconciled: a muted event
+        or an account-wide disable also yields zero candidates, and we must not treat
+        that as 'everything resolved' and wipe the feed."""
+        active_events = self.engine.active_event_types(owner_id)
+        if not active_events:
+            return
+        live = {(c.type, c.renter_id, c.period_key) for c in candidates}
+        seen: set[tuple] = set()
+        for row in self.notification_repository.list_for_owner(owner_id):
+            key = (row.type, row.entity_id, row.period_key)
+            if row.type not in active_events or key in live or key in seen:
+                continue
+            seen.add(key)
+            self.notification_repository.dismiss_group(
+                owner_id, row.type, row.entity_id, row.period_key
+            )
 
     def run_daily_reminders(self, today: date | None = None) -> dict:
         """For every owner with renters: materialize any newly-due feed rows, suppress
@@ -90,7 +147,7 @@ class ReminderService:
         cutoff = datetime.utcnow() - timedelta(days=PUSH_FRESHNESS_DAYS)
         summary = {"created": 0, "pushed": 0}
         for owner_id in self.renter_repository.list_distinct_owner_ids():
-            summary["created"] += len(self.generate_for_owner(owner_id, today))
+            summary["created"] += len(self.generate_for_owner(owner_id, today).created)
             self.notification_repository.suppress_stale_unpushed(owner_id, before=cutoff)
             rows = self.notification_repository.list_unpushed_for_owner(
                 owner_id, not_before=cutoff

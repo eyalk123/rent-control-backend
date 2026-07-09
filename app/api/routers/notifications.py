@@ -13,9 +13,22 @@ from app.models.notification import Notification, NotificationTypeEnum
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.notification import NotificationRead
-from app.services.reminder_service import ReminderService
+from app.services.reminder_service import ReminderService, _VOLATILE_DATA_KEYS
 
 router = APIRouter()
+
+
+def _fresh_data(n: Notification, live_data: dict[tuple, dict]) -> dict:
+    """The row's stored data with its volatile counts overwritten by the current
+    values, when the alert is still live. Preserves everything else (e.g. offset)
+    and falls back to the stored data for rows with no live candidate."""
+    data = json.loads(n.data) if n.data else {}
+    fresh = live_data.get((n.type, n.entity_id, n.period_key))
+    if fresh:
+        for key in _VOLATILE_DATA_KEYS:
+            if key in fresh:
+                data[key] = fresh[key]
+    return data
 
 
 def _collapse(rows: list[Notification]) -> list[tuple[Notification, bool]]:
@@ -60,7 +73,10 @@ def list_notifications(
     rent-due offsets [0, 3] — are collapsed to a single, most-urgent item so the
     feed reads as a to-handle list. Push (the cron path) still fires per offset."""
     owner_id = current_user["user_id"]
-    reminder_service.generate_for_owner(owner_id)
+    generation = reminder_service.generate_for_owner(owner_id)
+    # A row's stored counts (days overdue / until expiry) are frozen at creation;
+    # refresh them from the live candidate so the feed never shows a stale count.
+    live_data = reminder_service.live_data_by_group(generation.candidates)
 
     representatives = _collapse(notification_repository.list_for_owner(owner_id))
 
@@ -81,7 +97,7 @@ def list_notifications(
             property_address=renter.property.address if renter.property else None,
             payment_type=renter.payment_type,
             offset=n.offset,
-            data=json.loads(n.data) if n.data else {},
+            data=_fresh_data(n, live_data),
             read=group_read,
             dismissed=n.dismissed_at is not None,
             created_at=n.sent_at,

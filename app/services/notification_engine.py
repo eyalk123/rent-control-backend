@@ -105,6 +105,18 @@ class NotificationEngine:
                     candidates.append(cand)
         return candidates
 
+    def active_event_types(self, owner_id: str) -> set[NotificationTypeEnum]:
+        """The event types currently in effect for the owner: empty when
+        notifications are disabled account-wide, otherwise every built-in event
+        except the muted ones. Mirrors the gating in ``evaluate_owner`` so the
+        feed's resolve-on-read pass can tell 'condition resolved' (absent from
+        candidates) apart from 'event muted / disabled' (never evaluated)."""
+        settings = self.settings_repository.get(owner_id)
+        if settings is not None and not settings.master_enabled:
+            return set()
+        muted = set(_parse_str_list(settings.muted_events) if settings else [])
+        return {e for e in EVENT_TYPES if e.value not in muted}
+
     def _effective_specs(
         self, owner_id: str, event: NotificationTypeEnum
     ) -> list[RuleSpec]:
