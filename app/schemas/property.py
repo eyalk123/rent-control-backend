@@ -44,7 +44,7 @@ class PropertyCreate(BaseModel):
     sq_ft: int
     purchase_price: float = 0.0
     image_url: Optional[str] = None
-    number_of_rooms: Optional[int] = None
+    number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
     electricity_account_number: Optional[str] = None
@@ -77,7 +77,7 @@ class PropertyUpdate(BaseModel):
     sq_ft: Optional[int] = None
     purchase_price: Optional[float] = None
     image_url: Optional[str] = None
-    number_of_rooms: Optional[int] = None
+    number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
     electricity_account_number: Optional[str] = None
@@ -131,7 +131,7 @@ class PropertyRead(BaseModel):
     sq_ft: int
     purchase_price: float
     image_url: Optional[str] = None
-    number_of_rooms: Optional[int] = None
+    number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
     electricity_account_number: Optional[str] = None

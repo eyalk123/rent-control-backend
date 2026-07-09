@@ -49,7 +49,7 @@ class ExtractedProperty(BaseModel):
     address: Optional[str] = None
     city: Optional[str] = None
     type: Optional[PropertyType] = None
-    number_of_rooms: Optional[int] = None
+    number_of_rooms: Optional[float] = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
     property_owner: Optional[str] = None
