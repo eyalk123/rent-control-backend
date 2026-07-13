@@ -18,6 +18,7 @@ the original and attach it to Firebase only when the reviewed form is submitted.
 """
 import base64
 import io
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -31,6 +32,8 @@ from app.schemas.document_extraction import (
     ExtractedRenter,
     LeaseExtraction,
 )
+
+logger = logging.getLogger(__name__)
 
 # A non-strict tool the model fills with the extracted data. We deliberately avoid
 # structured outputs (messages.parse): the strict grammar compiler rejects a schema
@@ -119,7 +122,7 @@ Renter fields — one `renters` entry PER tenant. If several people sign as tena
 - phone: the tenant's PHONE number only. An Israeli phone is typically 9-10 digits starting with 0 (mobile 05X-XXXXXXX) or +972. Before filling this, check the number really looks like a phone. A 9-digit national ID number (תעודת זהות / ת"ז) is NOT a phone — if the only number you see near the tenant is an ID, leave phone null rather than putting the ID here.
 - lease_start: the lease commencement date (ISO YYYY-MM-DD).
 - payment_type: payment method described (e.g. bank transfer, checks).
-- payment_day_of_month: day of month rent is due (1-31).
+- payment_day_of_month: the day OF THE MONTH rent is due — a single whole number 1-31, nothing else. It is NOT a phone number, NOT a 9-digit ID (ת"ז), NOT a bank account/branch number, NOT a full date, NOT a sum of money. In Hebrew it reads like "בכל 1 לחודש", "עד ה-10 בכל חודש", "ב-1 לכל חודש" — take just the day number from such a clause. If the document never says which day of the month rent is due, return null; never borrow a nearby number just because one appears next to the payment terms.
 - insurance_type: the required security/collateral type — exactly one of "bank_guarantee" (ערבות בנקאית) or "wire_transfer" (פיקדון / העברה בנקאית / cash deposit). insurance_amount: its amount (usually stated right next to the type). Return null for insurance_type if it isn't one of those two.
 - number_of_payments: installments per year (e.g. 12 for monthly).
 - extra_contacts: NON-tenant contacts only, e.g. guarantors (ערבים), each {name, phone}. People who sign as tenants belong in `renters`, not here.
@@ -296,7 +299,18 @@ class DocumentExtractionService:
                 detail="Could not extract structured data from the document.",
             )
 
-        extraction = _clean_extraction(parsed)
+        # Only logged when the model emitted a value we had to throw away — so a bogus
+        # field (e.g. a phone number as payment_day_of_month) is provable after the fact
+        # instead of silently vanishing. Deliberately narrow: we log ONLY the discarded
+        # values, never the whole extraction, which is full of tenant PII.
+        discarded: list[str] = []
+        extraction = _clean_extraction(parsed, discarded)
+        if discarded:
+            logger.warning(
+                "Lease extraction (model=%s) returned unusable values, discarded: %s",
+                self._model,
+                "; ".join(discarded),
+            )
         extracted, low, medium = _field_stats(extraction)
         usage = response.usage
         input_tokens = getattr(usage, "input_tokens", None)
@@ -345,10 +359,15 @@ def _looks_like_israeli_id(value: str) -> bool:
     return len(digits) == 9 and digits == value.strip()
 
 
-def _clean_renter(r: ExtractedRenter) -> None:
+def _clean_renter(r: ExtractedRenter, discarded: Optional[list[str]] = None) -> None:
+    def _drop(field: str) -> None:
+        if discarded is not None:
+            discarded.append(f"{field}={getattr(r, field)!r}")
+        setattr(r, field, None)
+
     # Mirrors RenterCreate.payment_day_in_range (1..31).
     if r.payment_day_of_month is not None and not (1 <= r.payment_day_of_month <= 31):
-        r.payment_day_of_month = None
+        _drop("payment_day_of_month")
     # lease_start must be a real ISO date; the form/back end store it as a `date`.
     if r.lease_start is not None and not _is_iso_date(r.lease_start):
         r.lease_start = None
@@ -365,15 +384,21 @@ def _clean_renter(r: ExtractedRenter) -> None:
         r.insurance_type = None
     # Guard against the national ID being mistaken for a phone (see the prompt).
     if r.phone is not None and _looks_like_israeli_id(r.phone):
-        r.phone = None
+        _drop("phone")
 
 
-def _clean_extraction(extraction: LeaseExtraction) -> LeaseExtraction:
+def _clean_extraction(
+    extraction: LeaseExtraction, discarded: Optional[list[str]] = None
+) -> LeaseExtraction:
     """Null out extracted values that wouldn't survive form/back-end validation, then
-    drop any uncertainty notes whose field we just nulled."""
+    drop any uncertainty notes whose field we just nulled.
+
+    ``discarded`` is an optional out-param: each value we had to throw away is appended
+    as ``"field=value"`` so the caller can log what the model actually emitted.
+    """
     _clean_property(extraction.property)
     for renter in extraction.renters:
-        _clean_renter(renter)
+        _clean_renter(renter, discarded)
     if extraction.joint_monthly_rent is not None and extraction.joint_monthly_rent < 0:
         extraction.joint_monthly_rent = None
 

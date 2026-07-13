@@ -202,6 +202,41 @@ def test_clean_drops_out_of_range_payment_day():
     assert e.renters[0].payment_day_of_month is None
 
 
+def test_clean_drops_phone_shaped_payment_day():
+    """The bug that started this: a phone number landing in the payment-day field."""
+    e = _one_renter()
+    e.renters[0].payment_day_of_month = 521234567
+    _clean_extraction(e)
+    assert e.renters[0].payment_day_of_month is None
+
+
+def test_clean_reports_discarded_values():
+    """The discarded out-param is what makes a bogus model value provable in the logs."""
+    e = _one_renter()
+    e.renters[0].payment_day_of_month = 521234567
+    discarded: list[str] = []
+    _clean_extraction(e, discarded)
+    assert discarded == ["payment_day_of_month=521234567"]
+
+
+def test_out_of_range_payment_day_parses_rather_than_failing_the_scan():
+    """Regression guard: the 1-31 bound is published to the model via json_schema_extra,
+    NOT enforced with ge/le — a Pydantic validator here would raise and fail the WHOLE
+    scan over one bad field instead of letting _clean_renter null just that field."""
+    parsed = LeaseExtraction.model_validate({"renters": [{"payment_day_of_month": 999}]})
+    assert parsed.renters[0].payment_day_of_month == 999  # parsed, not rejected
+    _clean_extraction(parsed)
+    assert parsed.renters[0].payment_day_of_month is None  # then cleaned
+
+
+def test_tool_schema_publishes_payment_day_bounds():
+    """The model only sees the 1-31 constraint if it reaches the tool's input_schema."""
+    schema = LeaseExtraction.model_json_schema()
+    renter = schema["$defs"]["ExtractedRenter"]["properties"]["payment_day_of_month"]
+    assert renter["minimum"] == 1
+    assert renter["maximum"] == 31
+
+
 def test_clean_keeps_valid_payment_day():
     e = _one_renter()
     e.renters[0].payment_day_of_month = 10

@@ -16,7 +16,7 @@ files to Firebase at submit time, not during extraction.
 """
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.property import PropertyType
 from app.schemas.renter import LeaseYearType, RentEscalationMode
@@ -87,7 +87,12 @@ class ExtractedRenter(BaseModel):
     rent_escalation_value: Optional[float] = None
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
-    payment_day_of_month: Optional[int] = None
+    # Bounds are published to the model via the tool's JSON schema, but deliberately NOT
+    # enforced with ge/le: a validator here would raise in LeaseExtraction.model_validate()
+    # and fail the WHOLE scan over one bad field. _clean_renter nulls it instead.
+    payment_day_of_month: Optional[int] = Field(
+        default=None, json_schema_extra={"minimum": 1, "maximum": 31}
+    )
     # Free text from the model, normalised to one of the security-type enum values
     # ("bank_guarantee" / "wire_transfer") or nulled in _clean_renter.
     insurance_type: Optional[str] = None
