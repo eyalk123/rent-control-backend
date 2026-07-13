@@ -23,6 +23,7 @@ class PaymentMethodEnum(str, enum.Enum):
     BIT = "bit"
     CASH = "cash"
     BANK_TRANSFER = "bank_transfer"
+    CHECK = "check"
 
 
 class Transaction(Base):

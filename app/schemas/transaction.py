@@ -15,6 +15,7 @@ class PaymentMethod(str, Enum):
     bit = "bit"
     cash = "cash"
     bank_transfer = "bank_transfer"
+    check = "check"
 
 
 class TransactionCreateRevenue(BaseModel):
