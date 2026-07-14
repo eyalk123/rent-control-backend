@@ -10,15 +10,24 @@ from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.renter import ExpiringRenterRead, OverdueRenterRead, RenterCreate, RenterUpdate
-from app.services.cpi_indexing_service import materialize_cpi_amounts
+from app.services.cpi_indexing_service import (
+    materialize_cpi_amounts,
+    materialize_ruled_lease_years,
+)
 
 
 def _compute_lease_end(lease_start: date, lease_years_count: int) -> date:
     return lease_start + relativedelta(years=lease_years_count)
 
 
+def _lease_years_to_dicts(lease_years) -> list[dict]:
+    # LeaseYear.serialize omits an absent `rule`, so a rule-less year encodes exactly as
+    # it always has ({"amount", "type"}) and legacy blobs round-trip unchanged.
+    return [ly.model_dump() for ly in lease_years]
+
+
 def _encode_lease_years(lease_years) -> str:
-    return json.dumps([ly.model_dump() for ly in lease_years])
+    return json.dumps(_lease_years_to_dicts(lease_years))
 
 
 def _payment_interval_months(number_of_payments: int | None) -> int:
@@ -50,7 +59,13 @@ class RenterService:
         self.property_repository = property_repository
         self.cpi_index_repository = cpi_index_repository
 
-    def _resolve_cpi_lease_years(
+    def _index_lookup(self):
+        if self.cpi_index_repository is None:
+            return lambda d: None
+        index_id = settings.CPI_INDEX_ID
+        return lambda d: self.cpi_index_repository.latest_on_or_before(index_id, d)  # noqa: E731
+
+    def _resolve_lease_year_amounts(
         self,
         mode: str | None,
         lease_years: list[dict],
@@ -59,9 +74,24 @@ class RenterService:
         existing_base_index: float | None,
         recompute_base_index: bool,
     ) -> tuple[list[dict], float | None]:
-        """For a CPI-linked lease, overwrite each year's amount from the index
-        linkage and return the (possibly re-frozen) base index. For any other mode
-        the amounts pass through unchanged and the base index is cleared."""
+        """Derive the amounts the server owns, and return the (possibly re-frozen) CPI
+        base index alongside them.
+
+        - ``cpi``: every year comes from the fixed-base index linkage.
+        - ``custom``: every year past the first comes from its own rule, walked forward
+          (see ``materialize_ruled_lease_years``). Only ``manual`` years keep the amount
+          the client sent — so a percent year can never disagree with its own rule.
+        - anything else: amounts pass through untouched and the base index is cleared.
+        """
+        if mode == "custom":
+            if not lease_years:
+                return lease_years, None
+            # Chained CPI resolves every anniversary from the cache, so unlike whole-lease
+            # `cpi` there is no base index to freeze.
+            resolved = materialize_ruled_lease_years(
+                lease_years, lease_start, base_rent, self._index_lookup()
+            )
+            return resolved, None
         if mode != "cpi":
             return lease_years, None
         if not lease_start or not lease_years or self.cpi_index_repository is None:
@@ -74,8 +104,9 @@ class RenterService:
             base_index = self.cpi_index_repository.latest_on_or_before(index_id, lease_start)
         else:
             base_index = existing_base_index
-        lookup = lambda d: self.cpi_index_repository.latest_on_or_before(index_id, d)  # noqa: E731
-        materialized = materialize_cpi_amounts(lease_years, lease_start, base, base_index, lookup)
+        materialized = materialize_cpi_amounts(
+            lease_years, lease_start, base, base_index, self._index_lookup()
+        )
         return materialized, base_index
 
     def list_renters(self, owner_id: str):
@@ -99,8 +130,8 @@ class RenterService:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
         lease_end = _compute_lease_end(data.lease_start, len(data.lease_years)) if data.lease_start else None
         mode = data.rent_escalation_mode.value if data.rent_escalation_mode else None
-        lease_years_payload = [ly.model_dump() for ly in data.lease_years]
-        lease_years_payload, cpi_base_index = self._resolve_cpi_lease_years(
+        lease_years_payload = _lease_years_to_dicts(data.lease_years)
+        lease_years_payload, cpi_base_index = self._resolve_lease_year_amounts(
             mode,
             lease_years_payload,
             data.lease_start,
@@ -161,11 +192,12 @@ class RenterService:
 
         lease_start = update_dict.get("lease_start", renter.lease_start)
 
-        if mode == "cpi":
-            # Server owns CPI amounts: re-materialize lease_years from the linkage,
-            # using the incoming years if provided, else the stored ones for structure.
+        if mode in ("cpi", "custom"):
+            # The server owns derived amounts in both modes — the fixed-base index linkage
+            # for `cpi`, the per-year rule walk for `custom`. Re-materialize from the
+            # incoming years if provided, else the stored ones for structure.
             if "lease_years" in update_dict:
-                lease_years_dicts = [ly.model_dump() for ly in data.lease_years]
+                lease_years_dicts = _lease_years_to_dicts(data.lease_years)
             else:
                 lease_years_dicts = json.loads(renter.lease_years) if renter.lease_years else []
             recompute_base_index = (
@@ -174,8 +206,8 @@ class RenterService:
                 or renter.cpi_base_index is None
             )
             base_rent = update_dict.get("base_rent", renter.base_rent)
-            lease_years_dicts, cpi_base_index = self._resolve_cpi_lease_years(
-                "cpi",
+            lease_years_dicts, cpi_base_index = self._resolve_lease_year_amounts(
+                mode,
                 lease_years_dicts,
                 lease_start,
                 base_rent,
@@ -187,7 +219,8 @@ class RenterService:
         else:
             if "lease_years" in update_dict:
                 update_dict["lease_years"] = _encode_lease_years(data.lease_years)
-            # Switching to (or staying on) a non-CPI mode clears the frozen base index.
+            # Switching to (or staying on) a mode with no index linkage clears the frozen
+            # base index.
             if "rent_escalation_mode" in update_dict:
                 update_dict["cpi_base_index"] = None
 

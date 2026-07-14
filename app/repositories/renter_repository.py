@@ -37,9 +37,15 @@ class RenterRepository:
         return list(self.session.scalars(stmt).all())
 
     def get_by_escalation_mode(self, mode: str) -> list[Renter]:
-        """Every renter using a given rent-escalation mode, across all owners — the
-        set the CPI indexing job recomputes."""
-        stmt = select(Renter).where(Renter.rent_escalation_mode == mode)
+        """Every renter using a given rent-escalation mode, across all owners."""
+        return self.get_by_escalation_modes([mode])
+
+    def get_by_escalation_modes(self, modes: list[str]) -> list[Renter]:
+        """Every renter on any of the given rent-escalation modes, across all owners —
+        the candidate set the CPI indexing job recomputes. `custom` renters are included
+        wholesale here and narrowed to the CPI-linked ones by the caller, since whether a
+        lease has a CPI *year* is only visible inside the `lease_years` JSON blob."""
+        stmt = select(Renter).where(Renter.rent_escalation_mode.in_(modes))
         return list(self.session.scalars(stmt).all())
 
     def get_all(self, owner_id: str | None = None) -> list[Renter]:

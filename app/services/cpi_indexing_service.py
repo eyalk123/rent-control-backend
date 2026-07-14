@@ -68,6 +68,99 @@ def materialize_cpi_amounts(
     return result
 
 
+# --- Per-year rules ("custom" mode) -----------------------------------------------
+#
+# Under ``rent_escalation_mode == 'custom'`` each year past the first carries its own
+# ``rule`` and derives from the *previous year's resolved amount*. That makes the
+# schedule a forward walk, which is what lets a percent year sit after a CPI year: by
+# the time the walk reaches it, the CPI year's real amount is already known.
+#
+# Note the CPI rule here is *chained* — it indexes off the previous year's amount and
+# the index movement over that one year — whereas the whole-lease `cpi` mode above is
+# fixed-base (everything against ``cpi_base_index`` frozen at signing). Chained is the
+# only model that composes, because a CPI year has to hand a concrete amount to
+# whatever rule follows it. The two are kept deliberately separate; `cpi` leases are
+# untouched by any of this.
+
+
+def _rule_of(year: dict) -> dict:
+    rule = year.get("rule")
+    return rule if isinstance(rule, dict) else {}
+
+
+def has_cpi_rule(lease_years: list[dict]) -> bool:
+    """True when any year is CPI-linked — i.e. the indexing job has work to do on this
+    lease even though its mode is ``custom``, not ``cpi``."""
+    return any(_rule_of(y).get("mode") == "cpi" for y in lease_years)
+
+
+def compute_chained_cpi_amount(
+    prev_amount: float, prev_index: Optional[float], known_index: Optional[float]
+) -> float:
+    """One CPI-linked year under chained linkage, floored at the previous year's rent
+    (the "לא יפחת" clause). Falls back to ``prev_amount`` — a flat projection — whenever
+    either anniversary's index isn't published yet; the monthly job fills it in later."""
+    if not prev_index or prev_index <= 0 or not known_index:
+        return round(prev_amount)
+    ratio = max(known_index / prev_index, 1.0)
+    return round(prev_amount * ratio)
+
+
+def apply_year_rule(
+    prev_amount: float,
+    current_amount: float,
+    rule: dict,
+    prev_index: Optional[float],
+    known_index: Optional[float],
+) -> float:
+    """Rent for one lease year from its rule and the previous year's resolved amount.
+    ``manual`` (and an absent rule, which is what every legacy year has) keeps the
+    amount the owner typed."""
+    mode = rule.get("mode") or "manual"
+    value = rule.get("value") or 0
+    if mode == "none":
+        return round(prev_amount)
+    if mode == "percent":
+        return round(prev_amount * (1 + value / 100))
+    if mode == "fixed":
+        return round(prev_amount + value)
+    if mode == "cpi":
+        return compute_chained_cpi_amount(prev_amount, prev_index, known_index)
+    return round(current_amount)  # manual
+
+
+def materialize_ruled_lease_years(
+    lease_years: list[dict],
+    lease_start: Optional[date],
+    base_rent: Optional[float],
+    index_lookup: IndexLookup,
+) -> list[dict]:
+    """Walk a ``custom`` lease forward, resolving each year's amount from its rule. Year
+    one is always the base rent. ``type`` and ``rule`` pass through untouched — only
+    amounts change. Without a ``lease_start`` no anniversary is knowable, so CPI years
+    project flat and the rest still compute normally."""
+    if not lease_years:
+        return []
+
+    result: list[dict] = []
+    prev_amount = base_rent if base_rent else lease_years[0].get("amount", 0)
+    for i, year in enumerate(lease_years):
+        out = dict(year)
+        if i == 0:
+            out["amount"] = round(prev_amount)
+        else:
+            prev_index = known_index = None
+            if lease_start is not None:
+                prev_index = index_lookup(lease_start + relativedelta(years=i - 1))
+                known_index = index_lookup(lease_start + relativedelta(years=i))
+            out["amount"] = apply_year_rule(
+                prev_amount, year.get("amount", 0), _rule_of(year), prev_index, known_index
+            )
+        prev_amount = out["amount"]
+        result.append(out)
+    return result
+
+
 class CpiIndexingService:
     """The monthly job: refresh the cached index from CBS, then recompute every
     CPI-linked renter's stored ``lease_years`` so newly-published readings take
@@ -99,9 +192,12 @@ class CpiIndexingService:
         if rows:
             summary["fetched"] = self.cpi_index_repository.upsert_many(self.index_id, rows)
 
-        # 2. Recompute every CPI-linked renter against the (now fresher) cache.
+        # 2. Recompute every CPI-linked renter against the (now fresher) cache. Two kinds
+        #    qualify: whole-lease `cpi` leases, and `custom` leases with at least one
+        #    CPI year — the latter still need the index even though their other years
+        #    are percent/fixed/manual.
         lookup = self._lookup()
-        for renter in self.renter_repository.get_by_escalation_mode("cpi"):
+        for renter in self.renter_repository.get_by_escalation_modes(["cpi", "custom"]):
             if not renter.lease_start:
                 continue
             try:
@@ -111,16 +207,26 @@ class CpiIndexingService:
             if not current:
                 continue
 
-            # Freeze the base index if it wasn't resolvable at signing (e.g. created
-            # while the cache was empty); otherwise keep it fixed for the contract.
-            base_index = renter.cpi_base_index
-            if base_index is None:
-                base_index = lookup(renter.lease_start)
             base_rent = renter.base_rent or current[0]["amount"]
 
-            new_years = materialize_cpi_amounts(
-                current, renter.lease_start, base_rent, base_index, lookup
-            )
+            if renter.rent_escalation_mode == "custom":
+                if not has_cpi_rule(current):
+                    continue  # no index dependency; its amounts are already final
+                # Chained linkage needs no frozen base — every anniversary is looked up.
+                base_index = renter.cpi_base_index
+                new_years = materialize_ruled_lease_years(
+                    current, renter.lease_start, base_rent, lookup
+                )
+            else:
+                # Freeze the base index if it wasn't resolvable at signing (e.g. created
+                # while the cache was empty); otherwise keep it fixed for the contract.
+                base_index = renter.cpi_base_index
+                if base_index is None:
+                    base_index = lookup(renter.lease_start)
+                new_years = materialize_cpi_amounts(
+                    current, renter.lease_start, base_rent, base_index, lookup
+                )
+
             if new_years != current or renter.cpi_base_index != base_index:
                 self.renter_repository.update(
                     renter,

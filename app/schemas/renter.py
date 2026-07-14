@@ -3,7 +3,7 @@ from datetime import date
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_serializer, model_validator
 
 from app.schemas.property import PropertyBriefRead
 
@@ -21,9 +21,45 @@ class RentEscalationMode(str, Enum):
     cpi = "cpi"
 
 
+class LeaseYearRuleMode(str, Enum):
+    """How one lease year's rent derives from the *previous* year's amount. Only
+    meaningful under ``rent_escalation_mode == 'custom'``, where each year carries its
+    own rule instead of the whole lease sharing one."""
+
+    manual = "manual"  # the owner typed this amount; never derived
+    none = "none"  # same as the previous year
+    percent = "percent"
+    fixed = "fixed"
+    cpi = "cpi"
+
+
+class LeaseYearRule(BaseModel):
+    mode: LeaseYearRuleMode
+    value: Optional[float] = None
+
+    @model_validator(mode="after")
+    def value_required_for_stepped_modes(self) -> "LeaseYearRule":
+        if self.mode in (LeaseYearRuleMode.percent, LeaseYearRuleMode.fixed) and self.value is None:
+            raise ValueError(f"rule.value is required when rule.mode is '{self.mode.value}'")
+        return self
+
+
 class LeaseYear(BaseModel):
     amount: float
     type: LeaseYearType
+    # Absent on the first year (it is the base rent) and on every year of a
+    # non-custom lease — which is also why every pre-existing stored year has none.
+    rule: Optional[LeaseYearRule] = None
+
+    @model_serializer
+    def serialize(self) -> dict:
+        """Drop `rule` entirely when there isn't one, rather than emitting `rule: null`.
+        Keeps both the stored JSON blob and the API response byte-identical to their
+        pre-rules shape for every lease that doesn't use per-year rules."""
+        data: dict = {"amount": self.amount, "type": self.type.value}
+        if self.rule is not None:
+            data["rule"] = self.rule.model_dump(exclude_none=True)
+        return data
 
 
 class ExtraContact(BaseModel):
