@@ -5,7 +5,7 @@ I need to deploy a FastAPI backend to Railway. The project is called **rent-cont
 - Python / FastAPI
 - PostgreSQL database
 - Alembic for migrations
-- Clerk for JWT authentication
+- Firebase for authentication (ID-token verification)
 - The code is already pushed to GitHub
 
 Please guide me step by step through the Railway dashboard to get this fully deployed.
@@ -42,16 +42,20 @@ Railway will start building the project automatically using Nixpacks (no Dockerf
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` |
-| `CLERK_JWKS_URL` | *(your Clerk JWKS URL — see note below)* |
-| `CLERK_ISSUER` | *(your Clerk issuer URL — see note below)* |
+| `FIREBASE_PROJECT_ID` | *(your Firebase project id)* |
+| `FIREBASE_STORAGE_BUCKET` | *(e.g. `your-project.appspot.com`)* |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | *(service-account key JSON, single line)* |
+| `CORS_ORIGINS` | *(the deployed web origin)* |
 | `DEFAULT_CURRENCY` | `ILS` |
-| `S3_BUCKET` | `mock-bucket` |
 
-> **How to get Clerk values:**
-> - Go to [clerk.com](https://clerk.com) → your app → **"API Keys"**
-> - `CLERK_ISSUER` = the **Frontend API URL** (looks like `https://xxxx.clerk.accounts.dev`)
-> - `CLERK_JWKS_URL` = `https://xxxx.clerk.accounts.dev/.well-known/jwks.json`
-> - Replace `xxxx` with your actual Clerk domain
+> The full env-var reference — including the optional ones (`ANTHROPIC_API_KEY`,
+> `REMINDER_CRON_SECRET`, CPI settings) — is in [`README.md`](README.md). That table is the
+> one to trust.
+
+> **How to get the Firebase values:**
+> - Firebase Console → **Project Settings → General** for the project id and storage bucket
+> - Firebase Console → **Project Settings → Service Accounts → Generate new private key** for
+>   `FIREBASE_SERVICE_ACCOUNT_JSON` (paste the whole JSON as a single-line string)
 
 > **Note about `DATABASE_URL`:**
 > The value `${{Postgres.DATABASE_URL}}` is a Railway reference variable — it automatically pulls the connection string from the PostgreSQL service you added. Do not replace it with a hardcoded URL.
@@ -96,8 +100,10 @@ Railway will start building the project automatically using Nixpacks (no Dockerf
 - [ ] Project created from GitHub repo
 - [ ] PostgreSQL service added
 - [ ] `DATABASE_URL` set as `${{Postgres.DATABASE_URL}}`
-- [ ] `CLERK_JWKS_URL` set
-- [ ] `CLERK_ISSUER` set
+- [ ] `FIREBASE_PROJECT_ID` set
+- [ ] `FIREBASE_STORAGE_BUCKET` set
+- [ ] `FIREBASE_SERVICE_ACCOUNT_JSON` set
+- [ ] `CORS_ORIGINS` includes the deployed web origin
 - [ ] `DEFAULT_CURRENCY` set to `ILS`
 - [ ] Redeployed after setting variables
 - [ ] `/health` returns `{"status": "ok"}`
@@ -115,8 +121,10 @@ Railway will start building the project automatically using Nixpacks (no Dockerf
 - Check the Alembic logs for the specific migration error
 
 **401 Unauthorized on all endpoints:**
-- Verify `CLERK_JWKS_URL` and `CLERK_ISSUER` are correct
-- Make sure your frontend is sending the Bearer token in the `Authorization` header
+- Verify `FIREBASE_PROJECT_ID` matches the project the client authenticates against — the ID
+  token's audience must equal it
+- Make sure your frontend is sending the Firebase ID token as a Bearer token in the
+  `Authorization` header
 
 **App crashes on start:**
 - Check the deploy logs for Python errors

@@ -11,7 +11,8 @@ get_db() → get_*_repository(db) → get_*_service(repos) → router endpoint
 Repos are injected into services; services are injected into routers. Never skip layers.
 Use `Annotated[Type, Depends(factory)]` — not bare `Depends()`.
 
-`get_current_user` validates Clerk JWT and returns `{"user_id": str, "role": "owner"}`.
+`get_current_user` verifies the **Firebase ID token** and returns `{"user_id": str, "role": "owner"}`,
+where `user_id` is the Firebase uid (the token's `sub`).
 Every protected endpoint receives `current_user` and passes `current_user["user_id"]` down to the service.
 
 ## 2. CRUD Repository Template
@@ -68,7 +69,7 @@ All Read schemas require `model_config = ConfigDict(from_attributes=True, popula
 
 ## 5. Multi-Tenancy (owner_id Filtering)
 
-Every top-level resource (Property, Supplier, ExpenseCategory) has an `owner_id: String` column storing the Clerk user ID.
+Every top-level resource (Property, Supplier, ExpenseCategory) has an `owner_id: String` column storing the Firebase uid.
 Repositories always filter by `owner_id` — never return records across tenants.
 Services do a secondary check after fetching: if `resource.owner_id != owner_id`, raise `403`.
 
