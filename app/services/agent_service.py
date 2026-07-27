@@ -19,7 +19,6 @@ from anthropic import Anthropic
 from fastapi import HTTPException, status
 
 from app.config import settings
-from app.models.agent import AgentUsageLog
 from app.repositories.agent_repository import AgentRepository
 from app.services.agent_tools import TOOL_SCHEMAS, AgentTools
 
@@ -137,16 +136,51 @@ class AgentService:
         message. Raises 503 (disabled) / 404 (not owner's conversation) synchronously —
         before any streaming begins. Returns ``(conversation_id, event_iterator)`` where
         the iterator yields event dicts (``tool`` / ``text`` / ``done`` / ``error``)."""
-        client = self._client()  # 503 if disabled — before we persist anything
+        client = self._client()  # 503 if disabled — before we reserve or persist anything
+
+        # Reserve a usage row up-front so this turn immediately counts against the daily
+        # caps (burst-safe), then enforce the limits with the reservation included. A
+        # rejected request releases its reservation so it leaves no orphan pending row.
+        reserve = self.repo.create_pending_usage_log(
+            owner_id, self.model, settings.AGENT_RESERVE_COST_USD
+        )
+        self._enforce_limits(owner_id, reserve)
+
         if conversation_id is None:
             convo = self.repo.create_conversation(owner_id, title=_title_from(user_text))
         else:
             convo = self.repo.get_conversation(conversation_id, owner_id)
             if convo is None:
+                self.repo.delete_usage_log(reserve)
                 raise HTTPException(status_code=404, detail="Conversation not found")
+        reserve.conversation_id = convo.id
         self.repo.add_message(convo.id, "user", json.dumps(user_text, ensure_ascii=False))
         messages = self._load_history(convo.id)
-        return convo.id, self._iterate(owner_id, convo, messages, client)
+        return convo.id, self._iterate(owner_id, convo, messages, client, reserve)
+
+    def _enforce_limits(self, owner_id: str, reserve) -> None:
+        """Reject (releasing the reservation first) when the owner or the whole app has hit
+        a daily limit. The reserve is already committed, so concurrent turns see each other
+        and bursts can't slip past. Strict ``>`` so the Nth is allowed, the N+1th blocked."""
+        over_messages = (
+            self.repo.count_messages_today(owner_id) > settings.AGENT_DAILY_MESSAGE_LIMIT
+        )
+        over_owner_cost = (
+            float(self.repo.sum_cost_today(owner_id)) > settings.AGENT_DAILY_COST_LIMIT_USD
+        )
+        if over_messages or over_owner_cost:
+            self.repo.delete_usage_log(reserve)
+            raise HTTPException(
+                status_code=429,
+                detail="You've reached today's limit for the assistant. Try again tomorrow.",
+            )
+        global_cap = settings.AGENT_GLOBAL_DAILY_COST_LIMIT_USD
+        if global_cap and float(self.repo.sum_cost_today_global()) > global_cap:
+            self.repo.delete_usage_log(reserve)
+            raise HTTPException(
+                status_code=429,
+                detail="The assistant is temporarily at capacity. Please try again later.",
+            )
 
     def send_message(
         self, owner_id: str, conversation_id: Optional[int], user_text: str
@@ -164,10 +198,11 @@ class AgentService:
                 raise HTTPException(status_code=502, detail=event["detail"])
         return result
 
-    def _iterate(self, owner_id: str, convo, messages: list[dict], client: Anthropic):
-        """The streaming tool-use loop. Yields event dicts; persists each turn; writes one
-        usage-log row at the end. Upstream failures become an ``error`` event (mid-stream we
-        can no longer return an HTTP error), not a raise."""
+    def _iterate(self, owner_id: str, convo, messages: list[dict], client: Anthropic, reserve):
+        """The streaming tool-use loop. Yields event dicts; persists each turn; reconciles
+        the reserved usage-log row to the turn's actual cost/tokens at the end. Upstream
+        failures become an ``error`` event (mid-stream we can no longer return an HTTP
+        error), not a raise."""
         started = time.monotonic()
         usage = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
         tool_calls: list[str] = []
@@ -228,11 +263,11 @@ class AgentService:
                 yield {"type": "text", "delta": _ITER_CAP_TEXT}
         except Exception as exc:  # Anthropic SDK / network errors, mid-stream
             logger.warning("Agent request failed for %s: %s", owner_id, exc)
-            self._log_usage(owner_id, convo.id, usage, tool_calls, "error", str(exc)[:500], started)
+            self._finalize(reserve, usage, tool_calls, "error", str(exc)[:500], started)
             yield {"type": "error", "detail": "The agent request failed upstream."}
             return
 
-        self._log_usage(owner_id, convo.id, usage, tool_calls, status_str, None, started)
+        self._finalize(reserve, usage, tool_calls, status_str, None, started)
         self.repo.touch_conversation(convo)
         yield {
             "type": "done",
@@ -258,22 +293,20 @@ class AgentService:
         cost = (billed_input * in_rate + usage["output"] * out_rate) / 1_000_000
         return Decimal(str(round(cost, 6)))
 
-    def _log_usage(
-        self, owner_id, conversation_id, usage, tool_calls, status_str, error_detail, started
+    def _finalize(
+        self, reserve, usage, tool_calls, status_str, error_detail, started
     ) -> None:
-        self.repo.add_usage_log(
-            AgentUsageLog(
-                owner_id=owner_id,
-                conversation_id=conversation_id,
-                model=self.model,
-                status=status_str,
-                error_detail=error_detail,
-                latency_ms=int((time.monotonic() - started) * 1000),
-                input_tokens=usage["input"],
-                output_tokens=usage["output"],
-                cache_read_tokens=usage["cache_read"],
-                cache_creation_tokens=usage["cache_creation"],
-                estimated_cost_usd=self._estimate_cost(usage),
-                tool_calls_count=len(tool_calls),
-            )
+        """Reconcile the up-front reservation to the turn's real outcome (actual cost/tokens
+        replace the provisional reserve)."""
+        self.repo.finalize_usage_log(
+            reserve,
+            status=status_str,
+            error_detail=error_detail,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            input_tokens=usage["input"],
+            output_tokens=usage["output"],
+            cache_read_tokens=usage["cache_read"],
+            cache_creation_tokens=usage["cache_creation"],
+            estimated_cost_usd=self._estimate_cost(usage),
+            tool_calls_count=len(tool_calls),
         )

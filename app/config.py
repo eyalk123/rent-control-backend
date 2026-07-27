@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     AGENT_MAX_TOOL_ITERS: int = 8
     # Per-owner messages allowed per calendar day (rate limit → 429 past this).
     AGENT_DAILY_MESSAGE_LIMIT: int = 50
+    # Per-owner estimated spend allowed per UTC day, in USD (429 past this). Summed from
+    # agent_usage_logs.estimated_cost_usd. The real "denial of wallet" guard — one message
+    # can fan out several model calls, so message count alone doesn't bound spend.
+    AGENT_DAILY_COST_LIMIT_USD: float = 2.0
+    # App-wide estimated spend allowed per UTC day, in USD — a global kill-switch across all
+    # owners. 0 disables it.
+    AGENT_GLOBAL_DAILY_COST_LIMIT_USD: float = 20.0
+    # Provisional cost charged to a turn the moment it starts (a "reservation"), before its
+    # real cost is known. Reconciled to the actual cost when the turn finishes. Makes the
+    # cost caps burst-safe: concurrent turns see each other's reservations.
+    AGENT_RESERVE_COST_USD: float = 0.25
     # Most recent messages kept when replaying a conversation to the model; older
     # turns are dropped/summarized to bound context size and cost.
     AGENT_HISTORY_MAX_MESSAGES: int = 40

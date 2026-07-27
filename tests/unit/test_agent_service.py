@@ -4,10 +4,13 @@ The MODEL is faked, but the TOOLS run for real against the test DB — so these 
 prove the model→tool→result→model loop wires up end to end.
 """
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 
+from app.config import settings
+from app.models.agent import AgentUsageLog
 from app.services.agent_service import _REFUSAL_TEXT, SYSTEM_PROMPT, AgentService
 from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import make_property, make_renter
@@ -269,5 +272,99 @@ def test_disabled_when_no_api_key(db_session):
     with pytest.raises(HTTPException) as exc:
         svc.send_message(OWNER_A, None, "hi")
     assert exc.value.status_code == 503
-    # Nothing was persisted on the disabled path.
+    # Nothing was persisted on the disabled path (no reservation before the 503).
     assert svc.repo.count_messages_today(OWNER_A) == 0
+
+
+# --- cost / abuse guardrail (denial of wallet) ------------------------------------
+
+def _seed_cost(db_session, owner_id: str, usd: str) -> None:
+    db_session.add(
+        AgentUsageLog(
+            owner_id=owner_id, status="success",
+            estimated_cost_usd=Decimal(usd), tool_calls_count=0,
+        )
+    )
+    db_session.commit()
+
+
+def test_per_owner_cost_cap_blocks(db_session, monkeypatch):
+    """At the daily USD cap, the next turn is rejected (429) before any model call, and its
+    reservation is released so no orphan pending row remains."""
+    monkeypatch.setattr(settings, "AGENT_DAILY_COST_LIMIT_USD", 2.0)
+    _seed_cost(db_session, OWNER_A, "2.00")  # already at the cap today
+    svc = _service(db_session, [FakeResponse([FakeText("must not run")], "end_turn")])
+
+    with pytest.raises(HTTPException) as exc:
+        svc.send_message(OWNER_A, None, "hi")
+
+    assert exc.value.status_code == 429
+    assert len(svc._injected_client.messages.calls) == 0  # no spend incurred
+    assert svc.repo.count_messages_today(OWNER_A) == 1  # only the seeded row; reserve released
+
+
+def test_under_cost_cap_allows(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "AGENT_DAILY_COST_LIMIT_USD", 2.0)
+    _seed_cost(db_session, OWNER_A, "1.00")  # well under, even with the reserve
+    svc = _service(db_session, [FakeResponse([FakeText("hello")], "end_turn")])
+
+    result = svc.send_message(OWNER_A, None, "hi")
+    assert result["status"] == "success"
+    assert svc.repo.count_messages_today(OWNER_A) == 2  # seeded + this turn
+
+
+def test_global_cost_breaker_blocks(db_session, monkeypatch):
+    """The app-wide daily cap blocks an owner who is under their OWN cap — another owner has
+    already spent the global budget."""
+    monkeypatch.setattr(settings, "AGENT_GLOBAL_DAILY_COST_LIMIT_USD", 5.0)
+    monkeypatch.setattr(settings, "AGENT_DAILY_COST_LIMIT_USD", 100.0)  # not the cause
+    _seed_cost(db_session, OWNER_B, "5.00")  # another owner exhausted the global budget
+    svc = _service(db_session, [FakeResponse([FakeText("must not run")], "end_turn")])
+
+    with pytest.raises(HTTPException) as exc:
+        svc.send_message(OWNER_A, None, "hi")
+
+    assert exc.value.status_code == 429
+    assert "capacity" in exc.value.detail.lower()
+    assert len(svc._injected_client.messages.calls) == 0
+
+
+def test_reservation_visible_before_finalize(db_session):
+    """Burst safety: a turn in flight (reserved, not yet drained) already counts against the
+    caps — so concurrent requests see it and can't slip past."""
+    make_property(db_session, property_owner="Dad")
+    svc = _service(db_session, [
+        FakeResponse([FakeToolUse("t1", "list_properties", {})], "tool_use"),
+        FakeResponse([FakeText("done")], "end_turn"),
+    ])
+
+    _, events = svc.start(OWNER_A, None, "list my properties")
+    # Before consuming any event, the reservation already counts toward the caps.
+    assert svc.repo.count_messages_today(OWNER_A) == 1
+    assert float(svc.repo.sum_cost_today(OWNER_A)) == settings.AGENT_RESERVE_COST_USD
+    events.close()
+
+
+def test_reservation_reconciled_to_actual_cost(db_session):
+    """After a full turn there is exactly one usage row, finalized with the ACTUAL cost — the
+    provisional reserve has been replaced, not left in place or double-inserted."""
+    svc = _service(db_session, [FakeResponse([FakeText("hi")], "end_turn")])
+    svc.send_message(OWNER_A, None, "hi")
+
+    logs = db_session.query(AgentUsageLog).filter_by(owner_id=OWNER_A).all()
+    assert len(logs) == 1
+    assert logs[0].status == "success"
+    assert logs[0].estimated_cost_usd is not None
+    assert float(logs[0].estimated_cost_usd) != settings.AGENT_RESERVE_COST_USD
+
+
+def test_rejected_request_leaves_no_orphan_reserve(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "AGENT_DAILY_COST_LIMIT_USD", 2.0)
+    _seed_cost(db_session, OWNER_A, "2.00")
+    svc = _service(db_session, [FakeResponse([FakeText("must not run")], "end_turn")])
+
+    with pytest.raises(HTTPException):
+        svc.send_message(OWNER_A, None, "hi")
+
+    logs = db_session.query(AgentUsageLog).filter_by(owner_id=OWNER_A).all()
+    assert len(logs) == 1 and logs[0].status != "pending"

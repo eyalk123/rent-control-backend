@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import get_agent_service, get_current_user
-from app.config import settings
 from app.schemas.agent import AgentChatRequest, AgentStatusResponse, ConversationRead
 from app.services.agent_service import AgentService
 
@@ -43,14 +42,11 @@ def chat(
     owner_id = current_user["user_id"]
     if not service.enabled:
         raise HTTPException(status_code=503, detail="The portfolio agent is not configured.")
-    if service.repo.count_messages_today(owner_id) >= settings.AGENT_DAILY_MESSAGE_LIMIT:
-        raise HTTPException(
-            status_code=429,
-            detail="You've reached today's message limit for the assistant. Try again tomorrow.",
-        )
 
-    # start() persists the user turn and validates access synchronously (503/404) before
-    # streaming begins, so those surface as real HTTP errors rather than mid-stream events.
+    # start() reserves the turn's budget, enforces the daily limits (message count + per-owner
+    # and global cost caps → 429), persists the user turn, and validates access — all
+    # synchronously (503/404/429) before streaming begins, so they surface as real HTTP errors
+    # rather than mid-stream events.
     conversation_id, events = service.start(owner_id, request.conversation_id, request.message)
 
     def event_source():
