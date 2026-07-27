@@ -449,7 +449,10 @@ class AgentTools:
         try:
             method = getattr(self, f"_tool_{name}")
             return method(owner_id, params)
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
+            # e.g. a malformed aggregate filter that compares a string field with a
+            # number ({"city": {"gte": 5}}) raises TypeError deep in _matches. Hand it
+            # back as a tool error the model can read and retry, not a turn-killing 500.
             return {"error": f"invalid argument: {exc}"}
         except HTTPException as exc:
             # e.g. a renter that belongs to another owner → 403. Surface as a plain

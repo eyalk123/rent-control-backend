@@ -230,6 +230,39 @@ def test_system_prompt_encodes_guardrails():
     assert "[[type:id|label]]" in SYSTEM_PROMPT
 
 
+def test_abandoning_stream_stops_further_model_calls(db_session):
+    """Client-disconnect safety: on disconnect Starlette stops consuming our event
+    generator. Because _iterate is a lazy generator, dropping it mid-turn means the
+    remaining loop body never runs — so no further Anthropic turns are billed. Here we
+    take only the first (tool) event and close the generator, then assert the second
+    scripted model call was never made."""
+    make_property(db_session, property_owner="Dad")
+    svc = _service(db_session, [
+        FakeResponse([FakeToolUse("t1", "list_properties", {})], "tool_use"),
+        FakeResponse([FakeText("This turn must never run.")], "end_turn"),
+    ])
+
+    _, events = svc.start(OWNER_A, None, "list my properties")
+    first = next(e for e in events if e["type"] == "tool")
+    assert first["name"] == "list_properties"
+    events.close()  # simulate the client going away mid-stream
+
+    # Only the first model call happened; the loop never advanced to the second.
+    assert len(svc._injected_client.messages.calls) == 1
+
+
+def test_chat_request_rejects_overlong_message():
+    """Denial-of-wallet guard: the request schema caps message length so a huge paste
+    can't inflate token cost (it is stored verbatim and re-sent every loop iteration)."""
+    from pydantic import ValidationError
+
+    from app.schemas.agent import AgentChatRequest
+
+    AgentChatRequest(message="x" * 4000)  # at the cap is fine
+    with pytest.raises(ValidationError):
+        AgentChatRequest(message="x" * 4001)
+
+
 def test_disabled_when_no_api_key(db_session):
     svc = AgentService(db_session, api_key="", model="claude-sonnet-4-6", client=None)
     assert svc.enabled is False

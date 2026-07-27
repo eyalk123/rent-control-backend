@@ -58,7 +58,16 @@ def chat(
         for event in events:
             yield _sse(event)
 
-    return StreamingResponse(event_source(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        # Edge proxies (Railway/nginx) buffer responses by default, which defeats
+        # streaming — the answer would arrive all at once. These headers opt out.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/conversations", response_model=list[ConversationRead])

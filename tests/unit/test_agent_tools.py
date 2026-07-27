@@ -113,6 +113,17 @@ def test_aggregate_unknown_field_errors(db_session):
     assert "error" in res and "favorite_color" in res["error"]
 
 
+def test_aggregate_malformed_filter_is_recoverable_error(db_session):
+    """A nonsensical filter (numeric operator on a text field → str >= int → TypeError)
+    must come back as a recoverable tool 'error', not raise and kill the whole turn."""
+    make_property(db_session, city="Tel Aviv")  # a row must exist for the compare to run
+    res = AgentTools(db_session).dispatch(
+        "aggregate", OWNER_A,
+        {"entity": "properties", "operation": "count", "filters": {"city": {"gte": 5}}},
+    )
+    assert "error" in res
+
+
 def test_aggregate_is_owner_scoped(db_session):
     prop = make_property(db_session, owner_id=OWNER_B)
     make_renter(db_session, owner_id=OWNER_B, property_id=prop.id, **_ACTIVE_LEASE)
