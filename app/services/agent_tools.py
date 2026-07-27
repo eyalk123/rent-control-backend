@@ -23,6 +23,7 @@ formatting it).
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
@@ -127,6 +128,95 @@ def _cat_map(categories: dict) -> dict:
     return {name: format_shekels(amt) for name, amt in categories.items()}
 
 
+# --- aggregate() query tool -------------------------------------------------------
+# The model composes a filter + operation; we compute it deterministically. This is how
+# the agent answers arbitrary "how many / how much … where …" questions without ever
+# tallying rows itself. Each entity exposes a fixed, app-aligned set of filterable fields.
+
+# field -> kind ("num" | "str" | "bool" | "date"); MONEY fields also get a ₪ display.
+_AGG_FIELDS: dict[str, dict[str, str]] = {
+    "properties": {
+        "id": "num", "address": "str", "city": "str", "type": "str",
+        "property_owner": "str", "occupied": "bool", "renter_count": "num",
+        "current_lease_end": "date", "purchase_price": "num",
+    },
+    "renters": {
+        "id": "num", "name": "str", "property_id": "num", "has_property": "bool",
+        "lease_start": "date", "lease_end": "date", "contract_term_years": "num",
+        "option_years": "num", "current_monthly_rent": "num", "rent_escalation_mode": "str",
+        "payment_frequency": "str", "insurance_type": "str",
+    },
+    "transactions": {
+        "id": "num", "type": "str", "property_id": "num", "renter_id": "num",
+        "category_name": "str", "supplier_name": "str", "amount": "num",
+        "date_of_payment": "date", "month_for": "date",
+    },
+}
+_AGG_MONEY = {"purchase_price", "current_monthly_rent", "amount"}
+_AGG_OPS = {"count", "sum", "avg", "min", "max"}
+_MAX_AGG_ROWS = 5000
+
+
+def _num_pair(a: Any, b: Any):
+    try:
+        return float(a), float(b)
+    except (TypeError, ValueError):
+        return None
+
+
+def _matches(value: Any, condition: Any) -> bool:
+    """True if a row's field ``value`` satisfies ``condition`` — a scalar (equality) or a
+    dict of operators {gte,lte,gt,lt,eq,ne,contains,in}. Dates compare as ISO strings."""
+    if not isinstance(condition, dict):
+        if isinstance(value, str) and isinstance(condition, str):
+            return value.strip().lower() == condition.strip().lower()
+        pair = _num_pair(value, condition)
+        return pair[0] == pair[1] if pair else value == condition
+    for op, target in condition.items():
+        if value is None and op in ("gte", "lte", "gt", "lt", "contains"):
+            return False
+        if op in ("gte", "lte", "gt", "lt"):
+            pair = _num_pair(value, target)
+            a, b = pair if pair else (value, target)
+            if op == "gte" and not a >= b:
+                return False
+            if op == "lte" and not a <= b:
+                return False
+            if op == "gt" and not a > b:
+                return False
+            if op == "lt" and not a < b:
+                return False
+        elif op == "eq":
+            if not _matches(value, target):
+                return False
+        elif op == "ne":
+            if _matches(value, target):
+                return False
+        elif op == "contains":
+            if str(target).strip().lower() not in str(value).strip().lower():
+                return False
+        elif op == "in":
+            if not isinstance(target, list) or value not in target:
+                return False
+        else:
+            raise ValueError(f"unknown filter operator '{op}'")
+    return True
+
+
+def _apply_operation(rows: list[dict], operation: str, value_field: Optional[str]):
+    if operation == "count":
+        return len(rows)
+    values = [r.get(value_field) for r in rows if r.get(value_field) is not None]
+    if operation in ("sum", "avg"):
+        nums = [float(v) for v in values if isinstance(v, (int, float))]
+        if operation == "sum":
+            return round(sum(nums), 2)
+        return round(sum(nums) / len(nums), 2) if nums else 0
+    if not values:
+        return None
+    return min(values) if operation == "min" else max(values)
+
+
 # --- Tool schemas advertised to the model ------------------------------------------
 # Descriptions are part of the prompt: they tell the model when to reach for each tool.
 
@@ -135,9 +225,11 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "list_properties",
         "description": (
             "List all of the owner's properties with their address, type, the free-text "
-            "'property owner' (e.g. a parent the unit belongs to), whether each is currently "
-            "occupied, and the current renter. Use this to find property ids or answer "
-            "'which/how many properties' questions."
+            "'property owner' (e.g. a parent the unit belongs to), whether each is occupied "
+            "(occupied = the property has any renter, same as the app), and the current renter. "
+            "Returns total count plus occupied_count / vacant_count so you never tally them "
+            "yourself. Use this to find property ids or list them; for a FILTERED count (e.g. "
+            "occupied in a city, or with a lease past a date) use the aggregate tool instead."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -209,6 +301,39 @@ TOOL_SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {"renter_id": {"type": "integer"}},
             "required": ["renter_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "aggregate",
+        "description": (
+            "Count or total records under an arbitrary filter — use this for ANY 'how many / how "
+            "much … where …' question so you never count or add up rows yourself. Pick an entity, "
+            "optional filters, and an operation; the server computes it exactly.\n"
+            "operation: count | sum | avg | min | max (sum/avg/min/max require value_field).\n"
+            "filters: {field: value} for equals, or {field: {gte|lte|gt|lt|eq|ne|contains|in: X}}. "
+            "Dates are ISO YYYY-MM-DD. Optional group_by returns a per-group breakdown.\n"
+            "Fields — properties: id, address, city, type, property_owner, occupied(bool), "
+            "renter_count, current_lease_end(date), purchase_price(₪). "
+            "renters: id, name, property_id, has_property(bool), lease_start(date), lease_end(date), "
+            "contract_term_years, option_years, current_monthly_rent(₪), rent_escalation_mode, "
+            "payment_frequency, insurance_type. "
+            "transactions: id, type(revenue|expense), property_id, renter_id, category_name, "
+            "supplier_name, amount(₪), date_of_payment(date), month_for(date).\n"
+            "Example — occupied properties with a lease running to at least 2027: entity=properties, "
+            'filters={"occupied": true, "current_lease_end": {"gte": "2027-01-01"}}, operation=count. '
+            "For canonical yearly income/expense totals, prefer get_report_summary."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {"type": "string", "enum": ["properties", "renters", "transactions"]},
+                "operation": {"type": "string", "enum": ["count", "sum", "avg", "min", "max"]},
+                "value_field": {"type": "string", "description": "Field to aggregate for sum/avg/min/max."},
+                "filters": {"type": "object", "description": "field → value, or field → {operator: value}."},
+                "group_by": {"type": "string", "description": "Optional field to break the result down by."},
+            },
+            "required": ["entity", "operation"],
             "additionalProperties": False,
         },
     },
@@ -332,12 +457,44 @@ class AgentTools:
             return {"error": "not found"}
 
     # -- tools ----------------------------------------------------------------------
-    def _tool_list_properties(self, owner_id: str, params: dict) -> dict:
+    def _grouped_renters(self, owner_id: str):
+        """(properties, {property_id: [Renter, ...]}). Occupancy = a property having ANY
+        linked renter — matching the app's ``PropertyRead.hasRenters`` — not just a
+        currently-active lease window (which under-counted vs. what the UI shows)."""
         properties = self.property_service.list_properties(owner_id)
+        by_prop: dict[int, list] = defaultdict(list)
+        for r in self.renter_service.list_renters(owner_id):
+            if r.property_id is not None:
+                by_prop[r.property_id].append(r)
+        return properties, by_prop
+
+    @staticmethod
+    def _current_renter(prop_renters: list):
+        """The renter to show as 'current': an active lease if one exists, else the most
+        recent by lease start."""
+        if not prop_renters:
+            return None
+        today = date.today()
+        active = [
+            r for r in prop_renters
+            if r.lease_start and r.lease_end and r.lease_start <= today <= r.lease_end
+        ]
+        pool = active or prop_renters
+        return sorted(pool, key=lambda r: (r.lease_start or date.min), reverse=True)[0]
+
+    def _tool_list_properties(self, owner_id: str, params: dict) -> dict:
+        properties, by_prop = self._grouped_renters(owner_id)
         out = []
+        occupied_count = 0
         for p in properties:
-            renters = self.property_service.get_property_renters(p.id, owner_id) or []
-            current = renters[0] if renters else None
+            prop_renters = by_prop.get(p.id, [])
+            occupied = len(prop_renters) > 0
+            occupied_count += 1 if occupied else 0
+            current = self._current_renter(prop_renters)
+            current_rent = None
+            if current:
+                years = _load_lease_years(current.lease_years)
+                current_rent = years[_current_year_index(current.lease_start, len(years))]["amount"] if years else None
             out.append(
                 {
                     "id": p.id,
@@ -345,20 +502,143 @@ class AgentTools:
                     "city": p.city,
                     "type": p.type.value if hasattr(p.type, "value") else p.type,
                     "property_owner": p.property_owner,
-                    "status": "occupied" if current else "vacant",
+                    "status": "occupied" if occupied else "vacant",
+                    "renter_count": len(prop_renters),
                     "current_renter": (
                         {
                             "id": current.id,
                             "name": f"{current.first_name} {current.last_name}".strip(),
-                            "monthly_rent": _num(current.monthly_rent),
-                            "monthly_rent_display": format_shekels(current.monthly_rent),
+                            "monthly_rent": _num(current_rent),
+                            "monthly_rent_display": format_shekels(current_rent),
                         }
                         if current
                         else None
                     ),
                 }
             )
-        return {"count": len(out), "properties": out}
+        return {
+            "count": len(out),
+            "occupied_count": occupied_count,
+            "vacant_count": len(out) - occupied_count,
+            "properties": out,
+        }
+
+    # -- rows for aggregate() (flat, app-aligned, owner-scoped) ----------------------
+    def _property_rows(self, owner_id: str) -> list[dict]:
+        properties, by_prop = self._grouped_renters(owner_id)
+        rows = []
+        for p in properties:
+            prop_renters = by_prop.get(p.id, [])
+            lease_ends = [r.lease_end for r in prop_renters if r.lease_end]
+            rows.append(
+                {
+                    "id": p.id,
+                    "address": p.address,
+                    "city": p.city,
+                    "type": p.type.value if hasattr(p.type, "value") else p.type,
+                    "property_owner": p.property_owner,
+                    "occupied": len(prop_renters) > 0,
+                    "renter_count": len(prop_renters),
+                    "current_lease_end": max(lease_ends).isoformat() if lease_ends else None,
+                    "purchase_price": _num(p.purchase_price),
+                }
+            )
+        return rows
+
+    def _renter_rows(self, owner_id: str) -> list[dict]:
+        rows = []
+        for r in self.renter_service.list_renters(owner_id):
+            years = _load_lease_years(r.lease_years)
+            current = years[_current_year_index(r.lease_start, len(years))]["amount"] if years else None
+            rows.append(
+                {
+                    "id": r.id,
+                    "name": f"{r.first_name} {r.last_name}".strip(),
+                    "property_id": r.property_id,
+                    "has_property": r.property_id is not None,
+                    "lease_start": _iso(r.lease_start),
+                    "lease_end": _iso(r.lease_end),
+                    "contract_term_years": r.contract_term_years,
+                    "option_years": r.option_years,
+                    "current_monthly_rent": _num(current),
+                    "rent_escalation_mode": r.rent_escalation_mode,
+                    "payment_frequency": _payment_frequency(r.number_of_payments),
+                    "insurance_type": r.insurance_type,
+                }
+            )
+        return rows
+
+    def _transaction_rows(self, owner_id: str) -> list[dict]:
+        rows = []
+        for t in self.transaction_service.list_transactions(owner_id=owner_id, limit=_MAX_AGG_ROWS):
+            rows.append(
+                {
+                    "id": t.id,
+                    "type": t.type.value if hasattr(t.type, "value") else t.type,
+                    "property_id": t.property_id,
+                    "renter_id": t.renter_id,
+                    "category_name": t.category_name,
+                    "supplier_name": t.supplier_name,
+                    "amount": _num(t.amount),
+                    "date_of_payment": _iso(t.date_of_payment),
+                    "month_for": _iso(t.month_for),
+                }
+            )
+        return rows
+
+    def _tool_aggregate(self, owner_id: str, params: dict) -> dict:
+        entity = params.get("entity")
+        if entity not in _AGG_FIELDS:
+            return {"error": f"entity must be one of {sorted(_AGG_FIELDS)}"}
+        operation = params.get("operation")
+        if operation not in _AGG_OPS:
+            return {"error": f"operation must be one of {sorted(_AGG_OPS)}"}
+        fields = _AGG_FIELDS[entity]
+        filters = params.get("filters") or {}
+        if not isinstance(filters, dict):
+            return {"error": "filters must be an object of field -> condition"}
+        unknown = [k for k in filters if k not in fields]
+        if unknown:
+            return {"error": f"unknown filter field(s) {unknown} for {entity}; allowed: {sorted(fields)}"}
+        value_field = params.get("value_field")
+        group_by = params.get("group_by")
+        if group_by is not None and group_by not in fields:
+            return {"error": f"unknown group_by '{group_by}' for {entity}; allowed: {sorted(fields)}"}
+        if operation != "count":
+            if not value_field or value_field not in fields:
+                return {"error": f"operation '{operation}' needs a value_field; allowed: {sorted(fields)}"}
+            if operation in ("sum", "avg") and fields[value_field] != "num":
+                numeric = sorted(f for f, kind in fields.items() if kind == "num")
+                return {"error": f"'{operation}' needs a numeric value_field; numeric: {numeric}"}
+
+        builder = {
+            "properties": self._property_rows,
+            "renters": self._renter_rows,
+            "transactions": self._transaction_rows,
+        }[entity]
+        rows = builder(owner_id)
+        matched = [r for r in rows if all(_matches(r.get(f), cond) for f, cond in filters.items())]
+
+        def _fmt(value) -> dict:
+            if value_field in _AGG_MONEY and isinstance(value, (int, float)):
+                return {"value": value, "value_display": format_shekels(value)}
+            return {"value": value}
+
+        result: dict = {"entity": entity, "operation": operation, "matched": len(matched), "filters": filters}
+        if group_by:
+            groups: dict = defaultdict(list)
+            for r in matched:
+                groups[r.get(group_by)].append(r)
+            result["groups"] = [
+                {"key": key, "matched": len(g), **_fmt(_apply_operation(g, operation, value_field))}
+                for key, g in groups.items()
+            ]
+        else:
+            result.update(_fmt(_apply_operation(matched, operation, value_field)))
+            result["ids"] = [r["id"] for r in matched[:50]]
+        if len(rows) >= _MAX_AGG_ROWS:
+            result["truncated"] = True
+        return result
 
     def _tool_query_transactions(self, owner_id: str, params: dict) -> dict:
         type_filter = params.get("type")

@@ -47,6 +47,86 @@ def test_list_properties_reports_occupancy_and_current_renter(db_session):
     assert by_id[vacant.id]["current_renter"] is None
 
 
+def test_list_properties_occupied_matches_app_hasrenters(db_session):
+    """Occupied = the property has ANY linked renter (the app's hasRenters), even if that
+    renter's lease has ended — the old active-lease-window rule under-counted vs. the UI."""
+    prop = make_property(db_session)
+    make_renter(db_session, property_id=prop.id, lease_start=date(2020, 1, 1), lease_end=date(2021, 1, 1))
+    make_property(db_session)  # genuinely empty
+
+    result = AgentTools(db_session).dispatch("list_properties", OWNER_A, {})
+    by_id = {p["id"]: p for p in result["properties"]}
+    assert by_id[prop.id]["status"] == "occupied"  # 'vacant' under the old active-only rule
+    assert result["occupied_count"] == 1
+    assert result["vacant_count"] == 1
+
+
+def test_aggregate_count_occupied_properties_with_lease_to_2027(db_session):
+    """The motivating example: an arbitrary filter+count the model must not tally itself."""
+    a = make_property(db_session, city="Haifa")
+    make_renter(db_session, property_id=a.id, lease_start=date(2025, 1, 1), lease_end=date(2027, 6, 1))
+    b = make_property(db_session, city="Eilat")
+    make_renter(db_session, property_id=b.id, lease_start=date(2024, 1, 1), lease_end=date(2025, 1, 1))
+    make_property(db_session)  # vacant
+
+    res = AgentTools(db_session).dispatch(
+        "aggregate",
+        OWNER_A,
+        {
+            "entity": "properties",
+            "operation": "count",
+            "filters": {"occupied": True, "current_lease_end": {"gte": "2027-01-01"}},
+        },
+    )
+    assert res["matched"] == 1 and res["value"] == 1
+    assert res["ids"] == [a.id]
+
+
+def test_aggregate_sum_and_group_by(db_session):
+    prop = make_property(db_session)
+    make_transaction(db_session, type="expense", property_id=prop.id, amount=300.0)
+    make_transaction(db_session, type="expense", property_id=prop.id, amount=700.0)
+    make_transaction(db_session, type="revenue", property_id=prop.id, amount=5000.0)
+    tools = AgentTools(db_session)
+
+    total = tools.dispatch(
+        "aggregate",
+        OWNER_A,
+        {"entity": "transactions", "operation": "sum", "value_field": "amount", "filters": {"type": "expense"}},
+    )
+    assert total["value"] == 1000.0
+    assert total["value_display"] == "₪1,000"
+
+    grouped = tools.dispatch(
+        "aggregate",
+        OWNER_A,
+        {"entity": "transactions", "operation": "sum", "value_field": "amount", "group_by": "type"},
+    )
+    by_type = {g["key"]: g["value"] for g in grouped["groups"]}
+    assert by_type["expense"] == 1000.0 and by_type["revenue"] == 5000.0
+
+
+def test_aggregate_unknown_field_errors(db_session):
+    res = AgentTools(db_session).dispatch(
+        "aggregate", OWNER_A, {"entity": "renters", "operation": "count", "filters": {"favorite_color": "blue"}}
+    )
+    assert "error" in res and "favorite_color" in res["error"]
+
+
+def test_aggregate_is_owner_scoped(db_session):
+    prop = make_property(db_session, owner_id=OWNER_B)
+    make_renter(db_session, owner_id=OWNER_B, property_id=prop.id, **_ACTIVE_LEASE)
+    make_transaction(db_session, owner_id=OWNER_B, type="expense", property_id=prop.id, amount=999.0)
+    tools = AgentTools(db_session)
+    assert tools.dispatch("aggregate", OWNER_A, {"entity": "properties", "operation": "count"})["matched"] == 0
+    assert (
+        tools.dispatch(
+            "aggregate", OWNER_A, {"entity": "transactions", "operation": "sum", "value_field": "amount"}
+        )["value"]
+        == 0
+    )
+
+
 def test_query_transactions_totals_and_filters(db_session):
     prop = make_property(db_session)
     make_transaction(db_session, type="expense", property_id=prop.id, amount=300.0, notes="fix tap")
