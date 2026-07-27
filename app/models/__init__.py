@@ -1,3 +1,4 @@
+from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 from app.models.base import Base
 from app.models.device_token import DevicePlatformEnum, DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
@@ -16,6 +17,9 @@ from app.models.transaction import (
 )
 
 __all__ = [
+    "AgentConversation",
+    "AgentMessage",
+    "AgentUsageLog",
     "Base",
     "DevicePlatformEnum",
     "DeviceToken",

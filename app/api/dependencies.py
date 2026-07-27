@@ -29,6 +29,7 @@ from app.repositories.renter_repository import RenterRepository
 from app.repositories.report_export_repository import ReportExportRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
+from app.services.agent_service import AgentService
 from app.services.cbs_index_service import CbsIndexService
 from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.device_token_service import DeviceTokenService
@@ -108,6 +109,10 @@ def get_document_extraction_service() -> DocumentExtractionService:
         api_key=settings.ANTHROPIC_API_KEY,
         model=settings.EXTRACTION_MODEL,
     )
+
+
+def get_agent_service(db: Annotated[Session, Depends(get_db)]) -> AgentService:
+    return AgentService(db, api_key=settings.ANTHROPIC_API_KEY, model=settings.AGENT_MODEL)
 
 
 def get_document_extraction_log_repository(

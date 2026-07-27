@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dependencies import get_current_owner
 from app.api.routers import (
+    agent,
     device_tokens,
     document_extraction,
     expense_categories,
@@ -44,6 +45,7 @@ app.include_router(notifications.router, prefix="/notifications", tags=["notific
 app.include_router(notification_preferences.router, tags=["notification-preferences"], dependencies=_owner_refresh)
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 app.include_router(document_extraction.router, prefix="/extract", tags=["extract"], dependencies=_owner_refresh)
+app.include_router(agent.router, prefix="/agent", tags=["agent"], dependencies=_owner_refresh)
 
 
 @app.get("/health")

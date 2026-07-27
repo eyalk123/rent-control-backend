@@ -7,16 +7,22 @@ from sqlalchemy.orm import Session
 from app.models.cpi_index import CpiIndex
 
 
-def _reference_period_key(d: date) -> int:
-    """The comparable ``year*12 + month`` key of the latest CPI month whose reading
-    is *published* on or before ``d``.
+def reference_period(d: date) -> tuple[int, int]:
+    """The ``(year, month)`` of the latest CPI month whose reading is *published* on
+    or before ``d`` — the "known index" (המדד הידוע).
 
     A month's index publishes ~the 15th of the following month, so on any date the
-    newest "known index" (המדד הידוע) is the reading from one month back if we're
-    past the 15th, otherwise two months back.
+    newest known reading is one month back if we're past the 15th, otherwise two
+    months back.
     """
     ref = date(d.year, d.month, 1) - relativedelta(months=1 if d.day >= 15 else 2)
-    return ref.year * 12 + ref.month
+    return ref.year, ref.month
+
+
+def _reference_period_key(d: date) -> int:
+    """``year*12 + month`` key of :func:`reference_period` (for SQL comparison)."""
+    year, month = reference_period(d)
+    return year * 12 + month
 
 
 class CpiIndexRepository:
@@ -27,19 +33,28 @@ class CpiIndexRepository:
         stmt = select(CpiIndex.id).where(CpiIndex.index_id == index_id).limit(1)
         return self.session.scalar(stmt) is None
 
-    def latest_on_or_before(self, index_id: int, d: date) -> float | None:
-        """The most recent index value known (published) on or before date ``d`` —
-        the reading a contract's anniversary should use. ``None`` when no such
-        reading is cached yet (e.g. the month hasn't been published/fetched)."""
+    def reading_on_or_before(self, index_id: int, d: date) -> CpiIndex | None:
+        """The most recent index *reading* known (published) on or before ``d`` — the
+        row a contract's anniversary should use, or ``None`` if none is cached yet.
+        Exposes the reading's (year, month) so callers can tell whether the exact
+        known-index month is available (finalized) or an older one is standing in
+        (projected)."""
         ref_key = _reference_period_key(d)
         period_key = CpiIndex.year * 12 + CpiIndex.month
         stmt = (
-            select(CpiIndex.value)
+            select(CpiIndex)
             .where(CpiIndex.index_id == index_id, period_key <= ref_key)
             .order_by(period_key.desc())
             .limit(1)
         )
         return self.session.scalar(stmt)
+
+    def latest_on_or_before(self, index_id: int, d: date) -> float | None:
+        """The most recent index value known (published) on or before date ``d`` —
+        the reading a contract's anniversary should use. ``None`` when no such
+        reading is cached yet (e.g. the month hasn't been published/fetched)."""
+        row = self.reading_on_or_before(index_id, d)
+        return row.value if row else None
 
     def upsert_many(self, index_id: int, rows: list[tuple[int, int, float]]) -> int:
         """Insert new (year, month, value) readings and update any whose value

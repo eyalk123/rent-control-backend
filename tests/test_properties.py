@@ -114,7 +114,8 @@ def test_property_renters_active_only_with_monthly_rent(client, db_session):
     body = client.get(f"/properties/{prop.id}/renters").json()
     assert len(body) == 1
     assert body[0]["first_name"] == "Active"
-    assert body[0]["monthly_rent"] == 2000.0  # 24000 / 12
+    # lease_years amount is the MONTHLY rent — returned as-is, not divided by 12.
+    assert body[0]["monthly_rent"] == 24000.0
 
 
 def test_property_renters_not_found(client):

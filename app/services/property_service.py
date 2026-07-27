@@ -97,7 +97,9 @@ class PropertyService:
                 lease_years_data = json.loads(lease_years_data)
             monthly_rent = 0.0
             if lease_years_data:
-                monthly_rent = lease_years_data[0]["amount"] / 12
+                # lease_years[i]["amount"] is stored as the MONTHLY rent everywhere
+                # else (overdue engine, extraction prompt, factories). Do not divide.
+                monthly_rent = lease_years_data[0]["amount"]
             summaries.append(
                 PropertyRenterSummary(
                     id=r.id,

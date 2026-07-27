@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     # Claude model used for lease extraction. Sonnet is the cost/accuracy default;
     # switch to "claude-opus-4-8" if extraction accuracy on hard scans isn't enough.
     EXTRACTION_MODEL: str = "claude-sonnet-4-6"
+    # --- Portfolio Chat Agent ("Ask Rent Control", POST /agent/chat) ---
+    # Reuses ANTHROPIC_API_KEY above: empty key disables the agent (503), same as
+    # extraction. Model is configurable independently of EXTRACTION_MODEL.
+    AGENT_MODEL: str = "claude-sonnet-4-6"
+    # Cap on tokens Claude may emit per reply (cost + latency guard).
+    AGENT_MAX_TOKENS: int = 2048
+    # Max model<->tool round-trips per user message, so a stuck loop can't run forever.
+    AGENT_MAX_TOOL_ITERS: int = 8
+    # Per-owner messages allowed per calendar day (rate limit → 429 past this).
+    AGENT_DAILY_MESSAGE_LIMIT: int = 50
+    # Most recent messages kept when replaying a conversation to the model; older
+    # turns are dropped/summarized to bound context size and cost.
+    AGENT_HISTORY_MAX_MESSAGES: int = 40
     # CBS (Central Bureau of Statistics) public price-index API, used for CPI rent
     # linkage. Keyless and free. CPI_INDEX_ID 120010 is the general Consumer Price
     # Index. Refreshed monthly by POST /internal/run-cpi-indexing.
