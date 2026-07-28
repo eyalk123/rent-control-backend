@@ -1,10 +1,16 @@
 import secrets
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.api.dependencies import get_cpi_indexing_service, get_reminder_service
+from app.api.dependencies import (
+    get_agent_repository,
+    get_cpi_indexing_service,
+    get_reminder_service,
+)
 from app.config import settings
+from app.repositories.agent_repository import AgentRepository
 from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.reminder_service import ReminderService
 
@@ -38,3 +44,18 @@ def run_cpi_indexing(
     scheduler with the X-Cron-Secret header (the index updates monthly)."""
     result = cpi_indexing_service.run_cpi_indexing()
     return {"status": "ok", **result}
+
+
+@router.post("/run-agent-retention", dependencies=[Depends(verify_cron_secret)])
+def run_agent_retention(
+    agent_repository: Annotated[AgentRepository, Depends(get_agent_repository)],
+):
+    """Delete chat conversations older than AGENT_RETENTION_DAYS (by last-updated), removing
+    the portfolio PII stored in their messages. No-op when AGENT_RETENTION_DAYS is 0.
+    Intended to be called daily by an external scheduler with the X-Cron-Secret header."""
+    days = settings.AGENT_RETENTION_DAYS
+    if days <= 0:
+        return {"status": "ok", "deleted": 0, "disabled": True}
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    deleted = agent_repository.delete_conversations_older_than(cutoff)
+    return {"status": "ok", "deleted": deleted}

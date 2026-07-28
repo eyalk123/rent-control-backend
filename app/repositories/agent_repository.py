@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
@@ -56,6 +56,77 @@ class AgentRepository:
             .order_by(AgentMessage.id)
         )
         return list(self.session.scalars(stmt).all())
+
+    # -- deletion / retention -------------------------------------------------------
+    # Deletes are explicit and ordered (children before parents) rather than relying on
+    # DB ON DELETE CASCADE, so they behave the same on the SQLite test DB (which does not
+    # enforce foreign keys by default) as on Postgres. Usage logs carry no message content
+    # (owner_id, tokens, cost only): a single-conversation or retention delete DETACHES them
+    # (conversation_id → NULL) to keep cost history; an account delete removes them.
+
+    def delete_conversation(self, conversation_id: int, owner_id: str) -> bool:
+        """Delete one conversation and its messages, owner-scoped. Returns False (→ 404) if
+        it isn't this owner's. Usage logs are kept but detached from the conversation."""
+        convo = self.get_conversation(conversation_id, owner_id)
+        if convo is None:
+            return False
+        self.session.execute(
+            delete(AgentMessage).where(AgentMessage.conversation_id == conversation_id)
+        )
+        self.session.execute(
+            update(AgentUsageLog)
+            .where(AgentUsageLog.conversation_id == conversation_id)
+            .values(conversation_id=None)
+        )
+        self.session.execute(
+            delete(AgentConversation).where(AgentConversation.id == conversation_id)
+        )
+        self.session.commit()
+        return True
+
+    def delete_owner_data(self, owner_id: str) -> None:
+        """Remove ALL of an owner's agent data — conversations, their messages, and usage
+        logs. Called from account deletion (the owner is gone, so nothing is retained).
+        Does not commit; the caller commits as part of the account-deletion transaction."""
+        convo_ids = list(
+            self.session.scalars(
+                select(AgentConversation.id).where(AgentConversation.owner_id == owner_id)
+            ).all()
+        )
+        if convo_ids:
+            self.session.execute(
+                delete(AgentMessage).where(AgentMessage.conversation_id.in_(convo_ids))
+            )
+        self.session.execute(
+            delete(AgentUsageLog).where(AgentUsageLog.owner_id == owner_id)
+        )
+        self.session.execute(
+            delete(AgentConversation).where(AgentConversation.owner_id == owner_id)
+        )
+
+    def delete_conversations_older_than(self, cutoff: datetime) -> int:
+        """Retention: delete every conversation (any owner) last updated before ``cutoff``,
+        with its messages; detach its usage logs. Returns how many conversations were deleted."""
+        convo_ids = list(
+            self.session.scalars(
+                select(AgentConversation.id).where(AgentConversation.updated_at < cutoff)
+            ).all()
+        )
+        if not convo_ids:
+            return 0
+        self.session.execute(
+            delete(AgentMessage).where(AgentMessage.conversation_id.in_(convo_ids))
+        )
+        self.session.execute(
+            update(AgentUsageLog)
+            .where(AgentUsageLog.conversation_id.in_(convo_ids))
+            .values(conversation_id=None)
+        )
+        self.session.execute(
+            delete(AgentConversation).where(AgentConversation.id.in_(convo_ids))
+        )
+        self.session.commit()
+        return len(convo_ids)
 
     # -- usage / rate limiting ------------------------------------------------------
     def add_usage_log(self, log: AgentUsageLog) -> AgentUsageLog:

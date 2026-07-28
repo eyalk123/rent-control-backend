@@ -9,11 +9,28 @@ from tests.factories import (
     make_supplier,
     make_transaction,
 )
+from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 from app.models.expense_category import ExpenseCategory
 from app.models.property import Property
 from app.models.renter import Renter
 from app.models.supplier import Supplier
 from app.models.transaction import Transaction
+
+
+def _seed_agent_data(db_session, owner_id: str) -> int:
+    """A conversation + a message + a usage log for an owner. Returns the conversation id."""
+    convo = AgentConversation(owner_id=owner_id, title="t")
+    db_session.add(convo)
+    db_session.commit()
+    db_session.refresh(convo)
+    db_session.add(AgentMessage(conversation_id=convo.id, role="user", content='"hi"'))
+    db_session.add(
+        AgentUsageLog(
+            owner_id=owner_id, status="success", conversation_id=convo.id, tool_calls_count=0
+        )
+    )
+    db_session.commit()
+    return convo.id
 
 
 def test_delete_account_cascades_owner_data(client, db_session):
@@ -45,3 +62,38 @@ def test_delete_account_leaves_other_owner_untouched(client_factory, db_session)
     db_session.expire_all()
     assert len(db_session.scalars(select(Property).where(Property.owner_id == OWNER_B)).all()) == 1
     assert len(db_session.scalars(select(Renter).where(Renter.owner_id == OWNER_B)).all()) == 1
+
+
+def test_delete_account_removes_agent_data(client, db_session):
+    """Account deletion must remove the owner's chat data — portfolio PII lives in
+    agent_messages verbatim."""
+    convo_id = _seed_agent_data(db_session, OWNER_A)
+
+    assert client.delete("/users/me").status_code == 200
+
+    db_session.expire_all()
+    assert db_session.scalars(
+        select(AgentConversation).where(AgentConversation.owner_id == OWNER_A)
+    ).all() == []
+    assert db_session.scalars(
+        select(AgentMessage).where(AgentMessage.conversation_id == convo_id)
+    ).all() == []
+    assert db_session.scalars(
+        select(AgentUsageLog).where(AgentUsageLog.owner_id == OWNER_A)
+    ).all() == []
+
+
+def test_delete_account_leaves_other_owner_agent_data(client_factory, db_session):
+    _seed_agent_data(db_session, OWNER_B)
+    _seed_agent_data(db_session, OWNER_A)
+
+    client_a = client_factory(OWNER_A)
+    assert client_a.delete("/users/me").status_code == 200
+
+    db_session.expire_all()
+    assert len(db_session.scalars(
+        select(AgentConversation).where(AgentConversation.owner_id == OWNER_B)
+    ).all()) == 1
+    assert len(db_session.scalars(
+        select(AgentUsageLog).where(AgentUsageLog.owner_id == OWNER_B)
+    ).all()) == 1

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
+from app.repositories.agent_repository import AgentRepository
 from app.repositories.device_token_repository import DeviceTokenRepository
 from app.repositories.document_extraction_log_repository import (
     DocumentExtractionLogRepository,
@@ -113,6 +114,11 @@ def get_document_extraction_service() -> DocumentExtractionService:
 
 def get_agent_service(db: Annotated[Session, Depends(get_db)]) -> AgentService:
     return AgentService(db, api_key=settings.ANTHROPIC_API_KEY, model=settings.AGENT_MODEL)
+
+
+def get_agent_repository(db: Annotated[Session, Depends(get_db)]) -> AgentRepository:
+    """Repo-only access to agent data (no API key needed) — used by the retention cron."""
+    return AgentRepository(db)
 
 
 def get_document_extraction_log_repository(

@@ -97,3 +97,17 @@ def get_conversation(
             for m in messages
         ],
     }
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    service: Annotated[AgentService, Depends(get_agent_service)],
+):
+    """Delete one of the owner's conversations (and its stored messages). 404 if it isn't
+    theirs — never reveals another tenant's row."""
+    deleted = service.repo.delete_conversation(conversation_id, current_user["user_id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"success": True}

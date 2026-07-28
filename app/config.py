@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Most recent messages kept when replaying a conversation to the model; older
     # turns are dropped/summarized to bound context size and cost.
     AGENT_HISTORY_MAX_MESSAGES: int = 40
+    # Days to keep chat conversations before the retention job deletes them (by last-updated).
+    # 0 disables retention (nothing is deleted). Enforced only when an external scheduler calls
+    # POST /internal/run-agent-retention (like the reminder/CPI crons).
+    AGENT_RETENTION_DAYS: int = 0
     # CBS (Central Bureau of Statistics) public price-index API, used for CPI rent
     # linkage. Keyless and free. CPI_INDEX_ID 120010 is the general Consumer Price
     # Index. Refreshed monthly by POST /internal/run-cpi-indexing.
