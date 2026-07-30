@@ -72,7 +72,7 @@ them.
 |---|---|
 | `/properties`, `/renters`, `/transactions` | Core CRUD |
 | `/suppliers`, `/expense-categories` | Supporting records |
-| `/users` | Owner profile |
+| `/users` | Owner profile, account deletion, and `me/export` — a ZIP of the owner's records (one .xlsx workbook) plus their uploaded files |
 | `/reports` | `income-expense`, `expense-log`, and export `history` |
 | `/extract/lease` | AI lease extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
