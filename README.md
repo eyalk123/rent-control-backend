@@ -31,8 +31,8 @@ scoped to that owner via a verified Firebase ID token. One landlord can never se
 
 > This README covers the API and how to run it. A separate **product manual** — every feature, how
 > users use it, and the full business rules (lease escalation, CPI linkage, reminders, AI lease
-> scanning) — lives as `PLATFORM.md` in the workspace folder alongside the three repos. It is not
-> checked into this repository.
+> scanning, the chat agent) — lives as `PLATFORM.md` in the workspace folder alongside the three
+> repos. It is not checked into this repository.
 
 **Core objects** — properties, renters, transactions (income and expenses), suppliers, expense
 categories, and files attached to a property.
@@ -50,6 +50,16 @@ trusted — a field that looks wrong is dropped, not guessed. Every extraction i
 token-cost estimate. Requires `ANTHROPIC_API_KEY`; without it the endpoint returns 503 and the
 rest of the app is unaffected.
 
+**Portfolio chat agent ("Ask Rent Control").** `POST /agent/chat` streams an answer to a
+plain-language question about the owner's own data — who is overdue, what a year earned, when a
+lease ends. Claude is given **ten read-only tools** (`app/services/agent_tools.py`) and nothing
+else: it can query and aggregate, and it cannot create, update or delete anything. Answers cite
+the records they came from. Conversations and messages are persisted, and every turn is logged
+with an estimated cost so two caps can be enforced — a per-owner daily message limit and a daily
+**spend** limit, per owner and app-wide (one message can fan out into several model calls, so
+message count alone does not bound spend). Shares `ANTHROPIC_API_KEY` with lease extraction;
+without it the endpoints return 503.
+
 **Reminders and push notifications.** Rules generate notifications (for example, rent coming
 due), delivered to mobile devices through the Expo Push Service. A daily scheduled job drives
 them.
@@ -65,8 +75,9 @@ them.
 | `/users` | Owner profile |
 | `/reports` | `income-expense`, `expense-log`, and export `history` |
 | `/extract/lease` | AI lease extraction |
+| `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration |
-| `/internal` | `run-reminders`, `run-cpi-indexing` — cron-triggered, guarded by a shared secret |
+| `/internal` | `run-reminders`, `run-cpi-indexing`, `run-agent-retention` — cron-triggered, guarded by a shared secret |
 | `/health` | Unauthenticated liveness check |
 
 Every router except `/internal` and `/health` requires a Firebase ID token. Interactive API docs
@@ -96,15 +107,15 @@ do not propagate between them automatically.
             rent-control-backend  ──►  PostgreSQL
                      │
                      ├──►  Firebase (auth + file storage)
-                     ├──►  Anthropic Claude (lease extraction)
+                     ├──►  Anthropic Claude (lease extraction + chat agent)
                      ├──►  CBS price-index API (CPI linkage)
                      └──►  Expo Push (notifications)
 ```
 
 Both clients authenticate against **Firebase** and send the resulting ID token to this API, which
 verifies it and derives the owner. Both clients also ship a **mock API** so you can do UI work
-with no backend running at all (web: set `VITE_USE_MOCK_API`; mobile: toggle in
-`src/core/api/mock.ts`).
+with no backend running at all (web: set `VITE_USE_MOCK_API`; mobile: set
+`EXPO_PUBLIC_DEV_WEB_PREVIEW=1`, which also stubs Firebase auth so the app runs in a browser).
 
 ---
 
@@ -189,7 +200,7 @@ live in `.claude/docs/architectural_patterns.md`.
 | `FIREBASE_PROJECT_ID` | Yes | Audience for ID-token verification |
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON, as a single-line string |
-| `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease`. Empty ⇒ that endpoint returns 503 |
+| `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease` **and** the chat agent. Empty ⇒ both return 503 |
 | `EXTRACTION_MODEL` | No | Default `claude-sonnet-4-6`; use `claude-opus-4-8` if accuracy on hard scans is insufficient |
 | `CORS_ORIGINS` | No | Comma-separated browser origins; default `http://localhost:5173`. Mobile is unaffected (CORS is browser-only) |
 | `DEFAULT_CURRENCY` | No | Default `ILS` |
@@ -198,6 +209,27 @@ live in `.claude/docs/architectural_patterns.md`.
 | `CBS_API_BASE_URL` | No | Default `https://api.cbs.gov.il`. Keyless |
 | `CPI_INDEX_ID` | No | Default `120010` (general CPI) |
 | `PORT` | No | Set by Railway automatically; defaults to 8000 |
+
+### Chat agent
+
+All optional — the defaults are sane. Set `ANTHROPIC_API_KEY` and the agent works.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `AGENT_MODEL` | `claude-sonnet-4-6` | Independent of `EXTRACTION_MODEL` |
+| `AGENT_MAX_TOKENS` | `2048` | Tokens per reply |
+| `AGENT_MAX_TOOL_ITERS` | `8` | Max model↔tool round-trips per message |
+| `AGENT_DAILY_MESSAGE_LIMIT` | `50` | Per owner per calendar day; `429` past it |
+| `AGENT_DAILY_COST_LIMIT_USD` | `2.0` | Per owner per UTC day, estimated spend |
+| `AGENT_GLOBAL_DAILY_COST_LIMIT_USD` | `20.0` | App-wide daily kill switch; `0` disables |
+| `AGENT_RESERVE_COST_USD` | `0.25` | Charged provisionally per turn, reconciled on completion |
+| `AGENT_HISTORY_MAX_MESSAGES` | `40` | Recent messages replayed to the model |
+| `AGENT_RETENTION_DAYS` | `0` | Delete conversations older than this. **`0` = never delete** |
+
+> Conversations store assistant replies verbatim, so they hold **tenant details at rest**. With
+> `AGENT_RETENTION_DAYS=0` (the default) nothing is ever aged out. If that matters for your
+> deployment, set a retention period *and* schedule `run-agent-retention` — one without the other
+> does nothing.
 
 ---
 
@@ -226,7 +258,8 @@ Railway health-checks `/health`. Set every required env var in the Railway dashb
 the deployed web origin in `CORS_ORIGINS` or the browser will block the web app.
 
 The `/internal/*` jobs are **not** self-scheduling — an external scheduler must call them with the
-`X-Cron-Secret` header: `run-reminders` daily, `run-cpi-indexing` monthly.
+`X-Cron-Secret` header: `run-reminders` daily, `run-cpi-indexing` monthly, and
+`run-agent-retention` daily *if* you have set `AGENT_RETENTION_DAYS` (it is a no-op otherwise).
 
 The web app also deploys to Railway (Docker + Caddy); the mobile app ships through EAS to the App
 Store. See their respective repos.
