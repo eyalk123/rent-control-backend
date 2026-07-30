@@ -9,6 +9,7 @@ from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import (
     make_expense_category,
     make_property,
+    make_supplier,
     make_transaction,
 )
 from app.models.transaction import TransactionTypeEnum
@@ -37,6 +38,61 @@ def _seed_year(db_session, owner_id=OWNER_A):
         payment_method=None,
     )
     return prop
+
+
+def _seed_hebrew_year(db_session, owner_id=OWNER_A):
+    """Every field that reaches a PDF cell, in Hebrew.
+
+    The product is Hebrew-first, so this is the ordinary case, not an edge case: address,
+    property owner, expense category, supplier and the transaction note.
+    """
+    prop = make_property(
+        db_session,
+        owner_id=owner_id,
+        address="רחוב הרצל 12",
+        city="תל אביב",
+        property_owner="דנה לוי",
+    )
+    cat = make_expense_category(db_session, owner_id=owner_id, name="תיקונים")
+    supplier = make_supplier(db_session, owner_id=owner_id, name="אקמה שרברבות", categories=[cat])
+    make_transaction(
+        db_session,
+        owner_id=owner_id,
+        type=TransactionTypeEnum.REVENUE,
+        property_id=prop.id,
+        amount=8000,
+        date_of_payment=date(2025, 3, 1),
+        month_for=date(2025, 3, 1),
+    )
+    make_transaction(
+        db_session,
+        owner_id=owner_id,
+        type=TransactionTypeEnum.EXPENSE,
+        property_id=prop.id,
+        amount=1500,
+        date_of_payment=date(2025, 4, 1),
+        categories=[cat],
+        supplier_id=supplier.id,
+        payment_method=None,
+        notes="תיקון נזילה במטבח",
+    )
+    return prop
+
+
+def test_income_expense_pdf_with_hebrew_data(client, db_session):
+    """Regression: Hebrew text used to raise FPDFUnicodeEncodingException → HTTP 500."""
+    _seed_hebrew_year(db_session)
+    resp = client.get("/reports/income-expense", params={"year": 2025})
+    assert resp.status_code == 200
+    assert resp.content[:4] == b"%PDF"
+
+
+def test_expense_log_pdf_with_hebrew_data(client, db_session):
+    """Same regression on the other generator — this one also renders supplier and notes."""
+    _seed_hebrew_year(db_session)
+    resp = client.get("/reports/expense-log", params={"year": 2025})
+    assert resp.status_code == 200
+    assert resp.content[:4] == b"%PDF"
 
 
 def test_income_expense_pdf(client, db_session):

@@ -64,7 +64,10 @@ without it the endpoints return 503.
 due), delivered to mobile devices through the Expo Push Service. A daily scheduled job drives
 them.
 
-**Reports.** Income/expense summaries and an expense log, exportable as PDF.
+**Reports.** Income/expense summaries and an expense log, exportable as PDF or CSV. PDFs embed
+Noto Sans with Noto Sans Hebrew as a fallback (`app/assets/fonts/`, OFL) and reorder RTL text with
+`python-bidi`, so Hebrew names and addresses render correctly — fpdf2's built-in Helvetica is
+Latin-1 only and raises on the first Hebrew character.
 
 ### API surface
 
