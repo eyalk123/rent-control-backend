@@ -2,7 +2,9 @@ import csv
 import io
 from collections import defaultdict
 from decimal import Decimal
+from pathlib import Path
 
+from bidi.algorithm import get_display
 from fpdf import FPDF
 from sqlalchemy import extract, select
 from sqlalchemy.orm import Session, selectinload
@@ -24,9 +26,42 @@ MONTH_NAMES = [
     "July", "August", "September", "October", "November", "December",
 ]
 
+# --- PDF fonts -------------------------------------------------------------
+# The reports carry user data — addresses, owner and supplier names, notes — which in this
+# product is usually Hebrew. fpdf2's built-in Helvetica is Latin-1 only and *raises*
+# FPDFUnicodeEncodingException on the first Hebrew character, so the PDF endpoints used to
+# return 500 for most owners.
+#
+# Two families, because neither covers the other's script: Noto Sans carries the Latin chrome
+# and digits (and no Hebrew at all), Noto Sans Hebrew carries the Hebrew (147 glyphs, no Latin,
+# not even numerals). Noto Sans is the primary; Hebrew is registered as a fallback so fpdf2
+# switches per character.
+FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+FONT = "NotoSans"
+FONT_FALLBACK = "NotoSansHebrew"
+
 
 def _fmt(amount: Decimal) -> str:
     return f"ILS {amount:,.0f}"
+
+
+def _visual(text):
+    """Logical → visual order for RTL text. A no-op for Latin-only strings."""
+    return get_display(text) if isinstance(text, str) and text else text
+
+
+def _bidi_args(args: tuple) -> list:
+    """fpdf2's cell/multi_cell take text as the 3rd positional arg (w, h, text, ...)."""
+    args = list(args)
+    if len(args) >= 3:
+        args[2] = _visual(args[2])
+    return args
+
+
+def _bidi_kwargs(kwargs: dict) -> dict:
+    if "text" in kwargs:
+        kwargs = {**kwargs, "text": _visual(kwargs["text"])}
+    return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -235,15 +270,36 @@ class _PDF(FPDF):
         super().__init__(**kwargs)
         self._title = title
         self._year = year
+        for style, suffix in (("", "Regular"), ("B", "Bold")):
+            self.add_font(FONT, style, FONTS_DIR / f"{FONT}-{suffix}.ttf")
+            self.add_font(FONT_FALLBACK, style, FONTS_DIR / f"{FONT_FALLBACK}-{suffix}.ttf")
+        self.set_fallback_fonts([FONT_FALLBACK])
+
+    def cell(self, *args, **kwargs):
+        """Reorder RTL text before it is drawn.
+
+        A Unicode font gets the glyphs right but draws them in logical order, so Hebrew comes
+        out reversed. `get_display` applies the Unicode bidi algorithm to produce visual order
+        (Hebrew needs reordering only — no glyph reshaping, unlike Arabic).
+
+        This is overridden here rather than applied at each call site because user data reaches
+        a cell in ~10 places across both generators, and a missed one is a 500 in production.
+        Latin-only strings pass through `get_display` unchanged, so applying it everywhere is
+        safe — including for columns added later.
+        """
+        return super().cell(*_bidi_args(args), **_bidi_kwargs(kwargs))
+
+    def multi_cell(self, *args, **kwargs):
+        return super().multi_cell(*_bidi_args(args), **_bidi_kwargs(kwargs))
 
     def header(self):
-        self.set_font("Helvetica", "B", 12)
+        self.set_font(FONT, "B", 12)
         self.cell(0, 8, f"{self._title} - {self._year}", align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def footer(self):
         self.set_y(-12)
-        self.set_font("Helvetica", "", 8)
+        self.set_font(FONT, "", 8)
         self.cell(0, 6, f"Page {self.page_no()}", align="C")
 
 
@@ -258,13 +314,13 @@ def generate_income_expense_pdf(data: IncomeExpenseReportResponse) -> bytes:
 
     def draw_section_header(label: str):
         pdf.set_fill_color(220, 230, 245)
-        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_font(FONT, "B", 9)
         pdf.cell(0, 7, label, border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
 
     def draw_month_table(properties: list[PropertyIncomeData], show_owner_total: bool = False):
         # Column header row
         pdf.set_fill_color(240, 240, 240)
-        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_font(FONT, "B", 7)
         pdf.cell(MONTH_W, 6, "Month", border=1, fill=True)
         for prop in properties:
             label = prop.property_address[:22]
@@ -276,7 +332,7 @@ def generate_income_expense_pdf(data: IncomeExpenseReportResponse) -> bytes:
         # Sub-header: Revenue / Expenses / Net
         pdf.cell(MONTH_W, 5, "", border="LRB")
         for _ in properties:
-            pdf.set_font("Helvetica", "", 6)
+            pdf.set_font(FONT, "", 6)
             w3 = COL_W // 3
             pdf.cell(w3, 5, "Rev", border=1, align="C")
             pdf.cell(w3, 5, "Exp", border=1, align="C")
@@ -290,7 +346,7 @@ def generate_income_expense_pdf(data: IncomeExpenseReportResponse) -> bytes:
 
         # Data rows
         for m in range(1, 13):
-            pdf.set_font("Helvetica", "", 7)
+            pdf.set_font(FONT, "", 7)
             pdf.cell(MONTH_W, 5, MONTH_NAMES[m - 1][:3], border=1)
             for prop in properties:
                 cell = prop.months.get(m, MonthCell())
@@ -320,7 +376,7 @@ def generate_income_expense_pdf(data: IncomeExpenseReportResponse) -> bytes:
 
         # Total row
         pdf.set_fill_color(230, 240, 230)
-        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_font(FONT, "B", 7)
         pdf.cell(MONTH_W, 5, "TOTAL", border=1, fill=True)
         for prop in properties:
             w3 = COL_W // 3
@@ -343,7 +399,7 @@ def generate_income_expense_pdf(data: IncomeExpenseReportResponse) -> bytes:
         pdf.ln(3)
 
     # Grand total summary
-    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_font(FONT, "B", 9)
     pdf.set_fill_color(200, 220, 200)
     pdf.cell(60, 7, "GRAND TOTAL", border=1, fill=True)
     pdf.cell(40, 7, f"Revenue: {_fmt(data.grand_total.revenue)}", border=1, fill=True)
@@ -362,7 +418,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
     pdf.add_page()
 
     # Part 1: transaction list
-    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_font(FONT, "B", 9)
     pdf.set_fill_color(220, 220, 220)
     headers = ["Date", "Property", "Category", "Supplier", "Method", "Amount", "Notes"]
     widths =  [22,      70,         30,          40,          22,       22,       60]
@@ -370,7 +426,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
         pdf.cell(w, 6, h, border=1, fill=True)
     pdf.ln()
 
-    pdf.set_font("Helvetica", "", 7)
+    pdf.set_font(FONT, "", 7)
     for row in data.rows:
         values = [
             row.date,
@@ -389,7 +445,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
 
     # Part 2: pivot summary
     if data.owners:
-        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_font(FONT, "B", 10)
         pdf.cell(0, 7, "Summary by Category & Property", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
 
@@ -404,7 +460,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
                 columns.append((owner.owner_name, prop.property_address))
 
         # Header row 1: owner names (spanning their properties)
-        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_font(FONT, "B", 7)
         pdf.set_fill_color(220, 230, 245)
         pdf.cell(CAT_W, 6, "Category", border=1, fill=True)
 
@@ -419,7 +475,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
         pdf.ln()
 
         # Header row 2: property addresses
-        pdf.set_font("Helvetica", "", 6)
+        pdf.set_font(FONT, "", 6)
         pdf.set_fill_color(240, 240, 240)
         pdf.cell(CAT_W, 5, "", border=1, fill=True)
         for _, prop_addr in columns:
@@ -434,7 +490,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
                 prop_map[(owner.owner_name, prop.property_address)] = prop.categories
 
         for cat in data.categories:
-            pdf.set_font("Helvetica", "", 7)
+            pdf.set_font(FONT, "", 7)
             pdf.cell(CAT_W, 5, cat, border=1)
             row_total = Decimal("0")
             for col in columns:
@@ -445,7 +501,7 @@ def generate_expense_log_pdf(data: ExpenseLogReportResponse) -> bytes:
             pdf.ln()
 
         # Total row
-        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_font(FONT, "B", 7)
         pdf.set_fill_color(230, 240, 230)
         pdf.cell(CAT_W, 5, "TOTAL", border=1, fill=True)
         for col in columns:
