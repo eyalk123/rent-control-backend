@@ -38,6 +38,23 @@ def _get_bucket():
     return storage.bucket(app=app)
 
 
+def list_owner_blobs(owner_id: str) -> list:
+    """Every Storage blob under the owner's `{owner_id}/` prefix.
+
+    Same prefix `user_service` deletes on account removal. Returns [] when Storage isn't
+    configured, so callers can degrade instead of failing.
+    """
+    try:
+        bucket = _get_bucket()
+        if bucket is None:
+            logger.info("FIREBASE_STORAGE_BUCKET not set — skipping Storage file listing")
+            return []
+        return list(bucket.list_blobs(prefix=f"{owner_id}/"))
+    except Exception as exc:
+        logger.warning("Failed to list Storage files for %s: %s", owner_id, exc)
+        return []
+
+
 def delete_file_urls(urls: list[str | None]) -> None:
     """Best-effort delete of Firebase Storage blobs referenced by download URLs."""
     valid = [u for u in urls if u]

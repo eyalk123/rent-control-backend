@@ -25,7 +25,7 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-agent-retention`) |
 | `app/models/` | SQLAlchemy declarative models |
 | `app/repositories/` | Data access layer — all DB queries live here |
-| `app/services/` | Business logic — validation, FK checks, transformations |
+| `app/services/` | Business logic — validation, FK checks, transformations. `export_service.py` builds the `GET /users/me/export` archive: an openpyxl workbook (a sheet per record type) plus the owner's Storage files, degrading to workbook-only if Storage is unavailable |
 | `app/schemas/` | Pydantic schemas: `Create`, `Update`, `Read` variants per domain |
 | `alembic/versions/` | Migration history (`owner_id` is a String holding the auth provider's user id) |
 

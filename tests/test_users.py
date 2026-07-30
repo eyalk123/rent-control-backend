@@ -1,4 +1,8 @@
-"""Full-stack tests for /users/me (account deletion cascade)."""
+"""Full-stack tests for /users/me (account deletion cascade, data export)."""
+import io
+import zipfile
+
+from openpyxl import load_workbook
 from sqlalchemy import select
 
 from tests.conftest import OWNER_A, OWNER_B
@@ -31,6 +35,44 @@ def _seed_agent_data(db_session, owner_id: str) -> int:
     )
     db_session.commit()
     return convo.id
+
+
+def test_export_returns_a_zip_of_the_owners_data(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.firebase_storage.list_owner_blobs", lambda owner_id: []
+    )
+    prop = make_property(db_session, owner_id=OWNER_A, address="1 Export Way")
+    make_renter(db_session, owner_id=OWNER_A, property_id=prop.id)
+
+    resp = client.get("/users/me/export")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert "rent-control-export-" in resp.headers["content-disposition"]
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        wb = load_workbook(io.BytesIO(archive.read("rent-control-data.xlsx")))
+        addresses = [row[1] for row in wb["Properties"].values][1:]
+        assert addresses == ["1 Export Way"]
+
+
+def test_export_is_scoped_to_the_caller(client_factory, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.firebase_storage.list_owner_blobs", lambda owner_id: []
+    )
+    make_property(db_session, owner_id=OWNER_B, address="B Only Street")
+    prop_a = make_property(db_session, owner_id=OWNER_A, address="A Only Street")
+    make_renter(db_session, owner_id=OWNER_A, property_id=prop_a.id)
+
+    resp = client_factory(OWNER_A).get("/users/me/export")
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        wb = load_workbook(io.BytesIO(archive.read("rent-control-data.xlsx")))
+        blob = "\n".join(
+            str(v) for s in wb.sheetnames for row in wb[s].values for v in row if v is not None
+        )
+    assert "A Only Street" in blob
+    assert "B Only Street" not in blob
 
 
 def test_delete_account_cascades_owner_data(client, db_session):
