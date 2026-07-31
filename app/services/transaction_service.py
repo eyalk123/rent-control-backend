@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.models.transaction import PaymentMethodEnum, Transaction, TransactionTypeEnum
+from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
@@ -31,7 +32,9 @@ class TransactionService:
         renter_repository: RenterRepository,
         expense_category_repository: ExpenseCategoryRepository,
         supplier_repository: SupplierRepository,
+        activity_log_repository: ActivityLogRepository | None = None,
     ):
+        self.activity_log_repository = activity_log_repository
         self.transaction_repository = transaction_repository
         self.property_repository = property_repository
         self.renter_repository = renter_repository
@@ -276,6 +279,27 @@ class TransactionService:
         return self._transaction_to_read(updated)
 
     def delete_transaction(self, transaction_id: int, owner_id: str) -> bool:
+        if self.activity_log_repository is not None:
+            # Read it first: the repository deletes and commits, after which there is
+            # nothing left to describe.
+            transaction = self.transaction_repository.get_by_id(transaction_id, owner_id)
+            if transaction is not None:
+                self.activity_log_repository.record_delete(
+                    owner_id=owner_id,
+                    entity_type="transaction",
+                    entity_id=transaction.id,
+                    label=transaction.property_address,
+                    details={
+                        "type": transaction.type.value if transaction.type else None,
+                        "amount": str(transaction.amount),
+                        "date_of_payment": (
+                            transaction.date_of_payment.isoformat()
+                            if transaction.date_of_payment
+                            else None
+                        ),
+                        "renter_name": transaction.renter_name,
+                    },
+                )
         return self.transaction_repository.delete(transaction_id, owner_id)
 
     def create_expense(self, data: TransactionCreateExpense, owner_id: str) -> TransactionRead:

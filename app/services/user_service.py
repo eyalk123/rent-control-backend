@@ -1,12 +1,21 @@
+import hashlib
 import logging
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.models.activity_log import ActivityLog
+from app.models.deleted_account import DeletedAccount
+from app.models.device_token import DeviceToken
+from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory
+from app.models.notification import Notification
+from app.models.notification_rule import NotificationRule
+from app.models.notification_settings import NotificationSettings
 from app.models.owner import Owner
 from app.models.property import Property
 from app.models.renter import Renter
+from app.models.report_export import ReportExport
 from app.models.supplier import Supplier
 from app.models.transaction import Transaction
 from app.repositories.agent_repository import AgentRepository
@@ -19,54 +28,78 @@ class UserService:
         self.db = db
 
     def delete_account(self, owner_id: str) -> None:
-        """Delete all data owned by owner_id, then attempt Firebase Storage cleanup."""
-        # 1. Get all property IDs for this owner (needed for scoped deletes)
-        prop_ids = list(
-            self.db.scalars(
-                select(Property.id).where(Property.owner_id == owner_id)
-            ).all()
-        )
+        """Erase everything belonging to owner_id, then attempt Firebase Storage cleanup.
 
-        # 2. Delete transactions linked to owner's properties
-        if prop_ids:
-            self.db.execute(
-                delete(Transaction).where(Transaction.property_id.in_(prop_ids))
-            )
+        Deletion is scoped by `owner_id`, not by property. Scoping to the owner's properties
+        used to miss renters and transactions that were never attached to one, which then
+        survived the deletion of the account they belonged to.
 
-        # 3. Delete renters linked to owner's properties
-        if prop_ids:
-            self.db.execute(
-                delete(Renter).where(Renter.property_id.in_(prop_ids))
-            )
+        A single anonymous row is left behind — see `DeletedAccount`.
+        """
+        counts = self._count_owner_data(owner_id)
 
-        # 4. Delete suppliers
+        # Transactions and renters carry their own owner_id, so this reaches the unattached
+        # ones as well as those hanging off a property.
+        self.db.execute(delete(Transaction).where(Transaction.owner_id == owner_id))
+        self.db.execute(delete(Renter).where(Renter.owner_id == owner_id))
+        self.db.execute(delete(Supplier).where(Supplier.owner_id == owner_id))
+        self.db.execute(delete(ExpenseCategory).where(ExpenseCategory.owner_id == owner_id))
+        self.db.execute(delete(Property).where(Property.owner_id == owner_id))
+
+        # Notifications and the rules that generate them, plus the devices they are pushed to.
+        self.db.execute(delete(Notification).where(Notification.owner_id == owner_id))
+        self.db.execute(delete(NotificationRule).where(NotificationRule.owner_id == owner_id))
         self.db.execute(
-            delete(Supplier).where(Supplier.owner_id == owner_id)
+            delete(NotificationSettings).where(NotificationSettings.owner_id == owner_id)
         )
+        self.db.execute(delete(DeviceToken).where(DeviceToken.owner_id == owner_id))
 
-        # 5. Delete expense categories
+        # Report export history and lease-extraction logs.
+        self.db.execute(delete(ReportExport).where(ReportExport.owner_id == owner_id))
         self.db.execute(
-            delete(ExpenseCategory).where(ExpenseCategory.owner_id == owner_id)
+            delete(DocumentExtractionLog).where(DocumentExtractionLog.owner_id == owner_id)
         )
 
-        # 6. Delete properties
-        self.db.execute(
-            delete(Property).where(Property.owner_id == owner_id)
-        )
+        # The activity log's labels are renter names and property addresses — personal data,
+        # so it cannot outlive the account it describes.
+        self.db.execute(delete(ActivityLog).where(ActivityLog.owner_id == owner_id))
 
-        # 7. Delete the owner's chat-agent data (conversations, messages, usage logs).
-        # Portfolio PII is stored verbatim in agent_messages, so this must go too.
+        # Chat-agent data: conversations, messages, usage logs. Portfolio PII is stored
+        # verbatim in agent_messages, so this must go too.
         AgentRepository(self.db).delete_owner_data(owner_id)
 
-        # 8. Delete the owner's profile row
-        self.db.execute(
-            delete(Owner).where(Owner.id == owner_id)
+        self.db.execute(delete(Owner).where(Owner.id == owner_id))
+
+        # What survives: counts and a one-way hash. Nothing that identifies anyone.
+        self.db.add(
+            DeletedAccount(
+                owner_id_hash=hashlib.sha256(owner_id.encode("utf-8")).hexdigest(),
+                properties_count=counts["properties"],
+                renters_count=counts["renters"],
+                transactions_count=counts["transactions"],
+            )
         )
 
         self.db.commit()
 
-        # 9. Firebase Storage cleanup (optional — requires FIREBASE_STORAGE_BUCKET env var)
+        # Firebase Storage cleanup (optional — requires FIREBASE_STORAGE_BUCKET env var)
         self._delete_firebase_storage(owner_id)
+
+    def _count_owner_data(self, owner_id: str) -> dict[str, int]:
+        """Volume of the portfolio, read before it is deleted, for the tombstone."""
+        def count(model) -> int:
+            return int(
+                self.db.scalar(
+                    select(func.count()).select_from(model).where(model.owner_id == owner_id)
+                )
+                or 0
+            )
+
+        return {
+            "properties": count(Property),
+            "renters": count(Renter),
+            "transactions": count(Transaction),
+        }
 
     def _delete_firebase_storage(self, owner_id: str) -> None:
         try:

@@ -1,5 +1,7 @@
+from app.models.activity_log import ActivityLog
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 from app.models.base import Base
+from app.models.deleted_account import DeletedAccount
 from app.models.device_token import DevicePlatformEnum, DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory
@@ -17,10 +19,12 @@ from app.models.transaction import (
 )
 
 __all__ = [
+    "ActivityLog",
     "AgentConversation",
     "AgentMessage",
     "AgentUsageLog",
     "Base",
+    "DeletedAccount",
     "DevicePlatformEnum",
     "DeviceToken",
     "DocumentExtractionLog",

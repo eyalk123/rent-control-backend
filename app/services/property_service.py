@@ -1,6 +1,7 @@
 import json
 
 from app.models.property import Property, PropertyTypeEnum
+from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyUpdate
@@ -12,9 +13,11 @@ class PropertyService:
         self,
         property_repository: PropertyRepository,
         renter_repository: RenterRepository,
+        activity_log_repository: ActivityLogRepository | None = None,
     ):
         self.property_repository = property_repository
         self.renter_repository = renter_repository
+        self.activity_log_repository = activity_log_repository
 
     def list_properties(self, owner_id: str):
         return self.property_repository.get_all_by_owner(owner_id)
@@ -77,6 +80,17 @@ class PropertyService:
             return False
         from app.services.firebase_storage import delete_file_urls
         delete_file_urls([property.image_url, property.basic_contract_url, property.land_registry_url])
+
+        if self.activity_log_repository is not None:
+            # Recorded before the delete so the address is still readable.
+            self.activity_log_repository.record_delete(
+                owner_id=owner_id,
+                entity_type="property",
+                entity_id=property.id,
+                label=", ".join(p for p in (property.address, property.city) if p),
+                details={"property_owner": property.property_owner},
+            )
+
         self.property_repository.delete_obj(property)
         return True
 

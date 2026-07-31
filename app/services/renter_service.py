@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.models.renter import Renter
+from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
@@ -54,10 +55,12 @@ class RenterService:
         renter_repository: RenterRepository,
         property_repository: PropertyRepository,
         cpi_index_repository: CpiIndexRepository | None = None,
+        activity_log_repository: ActivityLogRepository | None = None,
     ):
         self.renter_repository = renter_repository
         self.property_repository = property_repository
         self.cpi_index_repository = cpi_index_repository
+        self.activity_log_repository = activity_log_repository
 
     def _index_lookup(self):
         if self.cpi_index_repository is None:
@@ -329,5 +332,15 @@ class RenterService:
         self._check_renter_access(renter, owner_id)
         from app.services.firebase_storage import delete_file_urls
         delete_file_urls([renter.full_contract_url, renter.id_image_url])
+
+        if self.activity_log_repository is not None:
+            self.activity_log_repository.record_delete(
+                owner_id=owner_id,
+                entity_type="renter",
+                entity_id=renter.id,
+                label=f"{renter.first_name} {renter.last_name}".strip(),
+                details={"property_id": renter.property_id},
+            )
+
         self.renter_repository.delete_obj(renter)
         return True

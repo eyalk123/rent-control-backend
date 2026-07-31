@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
+from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.device_token_repository import DeviceTokenRepository
 from app.repositories.document_extraction_log_repository import (
@@ -143,19 +144,33 @@ def get_cpi_index_repository(db: Annotated[Session, Depends(get_db)]) -> CpiInde
     return CpiIndexRepository(db)
 
 
+def get_activity_log_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> ActivityLogRepository:
+    return ActivityLogRepository(db)
+
+
 def get_property_service(
     property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+    activity_log_repository: Annotated[
+        ActivityLogRepository, Depends(get_activity_log_repository)
+    ],
 ) -> PropertyService:
-    return PropertyService(property_repository, renter_repository)
+    return PropertyService(property_repository, renter_repository, activity_log_repository)
 
 
 def get_renter_service(
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
     property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
     cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
+    activity_log_repository: Annotated[
+        ActivityLogRepository, Depends(get_activity_log_repository)
+    ],
 ) -> RenterService:
-    return RenterService(renter_repository, property_repository, cpi_index_repository)
+    return RenterService(
+        renter_repository, property_repository, cpi_index_repository, activity_log_repository
+    )
 
 
 def get_cbs_index_service() -> CbsIndexService:
@@ -229,6 +244,9 @@ def get_transaction_service(
         ExpenseCategoryRepository, Depends(get_expense_category_repository)
     ],
     supplier_repository: Annotated[SupplierRepository, Depends(get_supplier_repository)],
+    activity_log_repository: Annotated[
+        ActivityLogRepository, Depends(get_activity_log_repository)
+    ],
 ) -> TransactionService:
     return TransactionService(
         transaction_repository=transaction_repository,
@@ -236,6 +254,7 @@ def get_transaction_service(
         renter_repository=renter_repository,
         expense_category_repository=expense_category_repository,
         supplier_repository=supplier_repository,
+        activity_log_repository=activity_log_repository,
     )
 
 
