@@ -80,7 +80,7 @@ Latin-1 only and raises on the first Hebrew character.
 | `/extract/lease` | AI lease extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration |
-| `/internal` | `run-reminders`, `run-cpi-indexing`, `run-agent-retention` — cron-triggered, guarded by a shared secret |
+| `/internal` | `run-reminders`, `run-cpi-indexing`, `run-retention` (`?dry_run=true` supported) — cron-triggered, guarded by a shared secret |
 | `/health` | Unauthenticated liveness check |
 
 Every router except `/internal` and `/health` requires a Firebase ID token. Interactive API docs
@@ -227,12 +227,25 @@ All optional — the defaults are sane. Set `ANTHROPIC_API_KEY` and the agent wo
 | `AGENT_GLOBAL_DAILY_COST_LIMIT_USD` | `20.0` | App-wide daily kill switch; `0` disables |
 | `AGENT_RESERVE_COST_USD` | `0.25` | Charged provisionally per turn, reconciled on completion |
 | `AGENT_HISTORY_MAX_MESSAGES` | `40` | Recent messages replayed to the model |
-| `AGENT_RETENTION_DAYS` | `0` | Delete conversations older than this. **`0` = never delete** |
+| `AGENT_RETENTION_DAYS` | `90` | See Retention below |
 
-> Conversations store assistant replies verbatim, so they hold **tenant details at rest**. With
-> `AGENT_RETENTION_DAYS=0` (the default) nothing is ever aged out. If that matters for your
-> deployment, set a retention period *and* schedule `run-agent-retention` — one without the other
-> does nothing.
+### Retention
+
+Data with a shelf life is aged out by a single sweep, `POST /internal/run-retention`. Each class
+has its own window and `0` disables that class; the response names the disabled ones so
+"scheduled but doing nothing" doesn't look like success.
+
+| Variable | Default | Deletes |
+|---|---|---|
+| `AGENT_RETENTION_DAYS` | `90` | Chat conversations, by last-updated, with their messages. The shortest window because `agent_messages` holds tenant PII verbatim. Usage logs are detached, not deleted — cost history has no PII |
+| `ACTIVITY_LOG_RETENTION_DAYS` | `365` | The deletion trace. Its `label` holds names and addresses, but its job is answering "what happened months ago?", so it outlives the chats |
+| `NOTIFICATION_RETENTION_DAYS` | `365` | Sent-notification history |
+
+Not swept: `document_extraction_logs` (scanner-quality telemetry, holds no lease content) and
+`agent_usage_logs` (cost only). Both are kept indefinitely on purpose.
+
+A window alone does nothing — the job must also be scheduled. See [Deployment](#deployment) for
+the dry run to do first.
 
 ---
 
@@ -261,8 +274,20 @@ Railway health-checks `/health`. Set every required env var in the Railway dashb
 the deployed web origin in `CORS_ORIGINS` or the browser will block the web app.
 
 The `/internal/*` jobs are **not** self-scheduling — an external scheduler must call them with the
-`X-Cron-Secret` header: `run-reminders` daily, `run-cpi-indexing` monthly, and
-`run-agent-retention` daily *if* you have set `AGENT_RETENTION_DAYS` (it is a no-op otherwise).
+`X-Cron-Secret` header: `run-reminders` daily, `run-cpi-indexing` monthly, and `run-retention`
+daily.
+
+> **Before scheduling `run-retention` for the first time, dry-run it.** The first real run deletes
+> everything already older than each window, which on an existing database can be a lot and cannot
+> be undone:
+>
+> ```bash
+> curl -X POST -H "X-Cron-Secret: $SECRET" "$API/internal/run-retention?dry_run=true"
+> ```
+>
+> It reports what *would* go, per class, and changes nothing. `run-agent-retention` still works as
+> a deprecated alias so an existing scheduler entry doesn't break, but it now sweeps every class,
+> not just the chat agent.
 
 The web app also deploys to Railway (Docker + Caddy); the mobile app ships through EAS to the App
 Store. See their respective repos.

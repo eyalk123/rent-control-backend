@@ -22,7 +22,7 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/config.py` | Pydantic `Settings` — reads all env vars from `.env` |
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/api/dependencies.py` | All DI factories: auth, repos, services |
-| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-agent-retention`) |
+| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`) |
 | `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations. `export_service.py` builds the `GET /users/me/export` archive: an openpyxl workbook (a sheet per record type) plus the owner's Storage files, degrading to workbook-only if Storage is unavailable |
@@ -81,7 +81,7 @@ is what makes the caps burst-safe under concurrency.
 | `AGENT_GLOBAL_DAILY_COST_LIMIT_USD` | `20.0` | App-wide kill switch; `0` disables it |
 | `AGENT_RESERVE_COST_USD` | `0.25` | Provisional charge per turn, reconciled when it finishes |
 | `AGENT_HISTORY_MAX_MESSAGES` | `40` | Recent messages replayed to the model |
-| `AGENT_RETENTION_DAYS` | `0` | Age-out for conversations; **`0` = nothing is deleted**, and only enforced when a scheduler calls `POST /internal/run-agent-retention` |
+| `AGENT_RETENTION_DAYS` | `90` | Age-out for conversations. One of three windows swept by `POST /internal/run-retention` (with `ACTIVITY_LOG_RETENTION_DAYS` and `NOTIFICATION_RETENTION_DAYS`, both `365`). `0` disables a class; a window without a scheduled job deletes nothing. `?dry_run=true` counts without deleting |
 
 Tables: `agent_conversations`, `agent_messages`, `agent_usage_logs` (`app/models/agent.py`). All
 ten tools in `app/services/agent_tools.py` are **read-only** — the agent answers and cites, it

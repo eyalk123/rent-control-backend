@@ -104,6 +104,17 @@ class AgentRepository:
             delete(AgentConversation).where(AgentConversation.owner_id == owner_id)
         )
 
+    def count_conversations_older_than(self, cutoff: datetime) -> int:
+        """How many conversations retention would delete. For the dry run."""
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(AgentConversation)
+                .where(AgentConversation.updated_at < cutoff)
+            )
+            or 0
+        )
+
     def delete_conversations_older_than(self, cutoff: datetime) -> int:
         """Retention: delete every conversation (any owner) last updated before ``cutoff``,
         with its messages; detach its usage logs. Returns how many conversations were deleted."""

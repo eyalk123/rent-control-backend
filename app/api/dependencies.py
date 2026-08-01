@@ -42,6 +42,7 @@ from app.services.notification_preferences_service import NotificationPreference
 from app.services.property_service import PropertyService
 from app.services.push_service import PushService
 from app.services.reminder_service import ReminderService
+from app.services.retention_service import RetentionService
 from app.services.renter_service import RenterService
 from app.services.supplier_service import SupplierService
 from app.services.transaction_service import TransactionService
@@ -148,6 +149,10 @@ def get_activity_log_repository(
     db: Annotated[Session, Depends(get_db)],
 ) -> ActivityLogRepository:
     return ActivityLogRepository(db)
+
+
+def get_retention_service(db: Annotated[Session, Depends(get_db)]) -> RetentionService:
+    return RetentionService(db)
 
 
 def get_property_service(

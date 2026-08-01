@@ -1,18 +1,17 @@
 import secrets
-from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.api.dependencies import (
-    get_agent_repository,
     get_cpi_indexing_service,
     get_reminder_service,
+    get_retention_service,
 )
 from app.config import settings
-from app.repositories.agent_repository import AgentRepository
 from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.reminder_service import ReminderService
+from app.services.retention_service import RetentionService
 
 router = APIRouter()
 
@@ -46,16 +45,29 @@ def run_cpi_indexing(
     return {"status": "ok", **result}
 
 
+@router.post("/run-retention", dependencies=[Depends(verify_cron_secret)])
+def run_retention(
+    retention_service: Annotated[RetentionService, Depends(get_retention_service)],
+    dry_run: bool = False,
+):
+    """Age out every class of data that has a retention window: chat conversations (whose
+    messages hold tenant PII), the deletion trace in activity_log, and sent-notification
+    history. Each window is configured separately and `0` disables that class — the response
+    lists which are disabled, so "scheduled but doing nothing" doesn't look like success.
+
+    Call daily from an external scheduler with the X-Cron-Secret header.
+
+    `?dry_run=true` reports what *would* be deleted and changes nothing. Worth running before
+    enabling a window for the first time: the first real run removes everything already older
+    than it, which for an existing database can be a lot.
+    """
+    return retention_service.run(dry_run=dry_run).as_dict()
+
+
 @router.post("/run-agent-retention", dependencies=[Depends(verify_cron_secret)])
 def run_agent_retention(
-    agent_repository: Annotated[AgentRepository, Depends(get_agent_repository)],
+    retention_service: Annotated[RetentionService, Depends(get_retention_service)],
 ):
-    """Delete chat conversations older than AGENT_RETENTION_DAYS (by last-updated), removing
-    the portfolio PII stored in their messages. No-op when AGENT_RETENTION_DAYS is 0.
-    Intended to be called daily by an external scheduler with the X-Cron-Secret header."""
-    days = settings.AGENT_RETENTION_DAYS
-    if days <= 0:
-        return {"status": "ok", "deleted": 0, "disabled": True}
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    deleted = agent_repository.delete_conversations_older_than(cutoff)
-    return {"status": "ok", "deleted": deleted}
+    """Deprecated alias for `run-retention`, kept so an existing scheduler entry doesn't
+    silently stop working. It now sweeps every class, not just the chat agent."""
+    return retention_service.run().as_dict()

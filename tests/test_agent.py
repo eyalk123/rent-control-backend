@@ -148,8 +148,9 @@ def test_agent_retention_deletes_old_conversations(client, db_session, monkeypat
     monkeypatch.setattr(settings, "AGENT_RETENTION_DAYS", 365)
 
     assert client.post("/internal/run-agent-retention").status_code == 401  # missing secret
+    # Deprecated alias for run-retention — still works so an existing cron entry doesn't break.
     resp = client.post("/internal/run-agent-retention", headers={"X-Cron-Secret": "s3cret"})
-    assert resp.status_code == 200 and resp.json()["deleted"] == 1
+    assert resp.status_code == 200 and resp.json()["swept"]["agent_conversations"] == 1
 
     db_session.expire_all()
     remaining = db_session.scalars(
@@ -170,6 +171,8 @@ def test_agent_retention_disabled_is_noop(client, db_session, monkeypatch):
 
     resp = client.post("/internal/run-agent-retention", headers={"X-Cron-Secret": "s3cret"})
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "deleted": 0, "disabled": True}
+    # Disabled classes are named in the response rather than silently reported as success.
+    assert "agent_conversations" in resp.json()["disabled"]
+    assert "agent_conversations" not in resp.json()["swept"]
     db_session.expire_all()
     assert len(db_session.scalars(select(AgentConversation)).all()) == 1
