@@ -99,7 +99,7 @@ class RenterService:
             return lease_years, None
         if not lease_start or not lease_years or self.cpi_index_repository is None:
             # Can't compute yet (no start date, or the cache isn't wired) — keep the
-            # incoming projection; the monthly job fills real amounts in later.
+            # incoming projection; the indexing job fills real amounts in later.
             return lease_years, existing_base_index
         index_id = settings.CPI_INDEX_ID
         base = base_rent if base_rent else lease_years[0]["amount"]

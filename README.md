@@ -80,7 +80,7 @@ Latin-1 only and raises on the first Hebrew character.
 | `/extract/lease` | AI lease extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration |
-| `/internal` | `run-reminders`, `run-cpi-indexing`, `run-retention` (`?dry_run=true` supported) — cron-triggered, guarded by a shared secret |
+| `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-retention` (`?dry_run=true` supported) — cron-triggered, guarded by a shared secret |
 | `/health` | Unauthenticated liveness check |
 
 Every router except `/internal` and `/health` requires a Firebase ID token. Interactive API docs
@@ -209,8 +209,11 @@ live in `.claude/docs/architectural_patterns.md`.
 | `DEFAULT_CURRENCY` | No | Default `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push; only needed with Expo "Enhanced Security" |
 | `REMINDER_CRON_SECRET` | No | Guards the `/internal/*` endpoints via the `X-Cron-Secret` header. **Empty disables them** |
-| `CBS_API_BASE_URL` | No | Default `https://api.cbs.gov.il`. Keyless |
+| `CBS_API_BASE_URL` | No | Primary CPI source. Default `https://api.cbs.gov.il`. Keyless |
 | `CPI_INDEX_ID` | No | Default `120010` (general CPI) |
+| `BOI_API_BASE_URL` | No | Fallback CPI source (Bank of Israel SDMX). Default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2`. Keyless |
+| `BOI_CPI_SERIES_CODE` | No | Default `CP` — the same series as `CPI_INDEX_ID` 120010 |
+| `CPI_MAX_STALE_MONTHS` | No | Default `2`. How far behind the newest published month the cache may fall before `run-cpi-indexing` returns 503 |
 | `PORT` | No | Set by Railway automatically; defaults to 8000 |
 
 ### Chat agent
@@ -274,8 +277,20 @@ Railway health-checks `/health`. Set every required env var in the Railway dashb
 the deployed web origin in `CORS_ORIGINS` or the browser will block the web app.
 
 The `/internal/*` jobs are **not** self-scheduling — an external scheduler must call them with the
-`X-Cron-Secret` header: `run-reminders` daily, `run-cpi-indexing` monthly, and `run-retention`
-daily.
+`X-Cron-Secret` header: `run-reminders`, `run-cpi-indexing`, and `run-retention`, all daily. (The
+index itself only updates monthly, but running the job daily costs one request and picks up a new
+reading the day it lands.)
+
+`run-cpi-indexing` reads the index from **CBS**, falling back to the **Bank of Israel**'s
+republication of the same series when CBS is unreachable. CBS is the publisher lease escalation
+clauses actually reference, so it is always tried first and its readings supersede the fallback's;
+`cpi_index.source` records which feed each cached reading came from. A run served by the fallback
+still returns 200 with `degraded: true` — the readings are correct, so nothing is broken.
+
+**It returns 503 when the cache falls more than `CPI_MAX_STALE_MONTHS` behind the newest published
+month.** That is the alarm worth wiring up: the fetch itself is best-effort and never raises, so
+without this check a completely dead feed keeps returning 200 while every CPI-linked rent silently
+stops tracking the index.
 
 > **Before scheduling `run-retention` for the first time, dry-run it.** The first real run deletes
 > everything already older than each window, which on an existing database can be a lot and cannot

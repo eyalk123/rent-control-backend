@@ -2,6 +2,7 @@ import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from app.api.dependencies import (
     get_cpi_indexing_service,
@@ -38,11 +39,26 @@ def run_reminders(
 def run_cpi_indexing(
     cpi_indexing_service: Annotated[CpiIndexingService, Depends(get_cpi_indexing_service)],
 ):
-    """Refresh the cached Consumer Price Index from the CBS API and recompute every
-    CPI-linked renter's rent schedule. Intended to be called ~monthly by an external
-    scheduler with the X-Cron-Secret header (the index updates monthly)."""
+    """Refresh the cached Consumer Price Index and recompute every CPI-linked renter's rent
+    schedule. Called daily by an external scheduler with the X-Cron-Secret header.
+
+    The index is read from CBS, falling back to the Bank of Israel's republication of the
+    same series when CBS is unreachable. A run served by the fallback still succeeds
+    (`degraded: true`) — the readings are correct, so nothing is broken.
+
+    Returns **503** when the cache has fallen more than `CPI_MAX_STALE_MONTHS` behind the
+    newest published month, which is the state that actually matters: no source is
+    answering and CPI-linked rents have silently stopped tracking the index. The refresh
+    itself is best-effort and never raises, so without this check a totally dead feed would
+    keep returning 200 — which is exactly how a week-long CBS outage went unnoticed.
+    """
     result = cpi_indexing_service.run_cpi_indexing()
-    return {"status": "ok", **result}
+    body = {"status": "stale" if result["stale"] else "ok", **result}
+    if result["stale"]:
+        # Non-2xx so the scheduler surfaces it, but with the full summary intact — the
+        # DB work has already committed; only the status code differs.
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=body)
+    return body
 
 
 @router.post("/run-retention", dependencies=[Depends(verify_cron_secret)])

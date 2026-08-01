@@ -7,6 +7,12 @@ from sqlalchemy.orm import Session
 from app.models.cpi_index import CpiIndex
 
 
+# Which source's reading wins when two disagree about the same month. CBS is the
+# publisher lease contracts reference, so it outranks any republisher. An unknown
+# source ranks 0 — it can fill an empty month but never displace a known one.
+_SOURCE_RANK = {"cbs": 2, "boi": 1}
+
+
 def reference_period(d: date) -> tuple[int, int]:
     """The ``(year, month)`` of the latest CPI month whose reading is *published* on
     or before ``d`` — the "known index" (המדד הידוע).
@@ -56,10 +62,49 @@ class CpiIndexRepository:
         row = self.reading_on_or_before(index_id, d)
         return row.value if row else None
 
-    def upsert_many(self, index_id: int, rows: list[tuple[int, int, float]]) -> int:
-        """Insert new (year, month, value) readings and update any whose value
-        changed. Portable across SQLite (tests) and Postgres. Returns the number of
-        rows inserted or changed."""
+    def latest_period(self, index_id: int) -> tuple[int, int] | None:
+        """The newest ``(year, month)`` cached for the series, or ``None`` when empty.
+        Compare against :func:`reference_period` to tell how stale the cache is."""
+        period_key = CpiIndex.year * 12 + CpiIndex.month
+        stmt = (
+            select(CpiIndex.year, CpiIndex.month)
+            .where(CpiIndex.index_id == index_id)
+            .order_by(period_key.desc())
+            .limit(1)
+        )
+        row = self.session.execute(stmt).first()
+        return (row.year, row.month) if row else None
+
+    def earliest_period(self, index_id: int) -> tuple[int, int] | None:
+        """The oldest ``(year, month)`` cached — how far back the history reaches. A lease
+        starting before it cannot resolve a base index."""
+        period_key = CpiIndex.year * 12 + CpiIndex.month
+        stmt = (
+            select(CpiIndex.year, CpiIndex.month)
+            .where(CpiIndex.index_id == index_id)
+            .order_by(period_key.asc())
+            .limit(1)
+        )
+        row = self.session.execute(stmt).first()
+        return (row.year, row.month) if row else None
+
+    def upsert_many(
+        self, index_id: int, rows: list[tuple[int, int, float]], source: str
+    ) -> tuple[int, set[tuple[int, int]]]:
+        """Merge ``(year, month, value)`` readings from ``source`` into the cache.
+
+        Sources are ranked (see :data:`_SOURCE_RANK`) and a *lower*-ranked source never
+        overwrites a higher-ranked reading — a fallback fills gaps CBS hasn't covered,
+        but if the two ever disagree at the same month (a revision, a base change handled
+        differently) the authoritative value stands. A higher-ranked source does overwrite,
+        which is how CBS reclaims months served by the fallback while it was down.
+
+        Portable across SQLite (tests) and Postgres. Returns ``(changed, superseded)``
+        where ``changed`` counts rows inserted or updated and ``superseded`` is the set of
+        periods whose source was upgraded — the caller re-derives anything frozen against
+        those older values.
+        """
+        rank = _SOURCE_RANK.get(source, 0)
         existing = {
             (r.year, r.month): r
             for r in self.session.scalars(
@@ -67,15 +112,32 @@ class CpiIndexRepository:
             )
         }
         changed = 0
+        superseded: set[tuple[int, int]] = set()
         for year, month, value in rows:
             row = existing.get((year, month))
             if row is None:
                 self.session.add(
-                    CpiIndex(index_id=index_id, year=year, month=month, value=value)
+                    CpiIndex(
+                        index_id=index_id,
+                        year=year,
+                        month=month,
+                        value=value,
+                        source=source,
+                    )
                 )
+                changed += 1
+                continue
+            existing_rank = _SOURCE_RANK.get(row.source, 0)
+            if rank < existing_rank:
+                continue  # provisional reading; the authoritative one already stands
+            if rank > existing_rank:
+                superseded.add((year, month))
+                row.source = source
+                if row.value != value:
+                    row.value = value
                 changed += 1
             elif row.value != value:
                 row.value = value
                 changed += 1
         self.session.commit()
-        return changed
+        return changed, superseded

@@ -11,7 +11,7 @@ known at signing, so the **backend owns them**:
   ``max(.., 1)`` floors rent at the original ``base_rent`` (never decreases below
   it, matching the standard "לא יפחת" clause).
 - Years whose index isn't published yet stay at ``base_rent`` as a projection and
-  are filled in by the monthly indexing job once the reading exists.
+  are filled in by the indexing job once the reading exists.
 
 The pure helpers below are the single source of truth for the math (used by both
 renter create/update and the job) and are unit-testable with a fake ``index_lookup``.
@@ -19,18 +19,22 @@ renter create/update and the job) and are unit-testable with a fake ``index_look
 import json
 import logging
 from datetime import date
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from dateutil.relativedelta import relativedelta
 
 from app.config import settings
-from app.repositories.cpi_index_repository import CpiIndexRepository
+from app.repositories.cpi_index_repository import CpiIndexRepository, reference_period
 from app.repositories.renter_repository import RenterRepository
-from app.services.cbs_index_service import CbsIndexService
+from app.services.index_source import IndexSource
 
 logger = logging.getLogger(__name__)
 
 IndexLookup = Callable[[date], Optional[float]]
+
+
+def _period_str(period: Optional[tuple[int, int]]) -> Optional[str]:
+    return f"{period[0]:04d}-{period[1]:02d}" if period else None
 
 
 def compute_cpi_amount(
@@ -99,7 +103,7 @@ def compute_chained_cpi_amount(
 ) -> float:
     """One CPI-linked year under chained linkage, floored at the previous year's rent
     (the "לא יפחת" clause). Falls back to ``prev_amount`` — a flat projection — whenever
-    either anniversary's index isn't published yet; the monthly job fills it in later."""
+    either anniversary's index isn't published yet; the indexing job fills it in later."""
     if not prev_index or prev_index <= 0 or not known_index:
         return round(prev_amount)
     ratio = max(known_index / prev_index, 1.0)
@@ -162,35 +166,100 @@ def materialize_ruled_lease_years(
 
 
 class CpiIndexingService:
-    """The monthly job: refresh the cached index from CBS, then recompute every
-    CPI-linked renter's stored ``lease_years`` so newly-published readings take
-    effect. Silent — no notifications (per product decision)."""
+    """The daily job: refresh the cached index, then recompute every CPI-linked renter's
+    stored ``lease_years`` so newly-published readings take effect. Silent towards owners —
+    no notifications (per product decision).
+
+    Not silent towards *operators*, though. The fetch is best-effort by design, so a run
+    that reached no source still succeeds structurally; what makes a real outage visible is
+    the staleness check, which compares the newest cached month against the month that
+    ought to be published by now. See :meth:`run_cpi_indexing`.
+    """
 
     def __init__(
         self,
         renter_repository: RenterRepository,
         cpi_index_repository: CpiIndexRepository,
-        cbs_service: CbsIndexService,
+        sources: Sequence[IndexSource],
         index_id: int | None = None,
+        max_stale_months: int | None = None,
     ):
         self.renter_repository = renter_repository
         self.cpi_index_repository = cpi_index_repository
-        self.cbs_service = cbs_service
+        # Ordered by authority: the first source that returns rows wins, and the rest are
+        # never called. sources[0] is the one whose absence counts as "degraded".
+        self.sources = list(sources)
         self.index_id = index_id if index_id is not None else settings.CPI_INDEX_ID
+        self.max_stale_months = (
+            max_stale_months
+            if max_stale_months is not None
+            else settings.CPI_MAX_STALE_MONTHS
+        )
 
     def _lookup(self) -> IndexLookup:
         return lambda d: self.cpi_index_repository.latest_on_or_before(self.index_id, d)
 
-    def run_cpi_indexing(self) -> dict:
-        summary = {"fetched": 0, "renters_updated": 0}
+    def _refresh_cache(self, summary: dict) -> set[tuple[int, int]]:
+        """Try each source in order until one yields rows. Returns the set of periods
+        whose source was upgraded, so the caller knows to re-derive frozen values."""
+        full_backfill = self.cpi_index_repository.is_empty(self.index_id)
+        superseded: set[tuple[int, int]] = set()
+        for source in self.sources:
+            rows = source.fetch_all() if full_backfill else source.fetch_latest()
+            if not rows:
+                continue
+            summary["fetched"], superseded = self.cpi_index_repository.upsert_many(
+                self.index_id, rows, source=source.name
+            )
+            summary["source"] = source.name
+            break
 
-        # 1. Refresh the cache: full backfill when empty, else the latest few months.
-        if self.cpi_index_repository.is_empty(self.index_id):
-            rows = self.cbs_service.fetch_all()
-        else:
-            rows = self.cbs_service.fetch_latest()
-        if rows:
-            summary["fetched"] = self.cpi_index_repository.upsert_many(self.index_id, rows)
+        served_by = summary["source"]
+        if served_by is None:
+            logger.warning(
+                "CPI: no index source returned data (tried %s)",
+                ", ".join(s.name for s in self.sources) or "none",
+            )
+        elif self.sources and served_by != self.sources[0].name:
+            # Correct data from a fallback is a working state, not a failure — the run
+            # still reports success. Staleness is what escalates.
+            summary["degraded"] = True
+            logger.warning(
+                "CPI: %s unavailable, served from %s", self.sources[0].name, served_by
+            )
+        return superseded
+
+    def _staleness(self, summary: dict) -> None:
+        """How far the cache trails the newest month that should be published by now."""
+        expected = reference_period(date.today())
+        latest = self.cpi_index_repository.latest_period(self.index_id)
+        summary["expected_period"] = _period_str(expected)
+        summary["latest_period"] = _period_str(latest)
+        if latest is None:
+            # An empty cache is maximally stale: every CPI lease is stuck at base rent.
+            summary["stale_months"] = None
+            summary["stale"] = True
+            return
+        stale_months = (expected[0] * 12 + expected[1]) - (latest[0] * 12 + latest[1])
+        summary["stale_months"] = max(stale_months, 0)
+        summary["stale"] = summary["stale_months"] > self.max_stale_months
+
+    def run_cpi_indexing(self) -> dict:
+        summary = {
+            "fetched": 0,
+            "renters_updated": 0,
+            "renters_before_index_start": 0,
+            "source": None,
+            "degraded": False,
+            "stale": False,
+        }
+
+        # 1. Refresh the cache from the first source that answers: full backfill when
+        #    empty, else the latest few months.
+        superseded = self._refresh_cache(summary)
+        # A period changing hands means anything frozen against the old value is now
+        # anchored to a superseded reading, so re-derive the frozen bases this run.
+        reconcile_bases = bool(superseded)
 
         # 2. Recompute every CPI-linked renter against the (now fresher) cache. Two kinds
         #    qualify: whole-lease `cpi` leases, and `custom` leases with at least one
@@ -220,9 +289,17 @@ class CpiIndexingService:
             else:
                 # Freeze the base index if it wasn't resolvable at signing (e.g. created
                 # while the cache was empty); otherwise keep it fixed for the contract.
+                # ``reconcile_bases`` is the one exception: a base frozen against a
+                # provisional reading has to be re-anchored once the authoritative source
+                # supersedes it, or it would stay on the fallback's value forever.
                 base_index = renter.cpi_base_index
-                if base_index is None:
+                if base_index is None or reconcile_bases:
                     base_index = lookup(renter.lease_start)
+                if base_index is None:
+                    # No reading at or before this lease's start: it predates the cached
+                    # history, so its rent silently holds at base_rent. Counted so a lease
+                    # older than HISTORY_FLOOR shows up instead of quietly undercharging.
+                    summary["renters_before_index_start"] += 1
                 new_years = materialize_cpi_amounts(
                     current, renter.lease_start, base_rent, base_index, lookup
                 )
@@ -234,5 +311,25 @@ class CpiIndexingService:
                 )
                 summary["renters_updated"] += 1
 
-        logger.info("CPI indexing: %s", summary)
+        # 3. Report. A run that fetched nothing is only a problem if the cache has fallen
+        #    behind — which is the check that would have caught the CBS outage.
+        self._staleness(summary)
+        if summary["renters_before_index_start"]:
+            # Not stale — the cache is current, just doesn't reach far enough back. Lowering
+            # HISTORY_FLOOR and letting the next run re-backfill is the fix.
+            logger.warning(
+                "CPI: %s CPI-linked lease(s) start before the cached history (from %s) and "
+                "are holding at base rent — consider lowering HISTORY_FLOOR",
+                summary["renters_before_index_start"],
+                _period_str(self.cpi_index_repository.earliest_period(self.index_id)),
+            )
+        if summary["stale"]:
+            logger.error(
+                "CPI indexing: cache is stale (have %s, expected %s) — %s",
+                summary["latest_period"] or "nothing",
+                summary["expected_period"],
+                summary,
+            )
+        else:
+            logger.info("CPI indexing: %s", summary)
         return summary

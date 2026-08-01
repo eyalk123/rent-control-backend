@@ -57,8 +57,11 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
 | `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them |
-| `CBS_API_BASE_URL` | No | CBS price-index API base; default `https://api.cbs.gov.il` (CPI rent linkage) |
+| `CBS_API_BASE_URL` | No | **Primary** CPI source; default `https://api.cbs.gov.il` (CPI rent linkage) |
 | `CPI_INDEX_ID` | No | CBS series id for CPI linkage; default `120010` (general Consumer Price Index) |
+| `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |
+| `BOI_CPI_SERIES_CODE` | No | Default `CP` — BOI's republication of the same series as `CPI_INDEX_ID` |
+| `CPI_MAX_STALE_MONTHS` | No | Default `2`; past it `run-cpi-indexing` returns 503 instead of a green 200 |
 | `ANTHROPIC_API_KEY` | No | Enables **both** `POST /extract/lease` and the chat agent; empty ⇒ both return 503 |
 | `EXTRACTION_MODEL` | No | Lease extraction model; default `claude-sonnet-4-6` |
 | `PORT` | No | Set by Railway automatically |

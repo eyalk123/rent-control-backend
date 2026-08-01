@@ -63,11 +63,23 @@ class Settings(BaseSettings):
     # Deliberately NOT swept: document_extraction_logs (scanner-quality telemetry, holds no
     # lease content) and agent_usage_logs (cost only, no PII — retention detaches them from
     # deleted conversations rather than removing them).
-    # CBS (Central Bureau of Statistics) public price-index API, used for CPI rent
-    # linkage. Keyless and free. CPI_INDEX_ID 120010 is the general Consumer Price
-    # Index. Refreshed monthly by POST /internal/run-cpi-indexing.
+    # --- CPI index sources ---
+    # The cached index is refreshed daily by POST /internal/run-cpi-indexing from the
+    # first source that answers, tried in order. Both are keyless and free.
+    #
+    # CBS (Central Bureau of Statistics) is the *contractual* publisher — Israeli lease
+    # escalation clauses reference the index as CBS publishes it — so it is always tried
+    # first and its readings always win. CPI_INDEX_ID 120010 is the general CPI.
     CBS_API_BASE_URL: str = "https://api.cbs.gov.il"
     CPI_INDEX_ID: int = 120010
+    # Bank of Israel republishes the identical CBS series over SDMX. Fallback only: it
+    # fills gaps CBS hasn't covered and never overwrites a CBS-sourced reading. Series
+    # code "CP" is "מדד המחירים לצרכן - כללי", the same series as CPI_INDEX_ID 120010.
+    BOI_API_BASE_URL: str = "https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2"
+    BOI_CPI_SERIES_CODE: str = "CP"
+    # How far behind the newest *published* month the cache may fall before the job
+    # reports failure (503). Absorbs a late publication; catches a dead feed.
+    CPI_MAX_STALE_MONTHS: int = 2
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

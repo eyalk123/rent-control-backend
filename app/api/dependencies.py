@@ -32,11 +32,13 @@ from app.repositories.report_export_repository import ReportExportRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services.agent_service import AgentService
+from app.services.boi_index_service import BoiIndexService
 from app.services.cbs_index_service import CbsIndexService
 from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.device_token_service import DeviceTokenService
 from app.services.document_extraction_service import DocumentExtractionService
 from app.services.expense_category_service import ExpenseCategoryService
+from app.services.index_source import IndexSource
 from app.services.notification_engine import NotificationEngine
 from app.services.notification_preferences_service import NotificationPreferencesService
 from app.services.property_service import PropertyService
@@ -184,15 +186,30 @@ def get_cbs_index_service() -> CbsIndexService:
     )
 
 
+def get_boi_index_service() -> BoiIndexService:
+    return BoiIndexService(
+        base_url=settings.BOI_API_BASE_URL, series_code=settings.BOI_CPI_SERIES_CODE
+    )
+
+
+def get_index_sources(
+    cbs_service: Annotated[CbsIndexService, Depends(get_cbs_index_service)],
+    boi_service: Annotated[BoiIndexService, Depends(get_boi_index_service)],
+) -> list[IndexSource]:
+    """CPI feeds in order of authority. CBS first — it is the publisher lease contracts
+    reference; BOI only answers when CBS cannot."""
+    return [cbs_service, boi_service]
+
+
 def get_cpi_indexing_service(
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
     cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
-    cbs_service: Annotated[CbsIndexService, Depends(get_cbs_index_service)],
+    sources: Annotated[list[IndexSource], Depends(get_index_sources)],
 ) -> CpiIndexingService:
     return CpiIndexingService(
         renter_repository=renter_repository,
         cpi_index_repository=cpi_index_repository,
-        cbs_service=cbs_service,
+        sources=sources,
     )
 
 

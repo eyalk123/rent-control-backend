@@ -281,6 +281,7 @@ def _seed_cpi_lease(db_session):
             (2025, 11, 110.0),  # year 3
             (2026, 6, 112.0),   # latest known now — stands in for the future year 4
         ],
+        source="cbs",
     )
     prop = make_property(db_session)
     renter = make_renter(
@@ -344,7 +345,9 @@ def test_explain_cpi_floor_applies_on_deflation(db_session):
     from app.repositories.cpi_index_repository import CpiIndexRepository
 
     CpiIndexRepository(db_session).upsert_many(
-        120010, [(2023, 11, 100.0), (2024, 11, 92.0)]  # index fell for year 2
+        120010,
+        [(2023, 11, 100.0), (2024, 11, 92.0)],  # index fell for year 2
+        source="cbs",
     )
     prop = make_property(db_session)
     renter = make_renter(
