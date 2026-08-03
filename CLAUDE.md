@@ -23,7 +23,7 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/api/dependencies.py` | All DI factories: auth, repos, services |
 | `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`) |
-| `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion |
+| `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion; `job_runs` records every `/internal/*` invocation (status + summary, no tenant data) so a stalled external scheduler is discoverable — never swept by retention |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations. `export_service.py` builds the `GET /users/me/export` archive: an openpyxl workbook (a sheet per record type) plus the owner's Storage files, degrading to workbook-only if Storage is unavailable |
 | `app/schemas/` | Pydantic schemas: `Create`, `Update`, `Read` variants per domain |
@@ -56,7 +56,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
-| `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them. Schedule `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them |
+| `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them. Prefer scheduling `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them — but it is no longer required: `run-reminders` checks `job_runs` and runs indexing inline if it hasn't run today |
 | `CBS_API_BASE_URL` | No | **Primary** CPI source; default `https://api.cbs.gov.il` (CPI rent linkage) |
 | `CPI_INDEX_ID` | No | CBS series id for CPI linkage; default `120010` (general Consumer Price Index) |
 | `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |

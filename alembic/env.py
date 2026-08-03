@@ -12,6 +12,7 @@ from app.models.cpi_index import CpiIndex
 from app.models.device_token import DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory
+from app.models.job_run import JobRun
 from app.models.notification import Notification
 from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings

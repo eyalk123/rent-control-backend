@@ -281,10 +281,34 @@ The `/internal/*` jobs are **not** self-scheduling — an external scheduler mus
 index itself only updates monthly, but running the job daily costs one request and picks up a new
 reading the day it lands.)
 
-**Schedule `run-cpi-indexing` before `run-reminders`.** The indexing job writes the `cpi_rent_change`
-confirmation as it reprices a lease; the reminders job is what pushes un-pushed rows. In the other
-order the push waits a day. Nothing breaks either way, but the ordering is the difference between
-"your rent changed today" and "your rent changed yesterday".
+**Schedule `run-cpi-indexing` before `run-reminders`** — though it is no longer load-bearing. The
+indexing job writes the `cpi_rent_change` confirmation as it reprices a lease; the reminders job is
+what pushes un-pushed rows. `run-reminders` now checks `job_runs` for a successful indexing run
+today and performs it inline if the scheduler hasn't, so either order produces the same result. Both
+jobs are idempotent, so the catch-up costs a request and nothing else. Keep the order anyway: it
+means the catch-up never fires.
+
+### Knowing whether the jobs ran
+
+Every invocation writes a row to **`job_runs`** — `job_name`, `started_at`, `finished_at`, `status`
+(`ok` / `degraded` / `stale` / `failed`), the endpoint's own response as `summary`, and `error` when
+it raised. Failures are recorded too, because "called and threw" and "never called" both look like
+nothing happening and need telling apart.
+
+This exists because the scheduler is external and unobservable: if it stops, retention stops deleting
+and nothing else notices. The table holds counts and status flags only — no tenant data — and is
+deliberately **not** swept by retention, since the record of whether retention is running has to
+outlive retention's own windows. A `?dry_run=true` retention call is not recorded either: it deletes
+nothing, and counting it would make an unswept database look swept.
+
+Nothing in the app reads the table — it is for querying (the project's Metabase dashboard reads the
+same database). To alert on a stalled scheduler, make the question always return one row, so that
+"never ran at all" is loud rather than empty:
+
+```sql
+select coalesce(extract(epoch from now() - max(finished_at)) / 3600, 9999) as hours_since_success
+from job_runs where job_name = 'retention' and status in ('ok', 'degraded')
+```
 
 `run-cpi-indexing` reads the index from **CBS**, falling back to the **Bank of Israel**'s
 republication of the same series when CBS is unreachable. CBS is the publisher lease escalation
