@@ -1,12 +1,14 @@
 """Tests for device-token registration and the daily reminder push job."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from freezegun import freeze_time
 
 from app.config import settings
+from app.models.notification import NotificationTypeEnum
 from app.models.notification_settings import NotificationSettings
 from app.repositories.device_token_repository import DeviceTokenRepository
+from app.repositories.notification_repository import NotificationRepository
 from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import make_property, make_renter, make_transaction
 
@@ -416,3 +418,140 @@ def test_feed_does_not_dismiss_muted_event(client, db_session):
     db_session.commit()
 
     assert _types(client.get("/notifications")) == ["overdue"]
+
+
+# --- CPI rent change in the feed ---------------------------------------------
+
+
+def _make_cpi_notification(db_session, renter_id, *, offset=0, stage="changed", **data):
+    """A confirmation row exactly as the indexing job writes it."""
+    payload = {
+        "stage": stage,
+        "old_amount": 5000.0,
+        "new_amount": 5500.0,
+        "delta": 500.0,
+        "delta_percent": 10.0,
+        "effective_date": "2026-03-01",
+        "year_index": 1,
+    }
+    payload.update(data)
+    return NotificationRepository(db_session).create(
+        owner_id=OWNER_A,
+        type=NotificationTypeEnum.CPI_RENT_CHANGE,
+        entity_id=renter_id,
+        period_key="2026-03-01",
+        offset=offset,
+        data=payload,
+    )
+
+
+@freeze_time("2026-06-15")
+def test_feed_does_not_dismiss_a_cpi_change(client, db_session):
+    """The regression this type is most likely to hit. A CPI change has no backing
+    candidate by construction — the indexing job writes it — so the feed's
+    resolve-on-read pass must leave it alone instead of wiping it on first read."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2027, 12, 31),
+        payment_day_of_month=28,  # not due -> no overdue row to confuse the assertion
+    )
+    _make_cpi_notification(db_session, renter.id)
+
+    assert _types(client.get("/notifications")) == ["cpi_rent_change"]
+    assert _types(client.get("/notifications")) == ["cpi_rent_change"]  # and again
+
+
+@freeze_time("2026-06-15")
+def test_feed_collapses_a_cpi_group_to_the_confirmation(client, db_session):
+    """The heads-up carried an estimate; once the real amount lands it supersedes it."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2027, 12, 31),
+        payment_day_of_month=28,
+    )
+    _make_cpi_notification(db_session, renter.id, offset=30, stage="upcoming", new_amount=5400.0)
+    _make_cpi_notification(db_session, renter.id, offset=0, stage="changed")
+
+    body = client.get("/notifications").json()
+    assert len(body) == 1
+    assert body[0]["data"]["stage"] == "changed"
+    assert body[0]["data"]["new_amount"] == 5500.0
+
+
+@freeze_time("2026-06-15")
+def test_feed_ages_out_a_cpi_change(client, db_session):
+    """Nothing the user does resolves 'the index moved', so these clear themselves."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2027, 12, 31),
+        payment_day_of_month=28,
+    )
+    row = _make_cpi_notification(db_session, renter.id)
+    row.sent_at = datetime(2026, 4, 1)  # older than the 30-day window
+    db_session.commit()
+
+    assert _types(client.get("/notifications")) == []
+
+
+@freeze_time("2026-06-15")
+def test_run_reminders_digests_multiple_cpi_changes_into_one_push(
+    client, db_session, captured_pushes
+):
+    """The index publishes for the whole portfolio at once. Three changed renters must
+    not become three pushes."""
+    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "ios"})
+    prop = make_property(db_session)
+    for name in ("A", "B", "C"):
+        renter = make_renter(
+            db_session,
+            property_id=prop.id,
+            first_name=name,
+            lease_start=date(2026, 3, 1),
+            lease_end=date(2027, 12, 31),
+            payment_day_of_month=28,
+        )
+        _make_cpi_notification(db_session, renter.id)
+
+    resp = client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
+
+    assert resp.json()["sent"]["pushed"] == 3  # three rows marked pushed...
+    assert len(captured_pushes) == 1           # ...via one message
+    assert captured_pushes[0]["data"]["type"] == "cpi_rent_change"
+    assert "3" in captured_pushes[0]["body"]
+
+
+@freeze_time("2026-06-15")
+def test_run_reminders_pushes_a_single_cpi_change_per_renter(
+    client, db_session, captured_pushes
+):
+    """One change is not a digest — it names the renter and deep-links to them."""
+    client.post("/device-tokens", json={"token": "ExponentPushToken[a]", "platform": "ios"})
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        first_name="Dani",
+        last_name="Cohen",
+        lease_start=date(2026, 3, 1),
+        lease_end=date(2027, 12, 31),
+        payment_day_of_month=28,
+    )
+    _make_cpi_notification(db_session, renter.id)
+
+    client.post("/internal/run-reminders", headers={"X-Cron-Secret": CRON_SECRET})
+
+    assert len(captured_pushes) == 1
+    message = captured_pushes[0]
+    assert "Dani Cohen" in message["body"]
+    assert "₪5,000" in message["body"] and "₪5,500" in message["body"]
+    assert "1 Mar 2026" in message["body"]
+    assert message["data"]["route"] == f"/renters/{renter.id}"

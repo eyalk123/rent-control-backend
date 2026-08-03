@@ -12,6 +12,7 @@ from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.renter import ExpiringRenterRead, OverdueRenterRead, RenterCreate, RenterUpdate
 from app.services.cpi_indexing_service import (
+    IndexReading,
     materialize_cpi_amounts,
     materialize_ruled_lease_years,
 )
@@ -29,6 +30,32 @@ def _lease_years_to_dicts(lease_years) -> list[dict]:
 
 def _encode_lease_years(lease_years) -> str:
     return json.dumps(_lease_years_to_dicts(lease_years))
+
+
+def _carry_forward_readings(
+    incoming: list[dict], stored_raw: str | None, keep: bool
+) -> list[dict]:
+    """Re-attach the server-owned ``cpi_reading`` that the client never sees.
+
+    ``LeaseYear`` deliberately has no ``cpi_reading`` field, so a client can neither read
+    one nor forge one — which also means an incoming payload always arrives without it.
+    Writing that payload straight through would drop every stored reading and silently
+    unfreeze years the tenant has already started paying, so they are carried across by
+    year index.
+
+    ``keep=False`` when ``lease_start`` is being changed: every anniversary moves, so the
+    stored readings are for the wrong months and must be dropped and re-derived.
+    """
+    if not keep or not stored_raw:
+        return incoming
+    try:
+        stored = json.loads(stored_raw)
+    except (json.JSONDecodeError, TypeError):
+        return incoming
+    for i, year in enumerate(incoming):
+        if i < len(stored) and isinstance(stored[i], dict) and "cpi_reading" in stored[i]:
+            year["cpi_reading"] = stored[i]["cpi_reading"]
+    return incoming
 
 
 def _payment_interval_months(number_of_payments: int | None) -> int:
@@ -63,10 +90,18 @@ class RenterService:
         self.activity_log_repository = activity_log_repository
 
     def _index_lookup(self):
+        """Same reading-aware lookup the indexing job uses, so an amount computed on
+        create/update and one computed by the job agree — including on which month the
+        year resolved against, which is what makes the freeze stick."""
         if self.cpi_index_repository is None:
             return lambda d: None
         index_id = settings.CPI_INDEX_ID
-        return lambda d: self.cpi_index_repository.latest_on_or_before(index_id, d)  # noqa: E731
+
+        def lookup(d: date):
+            row = self.cpi_index_repository.reading_on_or_before(index_id, d)
+            return IndexReading(row.year, row.month, row.value) if row else None
+
+        return lookup
 
     def _resolve_lease_year_amounts(
         self,
@@ -200,7 +235,11 @@ class RenterService:
             # for `cpi`, the per-year rule walk for `custom`. Re-materialize from the
             # incoming years if provided, else the stored ones for structure.
             if "lease_years" in update_dict:
-                lease_years_dicts = _lease_years_to_dicts(data.lease_years)
+                lease_years_dicts = _carry_forward_readings(
+                    _lease_years_to_dicts(data.lease_years),
+                    renter.lease_years,
+                    keep="lease_start" not in update_dict,
+                )
             else:
                 lease_years_dicts = json.loads(renter.lease_years) if renter.lease_years else []
             recompute_base_index = (

@@ -28,11 +28,12 @@ def income_expense_report(
     repo: Annotated[ReportExportRepository, Depends(get_report_export_repository)],
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
+    lang: str = Query("en", pattern="^(en|he)$"),
 ):
     data = get_income_expense_data(db, current_user["user_id"], year)
 
     if format == "csv":
-        content = generate_income_expense_csv(data).encode("utf-8-sig")
+        content = generate_income_expense_csv(data, lang).encode("utf-8-sig")
         repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="csv"))
         return Response(
             content=content,
@@ -40,7 +41,7 @@ def income_expense_report(
             headers={"Content-Disposition": f'attachment; filename="income-expense-{year}.csv"'},
         )
 
-    content = generate_income_expense_pdf(data)
+    content = generate_income_expense_pdf(data, lang)
     repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf"))
     return Response(
         content=content,
@@ -56,11 +57,12 @@ def expense_log_report(
     repo: Annotated[ReportExportRepository, Depends(get_report_export_repository)],
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
+    lang: str = Query("en", pattern="^(en|he)$"),
 ):
-    data = get_expense_log_data(db, current_user["user_id"], year)
+    data = get_expense_log_data(db, current_user["user_id"], year, lang)
 
     if format == "csv":
-        content = generate_expense_log_csv(data).encode("utf-8-sig")
+        content = generate_expense_log_csv(data, lang).encode("utf-8-sig")
         repo.create(ReportExport(owner_id=current_user["user_id"], report_type="expense_log", year=year, format="csv"))
         return Response(
             content=content,
@@ -68,7 +70,7 @@ def expense_log_report(
             headers={"Content-Disposition": f'attachment; filename="expense-log-{year}.csv"'},
         )
 
-    content = generate_expense_log_pdf(data)
+    content = generate_expense_log_pdf(data, lang)
     repo.create(ReportExport(owner_id=current_user["user_id"], report_type="expense_log", year=year, format="pdf"))
     return Response(
         content=content,

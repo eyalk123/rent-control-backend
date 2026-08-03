@@ -201,18 +201,6 @@ def get_index_sources(
     return [cbs_service, boi_service]
 
 
-def get_cpi_indexing_service(
-    renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
-    cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
-    sources: Annotated[list[IndexSource], Depends(get_index_sources)],
-) -> CpiIndexingService:
-    return CpiIndexingService(
-        renter_repository=renter_repository,
-        cpi_index_repository=cpi_index_repository,
-        sources=sources,
-    )
-
-
 def get_expense_category_repository(
     db: Annotated[Session, Depends(get_db)],
 ) -> ExpenseCategoryRepository:
@@ -304,6 +292,29 @@ def get_notification_rule_repository(
     return NotificationRuleRepository(db)
 
 
+def get_cpi_indexing_service(
+    renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+    cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
+    sources: Annotated[list[IndexSource], Depends(get_index_sources)],
+    notification_repository: Annotated[
+        NotificationRepository, Depends(get_notification_repository)
+    ],
+    notification_settings_repository: Annotated[
+        NotificationSettingsRepository, Depends(get_notification_settings_repository)
+    ],
+) -> CpiIndexingService:
+    # Defined here rather than beside the other CPI factories because it needs the
+    # notification repositories: the indexing job raises the confirmation half of the
+    # cpi_rent_change alert as it writes.
+    return CpiIndexingService(
+        renter_repository=renter_repository,
+        cpi_index_repository=cpi_index_repository,
+        sources=sources,
+        notification_repository=notification_repository,
+        settings_repository=notification_settings_repository,
+    )
+
+
 def get_notification_engine(
     rule_repository: Annotated[NotificationRuleRepository, Depends(get_notification_rule_repository)],
     settings_repository: Annotated[
@@ -311,12 +322,14 @@ def get_notification_engine(
     ],
     renter_service: Annotated[RenterService, Depends(get_renter_service)],
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+    cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
 ) -> NotificationEngine:
     return NotificationEngine(
         rule_repository=rule_repository,
         settings_repository=settings_repository,
         renter_service=renter_service,
         renter_repository=renter_repository,
+        cpi_index_repository=cpi_index_repository,
     )
 
 

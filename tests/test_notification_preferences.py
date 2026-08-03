@@ -154,3 +154,38 @@ def test_rule_preview(client, db_session):
     })
     assert resp.status_code == 200
     assert resp.json() == {"matched_renters": 1, "estimated_alerts": 2}
+
+
+# ── CPI change: mute + threshold, but no rules ───────────────────────────────
+
+def test_cpi_threshold_defaults_and_round_trips(client):
+    settings = client.get("/notification-preferences").json()["settings"]
+    assert settings["cpi_min_change_amount"] == 10.0
+    assert settings["cpi_min_change_percent"] == 0.5
+
+    resp = client.put(
+        "/notification-preferences/settings",
+        json={"cpi_min_change_amount": 50, "cpi_min_change_percent": 1.5},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["cpi_min_change_amount"] == 50.0
+    assert resp.json()["cpi_min_change_percent"] == 1.5
+    # ...and the untouched fields survive the partial update.
+    assert resp.json()["master_enabled"] is True
+
+
+def test_cpi_threshold_rejects_a_negative(client):
+    resp = client.put(
+        "/notification-preferences/settings", json={"cpi_min_change_amount": -5}
+    )
+    assert resp.status_code == 422
+
+
+def test_cpi_change_cannot_have_rules(client):
+    """Offsets and scope have nothing to say about 'the index moved'. The clients hide
+    the event; this stops a hand-rolled request creating a rule the engine ignores."""
+    resp = client.post(
+        "/notification-rules", json={"event_type": "cpi_rent_change", "offsets": [30]}
+    )
+    assert resp.status_code == 400
+    assert client.get("/notification-preferences").json()["rules"] == []

@@ -63,6 +63,9 @@ class ExpenseLogReportResponse(BaseModel):
     categories: list[str]  # ordered list of all category names
     grand_total_by_category: dict[str, Decimal]
     grand_total: Decimal
+    # True when at least one expense carries more than one category, so the report can state
+    # that the pivot counts such expenses under their primary category only.
+    has_multi_category: bool = False
 
 
 class ReportExportRead(BaseModel):

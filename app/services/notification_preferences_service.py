@@ -6,6 +6,8 @@ so repositories and the engine deal in plain columns.
 """
 import json
 
+from fastapi import HTTPException
+
 from app.models.notification import NotificationTypeEnum
 from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings
@@ -13,7 +15,7 @@ from app.repositories.notification_rule_repository import NotificationRuleReposi
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
-from app.services.notification_engine import NotificationEngine
+from app.services.notification_engine import RULE_EXEMPT_EVENTS, NotificationEngine
 
 # Rule fields that are stored as JSON text but exposed as lists.
 _RULE_LIST_FIELDS = (
@@ -40,8 +42,10 @@ class NotificationPreferencesService:
         return self.settings_repository.get_or_create(owner_id)
 
     def update_settings(self, owner_id: str, data: dict) -> NotificationSettings:
-        update = dict(data)
-        if "muted_events" in update and update["muted_events"] is not None:
+        # An explicit `null` would write NULL into a NOT NULL column; treat it the same
+        # as omitting the field.
+        update = {k: v for k, v in data.items() if v is not None}
+        if "muted_events" in update:
             update["muted_events"] = json.dumps(update["muted_events"])
         return self.settings_repository.update(owner_id, update)
 
@@ -50,6 +54,17 @@ class NotificationPreferencesService:
         return self.rule_repository.list_by_owner(owner_id)
 
     def create_rule(self, owner_id: str, data: dict) -> NotificationRule:
+        event = data.get("event_type")
+        if event in RULE_EXEMPT_EVENTS:
+            # Offsets and scope describe "how long before a date I know about" — a CPI
+            # change fires when the index moves, so a rule has nothing to express. The
+            # clients hide it; this stops a hand-rolled request creating a rule that
+            # would then be silently ignored by the engine.
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{getattr(event, 'value', event)}' is configured by mute and "
+                "threshold only, not by rules",
+            )
         payload = self._serialize_lists(data)
         rule = NotificationRule(owner_id=owner_id, **payload)
         return self.rule_repository.create(rule)

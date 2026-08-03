@@ -22,9 +22,16 @@ from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
 from app.repositories.renter_repository import RenterRepository
-from app.services.notification_engine import Candidate, NotificationEngine
+from app.services import cpi_rent_change as cpi
+from app.services.notification_engine import (
+    NON_RESOLVING_EVENTS,
+    Candidate,
+    NotificationEngine,
+)
 from app.services.notification_messages import (
     normalize_locale,
+    render_cpi_digest,
+    render_cpi_rent_change,
     render_lease_expiring,
     render_overdue,
 )
@@ -86,6 +93,7 @@ class ReminderService:
         engine produced this run."""
         candidates = self.engine.evaluate_owner(owner_id, today)
         self._dismiss_resolved(owner_id, candidates)
+        self._dismiss_expired(owner_id)
         created: list[tuple[Notification, Candidate]] = []
         for cand in candidates:
             if self.notification_repository.was_generated(
@@ -113,6 +121,15 @@ class ReminderService:
             (c.type, c.renter_id, c.period_key): c.data for c in candidates
         }
 
+    def _dismiss_expired(self, owner_id: str) -> None:
+        """Age out the event types nothing can resolve, so the feed doesn't accumulate
+        a permanent history of past rent changes."""
+        self.notification_repository.dismiss_expired(
+            owner_id,
+            list(NON_RESOLVING_EVENTS),
+            before=datetime.utcnow() - timedelta(days=cpi.AUTO_DISMISS_DAYS),
+        )
+
     def _dismiss_resolved(
         self, owner_id: str, candidates: list[Candidate]
     ) -> None:
@@ -124,8 +141,14 @@ class ReminderService:
 
         Only event types that are actually in effect are reconciled: a muted event
         or an account-wide disable also yields zero candidates, and we must not treat
-        that as 'everything resolved' and wipe the feed."""
-        active_events = self.engine.active_event_types(owner_id)
+        that as 'everything resolved' and wipe the feed.
+
+        ``NON_RESOLVING_EVENTS`` is excluded for a different reason: a CPI rent change
+        is a fact about a moment, not a condition that can stop holding, and its
+        confirmation stage has no backing candidate *by construction* — the indexing
+        job emits it. Reconciling it would dismiss every one on the first feed read.
+        Those age out via :meth:`_dismiss_expired` instead."""
+        active_events = self.engine.active_event_types(owner_id) - NON_RESOLVING_EVENTS
         if not active_events:
             return
         live = {(c.type, c.renter_id, c.period_key) for c in candidates}
@@ -165,9 +188,14 @@ class ReminderService:
         if not tokens_by_locale:
             return 0
 
+        # The index publishes for the whole portfolio at once, so CPI rows arrive in a
+        # burst and are digested into one push. Every other type stays one push per row.
+        cpi_rows = [r for r in rows if r.type == NotificationTypeEnum.CPI_RENT_CHANGE]
+        other_rows = [r for r in rows if r.type != NotificationTypeEnum.CPI_RENT_CHANGE]
+
         messages: list[dict] = []
         pushed_ids: list[int] = []
-        for row in rows:
+        for row in other_rows + (cpi_rows if len(cpi_rows) == 1 else []):
             renter = self.renter_repository.get_by_id(row.entity_id)
             if renter is None:  # renter deleted — skip the dangling notification
                 continue
@@ -185,12 +213,35 @@ class ReminderService:
                 )
             pushed_ids.append(row.id)
 
+        if len(cpi_rows) > 1:
+            messages.extend(self._cpi_digest(cpi_rows, tokens_by_locale))
+            pushed_ids.extend(r.id for r in cpi_rows)
+
         self.push_service.send_messages(messages)
         self.notification_repository.mark_pushed(pushed_ids)
         return len(pushed_ids)
 
     @staticmethod
+    def _cpi_digest(
+        cpi_rows: list[Notification], tokens_by_locale: dict[str, list[str]]
+    ) -> list[dict]:
+        """One message per locale covering every CPI change in this run. It counts
+        *renters*, not rows, so a renter that got both stages isn't counted twice.
+        Opens the feed rather than a renter, since it is about several of them."""
+        count = len({r.entity_id for r in cpi_rows})
+        data = {"type": NotificationTypeEnum.CPI_RENT_CHANGE.value, "route": "/notifications"}
+        out: list[dict] = []
+        for locale, tokens in tokens_by_locale.items():
+            title, body = render_cpi_digest(locale, count=count)
+            out.extend({"to": t, "title": title, "body": body, "data": data} for t in tokens)
+        return out
+
+    @staticmethod
     def _render(row: Notification, locale: str, label: str) -> tuple[str, str]:
+        if row.type == NotificationTypeEnum.CPI_RENT_CHANGE:
+            return render_cpi_rent_change(
+                locale, label=label, data=json.loads(row.data) if row.data else {}
+            )
         if row.type == NotificationTypeEnum.LEASE_EXPIRING:
             data = json.loads(row.data) if row.data else {}
             return render_lease_expiring(

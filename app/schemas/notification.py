@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.notification import NotificationTypeEnum
 
@@ -46,6 +46,8 @@ class NotificationRead(BaseModel):
 class NotificationSettingsRead(BaseModel):
     master_enabled: bool
     muted_events: list[str]
+    cpi_min_change_amount: float
+    cpi_min_change_percent: float
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -58,6 +60,8 @@ class NotificationSettingsRead(BaseModel):
 class NotificationSettingsUpdate(BaseModel):
     master_enabled: Optional[bool] = None
     muted_events: Optional[list[str]] = None
+    cpi_min_change_amount: Optional[float] = Field(default=None, ge=0)
+    cpi_min_change_percent: Optional[float] = Field(default=None, ge=0)
 
 
 # ── rules ─────────────────────────────────────────────────────────────────

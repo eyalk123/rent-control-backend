@@ -2,9 +2,12 @@
 import json
 from datetime import date, timedelta
 
+from dateutil.relativedelta import relativedelta
 from freezegun import freeze_time
 
+from app.config import settings
 from app.models.notification import NotificationTypeEnum
+from app.repositories.cpi_index_repository import CpiIndexRepository, reference_period
 from app.repositories.notification_rule_repository import NotificationRuleRepository
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
@@ -28,6 +31,53 @@ def _engine(db_session) -> NotificationEngine:
         renter_service=RenterService(renter_repo, PropertyRepository(db_session)),
         renter_repository=renter_repo,
     )
+
+
+def _cpi_engine(db_session) -> NotificationEngine:
+    """The engine with the index cache wired — without it the CPI heads-up is a no-op,
+    which is what every other test in this file relies on."""
+    renter_repo = RenterRepository(db_session)
+    return NotificationEngine(
+        rule_repository=NotificationRuleRepository(db_session),
+        settings_repository=NotificationSettingsRepository(db_session),
+        renter_service=RenterService(renter_repo, PropertyRepository(db_session)),
+        renter_repository=renter_repo,
+        cpi_index_repository=CpiIndexRepository(db_session),
+    )
+
+
+def _seed_index(db_session, value: float):
+    """A reading for the month that is *known* on TODAY, so it is what the heads-up
+    picks up as its proxy for the not-yet-published anniversary index."""
+    year, month = reference_period(TODAY)
+    CpiIndexRepository(db_session).upsert_many(
+        settings.CPI_INDEX_ID, [(year, month, value)], source="cbs"
+    )
+
+
+def _make_cpi_renter(db_session, property_id, *, anniversary_in_days=16, years=3, **kw):
+    """A CPI lease whose *next* anniversary lands ``anniversary_in_days`` from TODAY."""
+    lease_start = TODAY + timedelta(days=anniversary_in_days) - relativedelta(years=1)
+    kw.setdefault("rent_escalation_mode", "cpi")
+    return make_renter(
+        db_session,
+        property_id=property_id,
+        lease_start=lease_start,
+        lease_end=lease_start + relativedelta(years=years),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        payment_day_of_month=28,  # not yet due -> no overdue noise
+        lease_years=[{"amount": 5000.0, "type": "contract"} for _ in range(years)],
+        **kw,
+    )
+
+
+def _cpi_candidates(db_session):
+    return [
+        c
+        for c in _cpi_engine(db_session).evaluate_owner(OWNER_A, TODAY)
+        if c.type == NotificationTypeEnum.CPI_RENT_CHANGE
+    ]
 
 
 def _make_overdue(db_session, property_id, payment_day=14, **kw):
@@ -172,3 +222,105 @@ def test_preview_counts_matched_and_estimated(db_session):
     )
     assert result["matched_renters"] == 1
     assert result["estimated_alerts"] == 2  # both offsets land within the 90-day horizon
+
+
+# --- CPI rent change: the heads-up stage -------------------------------------
+#
+# Only the heads-up is the engine's job. The confirmation is emitted by the indexing
+# job (see tests/test_cpi_indexing.py) because the old amount exists only at that
+# instant.
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_fires_inside_the_lead_window(db_session):
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)  # +10% since the base index of 100
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=16)
+
+    cands = _cpi_candidates(db_session)
+
+    assert len(cands) == 1
+    assert cands[0].offset == 30
+    assert cands[0].period_key == (TODAY + timedelta(days=16)).isoformat()
+    assert cands[0].data["stage"] == "upcoming"
+    assert cands[0].data["old_amount"] == 5000.0
+    assert cands[0].data["new_amount"] == 5500  # 5000 x 110/100
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_silent_outside_the_lead_window(db_session):
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=40)
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_respects_the_materiality_threshold(db_session):
+    prop = make_property(db_session)
+    # +0.3% -> ₪15 on ₪5,000, under the 0.5% (₪25) floor.
+    _seed_index(db_session, 100.3)
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=16)
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_honours_a_lowered_threshold(db_session):
+    prop = make_property(db_session)
+    _seed_index(db_session, 100.3)
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=16)
+    NotificationSettingsRepository(db_session).update(
+        OWNER_A, {"cpi_min_change_amount": 5.0, "cpi_min_change_percent": 0.1}
+    )
+
+    assert len(_cpi_candidates(db_session)) == 1
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_is_muteable(db_session):
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=16)
+    NotificationSettingsRepository(db_session).update(
+        OWNER_A, {"muted_events": json.dumps(["cpi_rent_change"])}
+    )
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_silent_on_the_final_lease_year(db_session):
+    """Nothing left to reprice — the lease ends before another anniversary."""
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=16, years=1)
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_ignores_non_indexed_leases(db_session):
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    _make_cpi_renter(
+        db_session, prop.id, anniversary_in_days=16, rent_escalation_mode="percent"
+    )
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
+def test_cpi_rules_are_not_previewable(db_session):
+    """The event has no rule editor, so a preview must not imply one exists."""
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    _make_cpi_renter(db_session, prop.id, anniversary_in_days=16)
+
+    result = _cpi_engine(db_session).preview_rule(
+        owner_id=OWNER_A,
+        event_type=NotificationTypeEnum.CPI_RENT_CHANGE,
+        offsets=[30],
+    )
+    assert result == {"matched_renters": 0, "estimated_alerts": 0}

@@ -3,20 +3,42 @@ indexing job."""
 import json
 from datetime import date
 
+from dateutil.relativedelta import relativedelta
+
 from app.repositories.cpi_index_repository import CpiIndexRepository, reference_period
 from app.repositories.renter_repository import RenterRepository
 from app.services import index_source
 from app.services.boi_index_service import BoiIndexService
 from app.services.cpi_indexing_service import (
     CpiIndexingService,
+    IndexReading,
     compute_cpi_amount,
     has_cpi_rule,
+    is_frozen,
     materialize_cpi_amounts,
     materialize_ruled_lease_years,
 )
 from tests.factories import make_renter
 
 INDEX_ID = 120010
+
+
+def _reading_lookup(by_year: dict, offset: int = 0):
+    """A fake ``IndexLookup`` keyed by the anniversary's calendar year.
+
+    Each hit is stamped with ``reference_period(d)`` — the month that anniversary
+    *should* resolve against — so amounts derived through it look finalized to
+    :func:`is_frozen`, which is the normal case. Pass a lookup built by hand to
+    simulate a stale stand-in reading."""
+
+    def lookup(d: date):
+        value = by_year.get(d.year - offset)
+        if value is None:
+            return None
+        year, month = reference_period(d)
+        return IndexReading(year, month, value)
+
+    return lookup
 
 
 class FakeSource:
@@ -68,9 +90,7 @@ def test_materialize_amounts_multiyear_with_floor():
     lease_start = date(2020, 1, 1)
     # index by contract-year anniversary: up, down, back up.
     index_by_year = {0: 100.0, 1: 110.0, 2: 90.0, 3: 110.0}
-
-    def lookup(d: date):
-        return index_by_year[d.year - 2020]
+    lookup = _reading_lookup(index_by_year, offset=2020)
 
     years = [{"amount": 5000, "type": "contract"} for _ in range(4)]
     out = materialize_cpi_amounts(years, lease_start, 5000, base_index=100.0, index_lookup=lookup)
@@ -122,9 +142,7 @@ def test_ruled_years_chained_cpi_indexes_off_the_previous_year():
     index_by_year = {2026: 100.0, 2027: 110.0, 2028: 121.0}
     years = [_year(5000), _year(0, {"mode": "cpi"}), _year(0, {"mode": "cpi"})]
 
-    out = materialize_ruled_lease_years(
-        years, lease_start, 5000, lambda d: index_by_year.get(d.year)
-    )
+    out = materialize_ruled_lease_years(years, lease_start, 5000, _reading_lookup(index_by_year))
     # Each CPI year moves by that year's index change, not the whole-lease ratio.
     assert [y["amount"] for y in out] == [5000, 5500, 6050]
 
@@ -134,9 +152,7 @@ def test_ruled_years_chained_cpi_floors_at_previous_year():
     index_by_year = {2026: 100.0, 2027: 90.0}  # deflation
     years = [_year(5000), _year(0, {"mode": "cpi"})]
 
-    out = materialize_ruled_lease_years(
-        years, lease_start, 5000, lambda d: index_by_year.get(d.year)
-    )
+    out = materialize_ruled_lease_years(years, lease_start, 5000, _reading_lookup(index_by_year))
     assert [y["amount"] for y in out] == [5000, 5000]  # never decreases
 
 
@@ -151,9 +167,7 @@ def test_ruled_years_percent_after_cpi_steps_off_the_resolved_cpi_amount():
         _year(0, {"mode": "percent", "value": 5}),
     ]
 
-    out = materialize_ruled_lease_years(
-        years, lease_start, 5000, lambda d: index_by_year.get(d.year)
-    )
+    out = materialize_ruled_lease_years(years, lease_start, 5000, _reading_lookup(index_by_year))
     # 5000 -> CPI +10% -> 5500 -> +5% -> 5775 (not 5250, which is 5% on the base)
     assert [y["amount"] for y in out] == [5000, 5500, 5775]
 
@@ -170,16 +184,14 @@ def test_ruled_years_unpublished_cpi_projects_flat_then_self_heals():
     # percent year downstream steps off that projection.
     unpublished = {2026: 100.0}
     projected = materialize_ruled_lease_years(
-        years, lease_start, 5000, lambda d: unpublished.get(d.year)
+        years, lease_start, 5000, _reading_lookup(unpublished)
     )
     assert [y["amount"] for y in projected] == [5000, 5000, 5250]
 
     # Once the reading lands, a later job run recomputes the whole walk — including the
     # downstream percent year.
     published = {2026: 100.0, 2027: 110.0}
-    healed = materialize_ruled_lease_years(
-        years, lease_start, 5000, lambda d: published.get(d.year)
-    )
+    healed = materialize_ruled_lease_years(years, lease_start, 5000, _reading_lookup(published))
     assert [y["amount"] for y in healed] == [5000, 5500, 5775]
 
 
@@ -197,6 +209,118 @@ def test_has_cpi_rule():
     assert has_cpi_rule([_year(5000), _year(0, {"mode": "cpi"})]) is True
     assert has_cpi_rule([_year(5000), _year(0, {"mode": "percent", "value": 3})]) is False
     assert has_cpi_rule([_year(5000), _year(5000)]) is False  # legacy, rule-less
+
+
+# --- the freeze: a started year's rent stops moving --------------------------
+#
+# Dates are relative to today so the "has this year started" half of the rule is
+# exercised for real rather than against a hard-coded calendar.
+
+
+def _anniv_reading(anniversary: date, value: float) -> dict:
+    """The stored reading a year *correctly* resolved against — i.e. the exact
+    known-index month for its anniversary."""
+    year, month = reference_period(anniversary)
+    return {"year": year, "month": month, "value": value}
+
+
+def _noisy(value: float):
+    """A lookup that answers every anniversary with ``value``, correctly stamped. Used
+    to prove a frozen year ignores the cache entirely."""
+    return lambda d: IndexReading(*reference_period(d), value)
+
+
+def test_started_year_is_frozen_against_index_noise():
+    today = date.today()
+    lease_start = today - relativedelta(years=2)
+    years = [
+        {
+            "amount": 5000,
+            "type": "contract",
+            "cpi_reading": _anniv_reading(lease_start, 100.0),
+        },
+        {
+            "amount": 5500,
+            "type": "contract",
+            "cpi_reading": _anniv_reading(lease_start + relativedelta(years=1), 110.0),
+        },
+    ]
+
+    out = materialize_cpi_amounts(years, lease_start, 5000, 100.0, _noisy(200.0))
+    assert [y["amount"] for y in out] == [5000, 5500]  # the cache doubled; rent did not
+
+    # ...unless an authoritative source superseded the readings these were derived from.
+    forced = materialize_cpi_amounts(
+        years, lease_start, 5000, 100.0, _noisy(200.0), force_recompute=True
+    )
+    assert [y["amount"] for y in forced] == [10000, 10000]
+
+
+def test_year_resolved_against_a_stale_month_keeps_healing_then_freezes():
+    """The outage case: a started year anchored to an older stand-in month is a
+    known-wrong number, so it must NOT freeze until the right reading lands."""
+    today = date.today()
+    lease_start = today - relativedelta(years=2)
+    anniversary = lease_start + relativedelta(years=1)
+    stale_year, stale_month = reference_period(anniversary - relativedelta(months=2))
+    years = [
+        {
+            "amount": 5000,
+            "type": "contract",
+            "cpi_reading": _anniv_reading(lease_start, 100.0),
+        },
+        {
+            "amount": 5100,
+            "type": "contract",
+            "cpi_reading": {"year": stale_year, "month": stale_month, "value": 102.0},
+        },
+    ]
+
+    out = materialize_cpi_amounts(years, lease_start, 5000, 100.0, _noisy(110.0))
+
+    assert out[0]["amount"] == 5000  # correctly anchored -> untouched
+    assert out[1]["amount"] == 5500  # stale stand-in -> recomputed
+    assert out[1]["cpi_reading"] == _anniv_reading(anniversary, 110.0)
+    assert is_frozen(out[1], anniversary, today) is True  # and settled from here on
+
+
+def test_future_year_never_freezes():
+    today = date.today()
+    lease_start = today - relativedelta(months=1)
+    anniversary = lease_start + relativedelta(years=1)
+    year = {"amount": 5000, "type": "contract", "cpi_reading": _anniv_reading(anniversary, 100.0)}
+
+    assert is_frozen(year, anniversary, today) is False
+
+
+def test_deterministic_years_never_freeze():
+    """No ``cpi_reading`` means no freeze — which is what keeps a percent year in a
+    custom lease recomputing after the CPI year above it resolves."""
+    today = date.today()
+    lease_start = today - relativedelta(years=3)
+    percent_year = _year(0, {"mode": "percent", "value": 3})
+
+    assert is_frozen(percent_year, lease_start + relativedelta(years=1), today) is False
+
+
+def test_frozen_cpi_year_still_feeds_the_forward_walk():
+    today = date.today()
+    lease_start = today - relativedelta(years=3)
+    years = [
+        _year(5000),
+        {
+            "amount": 5500,
+            "type": "contract",
+            "rule": {"mode": "cpi"},
+            "cpi_reading": _anniv_reading(lease_start + relativedelta(years=1), 110.0),
+        },
+        _year(0, {"mode": "percent", "value": 5}),
+    ]
+
+    out = materialize_ruled_lease_years(years, lease_start, 5000, _noisy(200.0))
+
+    # The CPI year holds at its frozen amount, and the percent year still steps off it.
+    assert [y["amount"] for y in out] == [5000, 5500, 5775]
 
 
 # --- known-index lookup (publication convention) -----------------------------

@@ -76,10 +76,10 @@ Latin-1 only and raises on the first Hebrew character.
 | `/properties`, `/renters`, `/transactions` | Core CRUD |
 | `/suppliers`, `/expense-categories` | Supporting records |
 | `/users` | Owner profile, account deletion, and `me/export` — a ZIP of the owner's records (one .xlsx workbook) plus their uploaded files |
-| `/reports` | `income-expense`, `expense-log`, and export `history` |
+| `/reports` | `income-expense`, `expense-log` (both `?format=pdf\|csv` and `?lang=en\|he` — `he` renders the report in Hebrew, right-to-left), and export `history` |
 | `/extract/lease` | AI lease extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
-| `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration |
+| `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration. Three event types: `overdue`, `lease_expiring`, `cpi_rent_change` (the last has no rules — mute + materiality threshold instead) |
 | `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-retention` (`?dry_run=true` supported) — cron-triggered, guarded by a shared secret |
 | `/health` | Unauthenticated liveness check |
 
@@ -281,6 +281,11 @@ The `/internal/*` jobs are **not** self-scheduling — an external scheduler mus
 index itself only updates monthly, but running the job daily costs one request and picks up a new
 reading the day it lands.)
 
+**Schedule `run-cpi-indexing` before `run-reminders`.** The indexing job writes the `cpi_rent_change`
+confirmation as it reprices a lease; the reminders job is what pushes un-pushed rows. In the other
+order the push waits a day. Nothing breaks either way, but the ordering is the difference between
+"your rent changed today" and "your rent changed yesterday".
+
 `run-cpi-indexing` reads the index from **CBS**, falling back to the **Bank of Israel**'s
 republication of the same series when CBS is unreachable. CBS is the publisher lease escalation
 clauses actually reference, so it is always tried first and its readings supersede the fallback's;
@@ -291,6 +296,13 @@ still returns 200 with `degraded: true` — the readings are correct, so nothing
 month.** That is the alarm worth wiring up: the fetch itself is best-effort and never raises, so
 without this check a completely dead feed keeps returning 200 while every CPI-linked rent silently
 stops tracking the index.
+
+Each lease year records the index reading it resolved against (`cpi_reading` inside the `lease_years`
+blob, server-owned and invisible to clients). Once a year has *started* and resolved against its own
+known-index month it is **frozen** and never recomputed — so a later reading cannot retroactively
+change rent a tenant has begun paying. Two exceptions: a year anchored to an older stand-in month
+keeps self-healing until the right reading lands, and a source upgrade (CBS superseding a BOI value)
+re-derives everything downstream of the provisional figure.
 
 > **Before scheduling `run-retention` for the first time, dry-run it.** The first real run deletes
 > everything already older than each window, which on an existing database can be a lot and cannot

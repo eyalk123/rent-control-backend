@@ -56,7 +56,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
-| `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them |
+| `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them. Schedule `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them |
 | `CBS_API_BASE_URL` | No | **Primary** CPI source; default `https://api.cbs.gov.il` (CPI rent linkage) |
 | `CPI_INDEX_ID` | No | CBS series id for CPI linkage; default `120010` (general Consumer Price Index) |
 | `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |

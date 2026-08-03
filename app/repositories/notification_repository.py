@@ -97,6 +97,31 @@ class NotificationRepository:
         self.session.commit()
         return result.rowcount or 0
 
+    def dismiss_expired(
+        self, owner_id: str, types: list[NotificationTypeEnum], before: datetime
+    ) -> int:
+        """Dismiss live rows of ``types`` generated before ``before``.
+
+        For the age-out of event types nothing can resolve. Rent-due and lease-expiring
+        clear themselves when the rent is paid or the lease extended; "the index moved"
+        has no such counterpart, so those rows would otherwise sit in the feed forever.
+        """
+        if not types:
+            return 0
+        stmt = (
+            update(Notification)
+            .where(
+                Notification.owner_id == owner_id,
+                Notification.type.in_(types),
+                Notification.dismissed_at.is_(None),
+                Notification.sent_at < before,
+            )
+            .values(dismissed_at=datetime.utcnow())
+        )
+        result = self.session.execute(stmt)
+        self.session.commit()
+        return result.rowcount or 0
+
     def get_for_owner(self, notification_id: int, owner_id: str) -> Notification | None:
         stmt = select(Notification).where(
             Notification.id == notification_id,

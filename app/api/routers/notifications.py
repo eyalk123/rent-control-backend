@@ -31,12 +31,22 @@ def _fresh_data(n: Notification, live_data: dict[tuple, dict]) -> dict:
     return data
 
 
+# Types whose group winner is the *lowest* offset. For a lease that is the soonest
+# reminder; for a CPI change it is the confirmation (offset 0), which supersedes the
+# estimate the heads-up (offset 30) carried.
+_LOWEST_OFFSET_WINS = (
+    NotificationTypeEnum.LEASE_EXPIRING,
+    NotificationTypeEnum.CPI_RENT_CHANGE,
+)
+
+
 def _collapse(rows: list[Notification]) -> list[tuple[Notification, bool]]:
     """Reduce rows sharing (type, renter, period) to the single most-urgent one:
     the latest reminder for overdue (highest offset), the soonest for an expiring
-    lease (lowest offset). Returns each winner paired with whether the whole group
-    is read (the item stays unread until every offset in it has been seen). Input
-    is newest-first; that order is preserved for the winners."""
+    lease or the confirmed amount for a CPI change (lowest offset). Returns each
+    winner paired with whether the whole group is read (the item stays unread until
+    every offset in it has been seen). Input is newest-first; that order is preserved
+    for the winners."""
     groups: dict[tuple, list[Notification]] = {}
     order: list[tuple] = []
     for n in rows:
@@ -49,7 +59,7 @@ def _collapse(rows: list[Notification]) -> list[tuple[Notification, bool]]:
     out: list[tuple[Notification, bool]] = []
     for key in order:
         members = groups[key]
-        if key[0] == NotificationTypeEnum.LEASE_EXPIRING:
+        if key[0] in _LOWEST_OFFSET_WINS:
             winner = min(members, key=lambda m: m.offset)
         else:
             winner = max(members, key=lambda m: m.offset)

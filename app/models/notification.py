@@ -17,6 +17,7 @@ from app.models.base import Base
 class NotificationTypeEnum(str, enum.Enum):
     OVERDUE = "overdue"
     LEASE_EXPIRING = "lease_expiring"
+    CPI_RENT_CHANGE = "cpi_rent_change"
 
 
 class Notification(Base):
@@ -24,9 +25,14 @@ class Notification(Base):
     the push that was (or will be) sent for it.
 
     One row per logical notification. ``period_key`` + ``offset`` make
-    "once per reminder" concrete: the current ``YYYY-MM`` for overdue rent or
-    the ISO ``lease_end`` date for an expiring lease, paired with the rule offset
+    "once per reminder" concrete: the current ``YYYY-MM`` for overdue rent, the
+    ISO ``lease_end`` date for an expiring lease, or the ISO anniversary of the
+    lease year being repriced for a CPI rent change — paired with the rule offset
     so a 90-day and a 30-day reminder for the same lease are distinct rows.
+
+    ``cpi_rent_change`` reuses that key for its two stages rather than needing a
+    second type: offset ``30`` is the heads-up before the anniversary and offset
+    ``0`` the confirmation once the amount is set.
 
     ``sent_at`` is when the row was generated; ``pushed_at`` records the push
     delivery attempt; ``read_at`` / ``dismissed_at`` track in-app state.

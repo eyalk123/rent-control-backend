@@ -11,12 +11,23 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.config import settings as app_settings
 from app.models.notification import NotificationTypeEnum
+from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.notification_rule_repository import NotificationRuleRepository
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
+from app.models.notification_settings import (
+    DEFAULT_CPI_MIN_CHANGE_AMOUNT,
+    DEFAULT_CPI_MIN_CHANGE_PERCENT,
+)
 from app.repositories.renter_repository import RenterRepository
+from app.services import cpi_rent_change as cpi
+from app.services.cpi_indexing_service import (
+    compute_chained_cpi_amount,
+    compute_cpi_amount,
+)
 from app.services.renter_service import RenterService
 
 logger = logging.getLogger(__name__)
@@ -26,9 +37,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_RULES: dict[NotificationTypeEnum, list[int]] = {
     NotificationTypeEnum.OVERDUE: [0, 3],          # due day, then +3 days if unpaid
     NotificationTypeEnum.LEASE_EXPIRING: [90, 30],  # 90 and 30 days before lease end
+    # Not user-editable (see RULE_EXEMPT_EVENTS) — this is the only offset it ever has.
+    NotificationTypeEnum.CPI_RENT_CHANGE: [cpi.UPCOMING_OFFSET],
 }
 
-EVENT_TYPES = (NotificationTypeEnum.OVERDUE, NotificationTypeEnum.LEASE_EXPIRING)
+EVENT_TYPES = (
+    NotificationTypeEnum.OVERDUE,
+    NotificationTypeEnum.LEASE_EXPIRING,
+    NotificationTypeEnum.CPI_RENT_CHANGE,
+)
+
+# Events the rule editor does not cover. "Days before an anchor date" is the only thing
+# a rule can express, and a CPI change has no such anchor — it fires when the index
+# moves. It is configured by mute + materiality threshold instead.
+RULE_EXEMPT_EVENTS = frozenset({NotificationTypeEnum.CPI_RENT_CHANGE})
+
+# Types the feed must not resolve-on-read. See ReminderService._dismiss_resolved.
+NON_RESOLVING_EVENTS = frozenset({NotificationTypeEnum.CPI_RENT_CHANGE})
 
 
 @dataclass
@@ -69,6 +94,21 @@ def _parse_str_list(raw: str | None) -> list[str]:
         return []
 
 
+def _cpi_thresholds(settings) -> tuple[float, float]:
+    """The owner's materiality floor, falling back to the product defaults for an owner
+    who has never opened notification settings (no row yet)."""
+    if settings is None:
+        return DEFAULT_CPI_MIN_CHANGE_AMOUNT, DEFAULT_CPI_MIN_CHANGE_PERCENT
+    return (
+        settings.cpi_min_change_amount
+        if settings.cpi_min_change_amount is not None
+        else DEFAULT_CPI_MIN_CHANGE_AMOUNT,
+        settings.cpi_min_change_percent
+        if settings.cpi_min_change_percent is not None
+        else DEFAULT_CPI_MIN_CHANGE_PERCENT,
+    )
+
+
 class NotificationEngine:
     def __init__(
         self,
@@ -76,11 +116,15 @@ class NotificationEngine:
         settings_repository: NotificationSettingsRepository,
         renter_service: RenterService,
         renter_repository: RenterRepository,
+        cpi_index_repository: CpiIndexRepository | None = None,
     ):
         self.rule_repository = rule_repository
         self.settings_repository = settings_repository
         self.renter_service = renter_service
         self.renter_repository = renter_repository
+        # Optional: without it the CPI heads-up simply produces nothing, which is the
+        # right degradation — an estimate with no index behind it is worse than silence.
+        self.cpi_index_repository = cpi_index_repository
 
     def evaluate_owner(self, owner_id: str, today: date | None = None) -> list[Candidate]:
         """Resolve effective rules per event and return de-duplicated candidates.
@@ -97,7 +141,7 @@ class NotificationEngine:
             if event.value in muted:
                 continue
             for spec in self._effective_specs(owner_id, event):
-                for cand in self._candidates_for(owner_id, event, spec, today):
+                for cand in self._candidates_for(owner_id, event, spec, today, settings):
                     key = (cand.type, cand.renter_id, cand.period_key, cand.offset)
                     if key in seen:
                         continue
@@ -140,12 +184,15 @@ class NotificationEngine:
         event: NotificationTypeEnum,
         spec: RuleSpec,
         today: date,
+        settings=None,
     ) -> list[Candidate]:
         offsets = sorted({o for o in spec.offsets if o >= 0})
         if not offsets:
             return []
 
         out: list[Candidate] = []
+        if event == NotificationTypeEnum.CPI_RENT_CHANGE:
+            return self._cpi_candidates(owner_id, spec, today, settings)
         if event == NotificationTypeEnum.OVERDUE:
             period_key = today.strftime("%Y-%m")
             renters = self.renter_service.get_overdue_this_month(
@@ -200,6 +247,104 @@ class NotificationEngine:
                         ))
         return out
 
+    # ── CPI rent change: the heads-up half ────────────────────────────────
+    #
+    # Only the heads-up is generated here. The confirmation is emitted by the indexing
+    # job, because by the time this engine could look, the old amount is already gone.
+
+    def _cpi_candidates(
+        self, owner_id: str, spec: RuleSpec, today: date, settings
+    ) -> list[Candidate]:
+        """Renters whose next CPI repricing lands within the lead window, with an
+        estimate of what the new rent will be."""
+        if self.cpi_index_repository is None:
+            return []
+        # The anniversary's own index isn't published yet — that is the whole reason
+        # this stage is an estimate. The newest reading known today is the best proxy.
+        proxy = self.cpi_index_repository.latest_on_or_before(
+            app_settings.CPI_INDEX_ID, today
+        )
+        if proxy is None:
+            return []
+        min_amount, min_percent = _cpi_thresholds(settings)
+
+        out: list[Candidate] = []
+        for r in self.renter_repository.get_active(
+            owner_id=owner_id,
+            property_ids=spec.property_ids,
+            property_owners=spec.property_owners,
+            renter_ids=spec.renter_ids,
+        ):
+            years = cpi.parse_lease_years(r.lease_years)
+            if not cpi.is_cpi_linked(r.rent_escalation_mode, years):
+                continue
+            current = cpi.lease_year_index(r.lease_start, len(years), today)
+            if current is None:
+                continue
+            nxt = current + 1
+            if nxt >= len(years):
+                continue  # the lease runs out before another repricing
+
+            anniversary = cpi.anniversary_of(r.lease_start, nxt)
+            days_until = (anniversary - today).days
+            if not 0 <= days_until <= cpi.UPCOMING_OFFSET:
+                continue
+
+            old_amount = years[current].get("amount")
+            estimate = self._estimate_repriced_amount(r, years, current, nxt, proxy, today)
+            if estimate is None or old_amount is None:
+                continue
+            if not cpi.is_material(old_amount, estimate, min_amount, min_percent):
+                continue
+
+            out.append(
+                Candidate(
+                    type=NotificationTypeEnum.CPI_RENT_CHANGE,
+                    renter_id=r.id,
+                    period_key=anniversary.isoformat(),
+                    offset=cpi.UPCOMING_OFFSET,
+                    first_name=r.first_name,
+                    last_name=r.last_name,
+                    property_address=r.property.address if r.property else None,
+                    data=cpi.build_data(
+                        cpi.STAGE_UPCOMING,
+                        old_amount=old_amount,
+                        new_amount=estimate,
+                        effective_date=anniversary,
+                        year_index=nxt,
+                        base_index=r.cpi_base_index,
+                        known_index=proxy,
+                    ),
+                )
+            )
+        return out
+
+    def _estimate_repriced_amount(
+        self, renter, years: list[dict], current: int, nxt: int, proxy: float, today: date
+    ) -> float | None:
+        """What the next lease year would come to if the index stopped moving today.
+
+        Uses the same two linkage models the job does, so the estimate and the eventual
+        confirmation are computed the same way and differ only by which reading was
+        available."""
+        if renter.rent_escalation_mode == "cpi":
+            base_rent = renter.base_rent or years[0].get("amount")
+            if base_rent is None:
+                return None
+            return compute_cpi_amount(base_rent, renter.cpi_base_index, proxy)
+
+        # `custom`: only a CPI-ruled year is repriced by the index; anything else was
+        # already final when the owner typed it, so there is nothing to warn about.
+        if cpi.year_rule_mode(years[nxt]) != "cpi":
+            return None
+        prev_amount = years[current].get("amount")
+        if prev_amount is None:
+            return None
+        prev_index = self.cpi_index_repository.latest_on_or_before(
+            app_settings.CPI_INDEX_ID, cpi.anniversary_of(renter.lease_start, current)
+        )
+        return compute_chained_cpi_amount(prev_amount, prev_index, proxy)
+
     def preview_rule(
         self,
         owner_id: str,
@@ -218,7 +363,7 @@ class NotificationEngine:
         scope = dict(
             property_ids=property_ids, property_owners=property_owners, renter_ids=renter_ids
         )
-        if not clean_offsets:
+        if not clean_offsets or event_type in RULE_EXEMPT_EVENTS:
             return {"matched_renters": 0, "estimated_alerts": 0}
 
         if event_type == NotificationTypeEnum.LEASE_EXPIRING:

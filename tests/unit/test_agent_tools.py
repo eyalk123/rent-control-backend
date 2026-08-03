@@ -300,14 +300,17 @@ def _seed_cpi_lease(db_session):
 
 def test_explain_cpi_matches_engine_finalized_and_projected(db_session):
     from app.repositories.cpi_index_repository import CpiIndexRepository
-    from app.services.cpi_indexing_service import materialize_cpi_amounts
+    from app.services.cpi_indexing_service import IndexReading, materialize_cpi_amounts
 
     renter = _seed_cpi_lease(db_session)
     tools = AgentTools(db_session)
 
     # The real engine path the app uses on create/update — the source of truth.
     repo = CpiIndexRepository(db_session)
-    lookup = lambda d: repo.latest_on_or_before(120010, d)  # noqa: E731
+
+    def lookup(d):
+        row = repo.reading_on_or_before(120010, d)
+        return IndexReading(row.year, row.month, row.value) if row else None
     engine_years = materialize_cpi_amounts(
         [{"amount": 5000.0, "type": "contract"} for _ in range(4)],
         date(2024, 1, 1),
@@ -435,7 +438,9 @@ def test_get_report_summary_expense_log_repairs_by_owner(db_session):
     )
 
     dad = next(o for o in result["owners"] if o["owner_name"] == "Dad")
-    assert dad["categories"]["repairs"] == "₪1,000"  # 300 + 700, not Me's 999
+    # Built-in categories are keyed `repairs` but reported by their label, so the assistant
+    # quotes "Repairs" to the user rather than the raw key.
+    assert dad["categories"]["Repairs"] == "₪1,000"  # 300 + 700, not Me's 999
 
 
 def test_get_report_summary_income_expense_net(db_session):
