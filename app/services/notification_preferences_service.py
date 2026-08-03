@@ -25,6 +25,16 @@ _RULE_LIST_FIELDS = (
     "scope_renter_ids",
 )
 
+# The WhatsApp message templates an owner may override. Deliberately *not* the
+# NotificationTypeEnum values: `cpi_rent_change` reads completely differently in its two
+# stages — an estimate that says so, and a settled amount — so each stage gets its own
+# template. Mirrored by WHATSAPP_TEMPLATE_KEYS in the clients.
+WHATSAPP_TEMPLATE_KEYS = ("overdue", "lease_expiring", "cpi_upcoming", "cpi_changed")
+WHATSAPP_TEMPLATE_LOCALES = ("en", "he")
+# A wa.me link carries the message in its query string, and long URLs get truncated by
+# some launchers before WhatsApp ever sees them. Well above any reasonable message.
+WHATSAPP_TEMPLATE_MAX_LEN = 1500
+
 
 class NotificationPreferencesService:
     def __init__(
@@ -47,7 +57,42 @@ class NotificationPreferencesService:
         update = {k: v for k, v in data.items() if v is not None}
         if "muted_events" in update:
             update["muted_events"] = json.dumps(update["muted_events"])
+        if "whatsapp_templates" in update:
+            update["whatsapp_templates"] = json.dumps(
+                self._validate_templates(update["whatsapp_templates"])
+            )
         return self.settings_repository.update(owner_id, update)
+
+    @staticmethod
+    def _validate_templates(templates: dict) -> dict:
+        """Reject an unrecognised template key, locale or oversized body outright.
+
+        Silently dropping them would be worse than a 400: the client would show the
+        message as saved and then send the built-in default instead, and the user would
+        have no way to tell. Empty and whitespace-only bodies are dropped rather than
+        rejected — clearing the box is how the UI expresses "reset this one".
+        """
+        cleaned: dict[str, dict[str, str]] = {}
+        for key, by_locale in templates.items():
+            if key not in WHATSAPP_TEMPLATE_KEYS:
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown message template '{key}'"
+                )
+            for locale, text in by_locale.items():
+                if locale not in WHATSAPP_TEMPLATE_LOCALES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unsupported language '{locale}' for template '{key}'",
+                    )
+                if len(text) > WHATSAPP_TEMPLATE_MAX_LEN:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Message template '{key}' ({locale}) exceeds "
+                        f"{WHATSAPP_TEMPLATE_MAX_LEN} characters",
+                    )
+                if text.strip():
+                    cleaned.setdefault(key, {})[locale] = text
+        return cleaned
 
     # ── rules ─────────────────────────────────────────────────────────────
     def list_rules(self, owner_id: str) -> list[NotificationRule]:

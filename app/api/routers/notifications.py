@@ -103,6 +103,7 @@ def list_notifications(
             renter_id=n.entity_id,
             first_name=renter.first_name,
             last_name=renter.last_name,
+            phone=renter.phone,
             property_id=renter.property_id,
             property_address=renter.property.address if renter.property else None,
             payment_type=renter.payment_type,

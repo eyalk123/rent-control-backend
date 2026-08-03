@@ -34,5 +34,14 @@ class NotificationSettings(Base):
     cpi_min_change_percent = Column(
         Float, nullable=False, default=DEFAULT_CPI_MIN_CHANGE_PERCENT
     )
+    # The owner's edited WhatsApp message templates, as JSON:
+    # ``{"overdue": {"en": "...", "he": "..."}, ...}``. Only *overrides* are stored — a
+    # missing template key, or a missing locale within one, means "use the built-in
+    # default", which is what makes both reset-to-default and per-language independence
+    # work without any extra state. The clients hold the default copy (it goes through
+    # their translation files) and render the message; the server never renders one.
+    whatsapp_templates = Column(
+        Text, nullable=False, server_default="{}", default="{}"
+    )
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

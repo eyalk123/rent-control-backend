@@ -47,6 +47,7 @@ def test_feed_generates_on_read_and_enriches(client, db_session):
     item = items[0]
     assert item["type"] == "lease_expiring"
     assert item["first_name"] == "Soon"
+    assert item["phone"] == "0500000000"  # feeds the "message this renter" action
     assert item["property_address"] == "1 Main St"
     assert item["read"] is False
     assert item["data"]["days_until_expiry"] == 40
@@ -179,6 +180,88 @@ def test_cpi_threshold_rejects_a_negative(client):
         "/notification-preferences/settings", json={"cpi_min_change_amount": -5}
     )
     assert resp.status_code == 422
+
+
+# ── WhatsApp message templates ───────────────────────────────────────────────
+
+def test_whatsapp_templates_default_to_empty(client):
+    """No overrides stored means the clients use their built-in copy."""
+    assert client.get("/notification-preferences").json()["settings"]["whatsapp_templates"] == {}
+
+
+def test_whatsapp_templates_round_trip_per_locale(client):
+    resp = client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"overdue": {"en": "Hi {name}, rent {amount} is due."}}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["whatsapp_templates"] == {
+        "overdue": {"en": "Hi {name}, rent {amount} is due."}
+    }
+
+    # Editing Hebrew must not disturb the English override, and vice versa — the whole
+    # point of storing them per locale.
+    resp = client.put(
+        "/notification-preferences/settings",
+        json={
+            "whatsapp_templates": {
+                "overdue": {
+                    "en": "Hi {name}, rent {amount} is due.",
+                    "he": "היי {name}, שכר הדירה {amount} ממתין לתשלום.",
+                }
+            }
+        },
+    )
+    stored = resp.json()["whatsapp_templates"]["overdue"]
+    assert stored["en"] == "Hi {name}, rent {amount} is due."
+    assert stored["he"].startswith("היי")
+
+
+def test_whatsapp_template_reset_clears_the_override(client):
+    client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"overdue": {"en": "Mine"}}},
+    )
+    # Reset = send the map without that entry. A blank body means the same thing.
+    resp = client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"overdue": {"en": "   "}}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["whatsapp_templates"] == {}
+
+
+def test_whatsapp_template_rejects_unknown_key_and_locale(client):
+    unknown_key = client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"rent_raised": {"en": "hi"}}},
+    )
+    assert unknown_key.status_code == 400
+
+    unknown_locale = client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"overdue": {"fr": "salut"}}},
+    )
+    assert unknown_locale.status_code == 400
+
+
+def test_whatsapp_template_rejects_an_oversized_body(client):
+    resp = client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"overdue": {"en": "x" * 1501}}},
+    )
+    assert resp.status_code == 400
+
+
+def test_whatsapp_templates_survive_an_unrelated_settings_update(client):
+    client.put(
+        "/notification-preferences/settings",
+        json={"whatsapp_templates": {"overdue": {"en": "Mine"}}},
+    )
+    resp = client.put(
+        "/notification-preferences/settings", json={"cpi_min_change_amount": 25}
+    )
+    assert resp.json()["whatsapp_templates"] == {"overdue": {"en": "Mine"}}
 
 
 def test_cpi_change_cannot_have_rules(client):
