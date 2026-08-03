@@ -19,13 +19,12 @@ _NEW_VALUE = "cpi_rent_change"
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-
-    if bind.dialect.name == "postgresql":
-        # ALTER TYPE ... ADD VALUE cannot run inside a transaction block, and Alembic
-        # wraps the migration in one. AUTOCOMMIT for this statement only.
-        with bind.execution_options(isolation_level="AUTOCOMMIT").begin() as conn:
-            conn.exec_driver_sql(
+    if op.get_bind().dialect.name == "postgresql":
+        # ALTER TYPE ... ADD VALUE cannot run inside the transaction Alembic opens.
+        # autocommit_block() commits it, runs this outside a transaction, then opens a
+        # fresh one. Same idiom as 20260712_add_check_payment_method.py.
+        with op.get_context().autocommit_block():
+            op.execute(
                 f"ALTER TYPE notificationtypeenum ADD VALUE IF NOT EXISTS '{_NEW_VALUE}'"
             )
     # SQLite (tests) stores the enum as a plain string — nothing to alter.
