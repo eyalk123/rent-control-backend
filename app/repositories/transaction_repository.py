@@ -11,6 +11,10 @@ from app.models.supplier import Supplier
 from app.models.transaction import Transaction, TransactionTypeEnum
 from typing import Optional
 
+# The date a transaction belongs to for the user: the month rent was paid *for*
+# when there is one (revenue), otherwise the day the money moved (expenses).
+EFFECTIVE_DATE = func.coalesce(Transaction.month_for, Transaction.date_of_payment)
+
 
 class TransactionRepository:
     def __init__(self, session: Session):
@@ -97,14 +101,17 @@ class TransactionRepository:
                 )
             )
         stmt = stmt.order_by(
-            Transaction.date_of_payment.desc(),
+            EFFECTIVE_DATE.desc(),
+            # Load-bearing tiebreaker: a bulk revenue batch shares one month_for.
             Transaction.created_at.desc(),
         ).limit(limit).offset(offset)
         return list(self.session.scalars(stmt).all())
 
     def get_monthly_summary(self, owner_id: str, from_date: date) -> list:
-        year_col = func.extract('year', Transaction.date_of_payment).cast(Integer)
-        month_col = func.extract('month', Transaction.date_of_payment).cast(Integer)
+        # Bucketed by the effective date, so the chart's bars line up with the month
+        # sections of the list below it (and with the income/expense report).
+        year_col = func.extract('year', EFFECTIVE_DATE).cast(Integer)
+        month_col = func.extract('month', EFFECTIVE_DATE).cast(Integer)
         stmt = (
             select(
                 year_col.label('year'),
@@ -118,7 +125,7 @@ class TransactionRepository:
             )
             .where(
                 Transaction.owner_id == owner_id,
-                Transaction.date_of_payment >= from_date,
+                EFFECTIVE_DATE >= from_date,
             )
             .group_by(year_col, month_col)
             .order_by(year_col, month_col)
