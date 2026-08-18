@@ -76,6 +76,24 @@ def _is_payment_due_month(lease_start: date | None, interval_months: int, today:
     return months_elapsed >= 0 and months_elapsed % interval_months == 0
 
 
+def _rent_for_month(lease_years: list[dict], lease_start: date | None, month: date) -> float:
+    """Monthly rent from the lease year covering `month`, clamped to the last year.
+
+    Mirrors the clients' getRentForMonth so the overdue amount matches what the
+    payment grid shows. Falls back to year 1 when there is no lease_start or the
+    month predates it.
+    """
+    if not lease_years:
+        return 0.0
+    if lease_start is None:
+        return lease_years[0].get("amount") or 0.0
+    months_elapsed = (month.year - lease_start.year) * 12 + (month.month - lease_start.month)
+    if months_elapsed < 0:
+        return lease_years[0].get("amount") or 0.0
+    index = min(months_elapsed // 12, len(lease_years) - 1)
+    return lease_years[index].get("amount") or 0.0
+
+
 class RenterService:
     def __init__(
         self,
@@ -311,7 +329,7 @@ class RenterService:
             days_overdue = (today - expected).days
 
             lease_data = json.loads(r.lease_years) if isinstance(r.lease_years, str) else (r.lease_years or [])
-            base_amount = lease_data[0]["amount"] if lease_data else 0.0
+            base_amount = _rent_for_month(lease_data, r.lease_start, today)
             # The amount owed this period spans `interval` months (e.g. 3x for quarterly).
             monthly_amount = base_amount * interval
 
