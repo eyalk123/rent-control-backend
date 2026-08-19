@@ -91,6 +91,11 @@ _RENTER_COLUMNS: list[tuple[str, Callable]] = [
     ("property_address", lambda r: r.property.address if r.property else None),
     ("lease_start", lambda r: r.lease_start),
     ("lease_end", lambda r: r.lease_end),
+    # The binding term's end, which is what the app shows and warns on — `lease_end`
+    # runs to the last option period.
+    ("contract_end", lambda r: r.contract_end),
+    ("terminated_on", lambda r: r.terminated_on),
+    ("termination_reason", lambda r: r.termination_reason),
     ("contract_term_years", lambda r: r.contract_term_years),
     ("option_years", lambda r: r.option_years),
     ("base_rent", lambda r: r.base_rent),

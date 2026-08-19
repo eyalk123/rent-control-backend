@@ -17,7 +17,14 @@ class Renter(Base):
     email = Column(String, nullable=True)
     lease_years = Column(Text, nullable=False)  # JSON array of {amount, type}
     lease_start = Column(Date, nullable=True)
-    lease_end = Column(Date, nullable=True)  # computed internally from lease_start + len(lease_years)
+    # End of the whole signed schedule, options included. Server-computed from
+    # lease_start plus every period's length. This is the "is the tenant still there"
+    # boundary that the active-window queries use.
+    lease_end = Column(Date, nullable=True)
+    # End of the *binding* term — the last contract period. An option year is not yet
+    # exercised, so this is the date the landlord has to decide something, and therefore
+    # what the apps show and what the lease-expiring alert fires from.
+    contract_end = Column(Date, nullable=True)
     # Structured lease-term intent (the form's higher-level inputs). lease_years
     # stays the source of truth for rent math; these let an edit re-open with the
     # same controls (term length, renewal options, escalation rule).

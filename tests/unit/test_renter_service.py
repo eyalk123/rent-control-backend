@@ -11,7 +11,7 @@ from app.repositories.renter_repository import RenterRepository
 from app.schemas.renter import ExtraContact, LeaseYear, RenterCreate, RenterUpdate
 from app.services.renter_service import (
     RenterService,
-    _compute_lease_end,
+    _lease_end_dates,
     _payment_interval_months,
 )
 from tests.conftest import OWNER_A
@@ -23,8 +23,28 @@ def _service(db_session):
     return RenterService(RenterRepository(db_session), PropertyRepository(db_session))
 
 
-def test_compute_lease_end_adds_years():
-    assert _compute_lease_end(date(2025, 1, 1), 3) == date(2028, 1, 1)
+def test_lease_end_dates_sum_the_periods():
+    """`lease_end` covers the whole schedule; `contract_end` stops at the binding part."""
+    years = [
+        {"amount": 1, "type": "contract"},
+        {"amount": 1, "type": "contract"},
+        {"amount": 1, "type": "option"},
+    ]
+    assert _lease_end_dates(date(2025, 1, 1), years) == {
+        "lease_end": date(2028, 1, 1),
+        "contract_end": date(2027, 1, 1),
+    }
+
+
+def test_lease_end_dates_honour_a_short_final_period():
+    years = [
+        {"amount": 1, "type": "contract"},
+        {"amount": 1, "type": "contract", "months": 4},
+    ]
+    assert _lease_end_dates(date(2025, 1, 1), years) == {
+        "lease_end": date(2026, 5, 1),
+        "contract_end": date(2026, 5, 1),
+    }
 
 
 def test_create_renter_encodes_lease_years_and_computes_end(db_session):
@@ -281,6 +301,9 @@ def test_overdue_yearly_due_month_uses_annual_amount(db_session):
 
 @freeze_time("2026-06-15")
 def test_expiring_days_until_expiry(db_session):
+    """Counted to the end of the *binding* term. An option year is not yet exercised, so
+    the warning is about the point the owner has to decide something — not about the last
+    date the tenant could conceivably still be there."""
     today = date(2026, 6, 15)
     svc = _service(db_session)
     prop = make_property(db_session)
@@ -288,7 +311,28 @@ def test_expiring_days_until_expiry(db_session):
         db_session,
         property_id=prop.id,
         lease_start=today - timedelta(days=300),
-        lease_end=today + timedelta(days=45),
+        contract_end=today + timedelta(days=45),
+        lease_end=today + timedelta(days=410),
     )
     [row] = svc.get_expiring_leases(OWNER_A, days_until=90)
     assert row.days_until_expiry == 45
+
+
+@freeze_time("2026-06-15")
+def test_expiry_warns_off_the_contract_term_not_the_options(db_session):
+    """Regression: the two used to disagree — the clients showed the contract end while
+    the alert fired off the full schedule, so a 2+1 lease warned a year late."""
+    svc = _service(db_session)
+    prop = make_property(db_session)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 8, 1),
+        lease_years=[
+            {"amount": 12000, "type": "contract"},
+            {"amount": 12000, "type": "contract"},
+            {"amount": 12000, "type": "option"},
+        ],
+    )
+    [row] = svc.get_expiring_leases(OWNER_A, days_until=90)
+    assert row.lease_end_date == date(2026, 8, 1)

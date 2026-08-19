@@ -102,7 +102,7 @@ class RenterRepository:
             "terminated_on",
             "termination_reason",
         }
-        always_set_fields = {"lease_years", "lease_end"}
+        always_set_fields = {"lease_years", "lease_end", "contract_end"}
         for key, value in data.items():
             if hasattr(renter, key) and (
                 value is not None or key in nullable_fields or key in always_set_fields
@@ -187,11 +187,13 @@ class RenterRepository:
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
                 Renter.terminated_on.is_(None),
-                Renter.lease_end > today,
-                Renter.lease_end <= cutoff,
+                # The binding term, not the whole schedule: an option year is not yet
+                # exercised, so the decision point is when the contract periods run out.
+                Renter.contract_end > today,
+                Renter.contract_end <= cutoff,
                 *_scope_conditions(property_ids, property_owners, renter_ids),
             )
-            .order_by(Renter.lease_end.asc())
+            .order_by(Renter.contract_end.asc())
         )
         return list(self.session.scalars(stmt).all())
 

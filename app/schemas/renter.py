@@ -50,15 +50,30 @@ class LeaseYear(BaseModel):
     # Absent on the first year (it is the base rent) and on every year of a
     # non-custom lease — which is also why every pre-existing stored year has none.
     rule: Optional[LeaseYearRule] = None
+    # How long this period runs. **Absent means 12** (see `app/services/lease_periods.py`),
+    # which is why no stored lease had to be migrated when periods stopped being whole
+    # years. Only the last period of the contract block and of the option block is ever
+    # short — a partial period in the middle of a lease is not a thing that happens, and
+    # the form cannot express one.
+    months: Optional[int] = None
+
+    @field_validator("months")
+    @classmethod
+    def months_in_range(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not 1 <= v <= 12:
+            raise ValueError("months must be between 1 and 12")
+        return v
 
     @model_serializer
     def serialize(self) -> dict:
-        """Drop `rule` entirely when there isn't one, rather than emitting `rule: null`.
-        Keeps both the stored JSON blob and the API response byte-identical to their
-        pre-rules shape for every lease that doesn't use per-year rules."""
+        """Drop `rule` and `months` entirely when there isn't one, rather than emitting
+        nulls. Keeps both the stored JSON blob and the API response byte-identical to
+        their earlier shape for every lease that uses neither."""
         data: dict = {"amount": self.amount, "type": self.type.value}
         if self.rule is not None:
             data["rule"] = self.rule.model_dump(exclude_none=True)
+        if self.months is not None:
+            data["months"] = self.months
         return data
 
 
@@ -177,6 +192,11 @@ class RenterRead(BaseModel):
     rent_escalation_mode: Optional[RentEscalationMode] = None
     rent_escalation_value: Optional[float] = None
     cpi_base_index: Optional[float] = None  # server-set; read-only
+    # Both server-computed from lease_start + the periods' lengths; a client sending them
+    # is ignored. `lease_end` covers the whole schedule, `contract_end` only the binding
+    # part — see the model for why both exist.
+    lease_end: Optional[date] = None
+    contract_end: Optional[date] = None
     # Read-only here on purpose — set and cleared through /renters/{id}/terminate so a
     # lease can never be closed as a side effect of an ordinary form save.
     terminated_on: Optional[date] = None

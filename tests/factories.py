@@ -19,6 +19,7 @@ from app.models.transaction import (
     Transaction,
     TransactionTypeEnum,
 )
+from app.services.renter_service import _lease_end_dates
 from tests.conftest import OWNER_A
 
 DEFAULT_LEASE_YEARS = [{"amount": 12000.0, "type": "contract"}]
@@ -49,6 +50,7 @@ def make_renter(
     lease_years: list[dict] | None = None,
     **kw,
 ) -> Renter:
+    years = lease_years or DEFAULT_LEASE_YEARS
     defaults = dict(
         owner_id=owner_id,
         property_id=property_id,
@@ -56,9 +58,24 @@ def make_renter(
         last_name="Doe",
         phone="0500000000",
         email="john@example.com",
-        lease_years=json.dumps(lease_years or DEFAULT_LEASE_YEARS),
+        lease_years=json.dumps(years),
     )
     defaults.update(kw)
+    # Both end dates are server-owned, so a factory-built renter has to carry them or it
+    # is a shape the service could never produce — and the queries that key off
+    # `contract_end` would silently skip it.
+    #
+    # A test that pins `lease_end` is saying "the lease ends here", which for the
+    # single-contract-period default is the contract end too; mirroring it keeps those
+    # tests meaning what they read as. Spell out `contract_end` to separate the two.
+    if defaults.get("lease_start"):
+        pinned_end = defaults.get("lease_end")
+        derived = _lease_end_dates(defaults["lease_start"], years)
+        defaults.setdefault("lease_end", derived["lease_end"])
+        # Only mirror a *pinned* lease_end. Deriving both from the schedule is the normal
+        # path, and mirroring there would hand contract_end the option periods too —
+        # exactly the conflation this split exists to remove.
+        defaults.setdefault("contract_end", pinned_end or derived["contract_end"])
     renter = Renter(**defaults)
     session.add(renter)
     session.commit()

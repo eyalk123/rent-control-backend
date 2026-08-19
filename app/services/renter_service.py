@@ -22,10 +22,25 @@ from app.services.cpi_indexing_service import (
     materialize_cpi_amounts,
     materialize_ruled_lease_years,
 )
+from app.services.lease_periods import (
+    contract_end,
+    period_index_for_month,
+    schedule_end,
+)
 
 
-def _compute_lease_end(lease_start: date, lease_years_count: int) -> date:
-    return lease_start + relativedelta(years=lease_years_count)
+def _lease_end_dates(lease_start: date | None, lease_years: list[dict]) -> dict:
+    """The two dates the server owns, as an update dict.
+
+    Both are derived from the periods' own lengths rather than their count, so a lease
+    carrying a short tail ends when it actually ends.
+    """
+    if not lease_start or not lease_years:
+        return {"lease_end": None, "contract_end": None}
+    return {
+        "lease_end": schedule_end(lease_start, lease_years),
+        "contract_end": contract_end(lease_start, lease_years),
+    }
 
 
 def _lease_years_to_dicts(lease_years) -> list[dict]:
@@ -93,10 +108,11 @@ def _rent_for_month(lease_years: list[dict], lease_start: date | None, month: da
         return 0.0
     if lease_start is None:
         return lease_years[0].get("amount") or 0.0
-    months_elapsed = (month.year - lease_start.year) * 12 + (month.month - lease_start.month)
-    if months_elapsed < 0:
-        return lease_years[0].get("amount") or 0.0
-    index = min(months_elapsed // 12, len(lease_years) - 1)
+    index = period_index_for_month(lease_start, lease_years, month)
+    if index is None:
+        # Before the lease starts, fall back to year one; past its end, clamp to the last
+        # period — the payment grid draws months either side and expects a figure.
+        index = 0 if month < lease_start else len(lease_years) - 1
     return lease_years[index].get("amount") or 0.0
 
 
@@ -190,7 +206,6 @@ class RenterService:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
             if property is None:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
-        lease_end = _compute_lease_end(data.lease_start, len(data.lease_years)) if data.lease_start else None
         mode = data.rent_escalation_mode.value if data.rent_escalation_mode else None
         lease_years_payload = _lease_years_to_dicts(data.lease_years)
         lease_years_payload, cpi_base_index = self._resolve_lease_year_amounts(
@@ -201,6 +216,7 @@ class RenterService:
             existing_base_index=None,
             recompute_base_index=True,
         )
+        end_dates = _lease_end_dates(data.lease_start, lease_years_payload)
         renter = Renter(
             owner_id=owner_id,
             property_id=data.property_id,
@@ -210,7 +226,8 @@ class RenterService:
             email=data.email,
             lease_years=json.dumps(lease_years_payload),
             lease_start=data.lease_start,
-            lease_end=lease_end,
+            lease_end=end_dates["lease_end"],
+            contract_end=end_dates["contract_end"],
             contract_term_years=data.contract_term_years,
             option_years=data.option_years,
             base_rent=data.base_rent,
@@ -292,11 +309,8 @@ class RenterService:
 
         if "lease_years" in update_dict or "lease_start" in update_dict:
             lease_years_raw = update_dict.get("lease_years")
-            if lease_years_raw is not None:
-                count = len(json.loads(lease_years_raw))
-            else:
-                count = len(json.loads(renter.lease_years))
-            update_dict["lease_end"] = _compute_lease_end(lease_start, count) if lease_start else None
+            stored = lease_years_raw if lease_years_raw is not None else renter.lease_years
+            update_dict.update(_lease_end_dates(lease_start, json.loads(stored)))
         return self.renter_repository.update(renter, update_dict)
 
     def terminate_lease(self, renter_id: int, data: RenterTerminate, owner_id: str):
@@ -445,7 +459,7 @@ class RenterService:
         )
         result = []
         for r in renters:
-            days_left = (r.lease_end - today).days
+            days_left = (r.contract_end - today).days
             prop = r.property
             result.append(ExpiringRenterRead(
                 renter_id=r.id,
@@ -455,7 +469,7 @@ class RenterService:
                 property_address=prop.address if prop else None,
                 property_city=prop.city if prop else None,
                 property_owner=prop.property_owner if prop else None,
-                lease_end_date=r.lease_end,
+                lease_end_date=r.contract_end,
                 days_until_expiry=days_left,
             ))
         return result

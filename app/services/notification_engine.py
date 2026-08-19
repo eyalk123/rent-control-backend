@@ -278,14 +278,14 @@ class NotificationEngine:
             years = cpi.parse_lease_years(r.lease_years)
             if not cpi.is_cpi_linked(r.rent_escalation_mode, years):
                 continue
-            current = cpi.lease_year_index(r.lease_start, len(years), today)
+            current = cpi.lease_year_index(r.lease_start, years, today)
             if current is None:
                 continue
             nxt = current + 1
             if nxt >= len(years):
                 continue  # the lease runs out before another repricing
 
-            anniversary = cpi.anniversary_of(r.lease_start, nxt)
+            anniversary = cpi.anniversary_of(r.lease_start, years, nxt)
             days_until = (anniversary - today).days
             if not 0 <= days_until <= cpi.UPCOMING_OFFSET:
                 continue
@@ -341,7 +341,8 @@ class NotificationEngine:
         if prev_amount is None:
             return None
         prev_index = self.cpi_index_repository.latest_on_or_before(
-            app_settings.CPI_INDEX_ID, cpi.anniversary_of(renter.lease_start, current)
+            app_settings.CPI_INDEX_ID,
+            cpi.anniversary_of(renter.lease_start, years, current),
         )
         return compute_chained_cpi_amount(prev_amount, prev_index, proxy)
 

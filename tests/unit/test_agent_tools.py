@@ -255,7 +255,31 @@ def test_get_lease_schedule_year_by_year(db_session):
     assert result["years"][0]["amount_display"] == "₪5,000"
     assert result["years"][2]["type"] == "option"
     assert result["years"][1]["starts"] == "2027-01-01"
+    assert result["years"][0]["months"] == 12
     assert result["cpi_linked"] is False
+
+
+def test_get_lease_schedule_reports_a_short_period(db_session):
+    """Period bounds come from the periods' own lengths, so "when does this lease end"
+    stays answerable on a term that is not a whole number of years."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_years=[
+            {"amount": 5000.0, "type": "contract"},
+            {"amount": 5000.0, "type": "contract", "months": 4},
+        ],
+        lease_start=date(2026, 1, 1),
+    )
+
+    result = AgentTools(db_session).dispatch(
+        "get_lease_schedule", OWNER_A, {"renter_id": renter.id}
+    )
+
+    assert result["years"][1]["months"] == 4
+    assert result["years"][1]["starts"] == "2027-01-01"
+    assert result["years"][1]["ends"] == "2027-05-01"
 
 
 def test_get_lease_schedule_cross_owner_returns_error(db_session):

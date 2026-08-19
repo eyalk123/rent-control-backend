@@ -32,7 +32,7 @@ _MESSAGES = {
     },
     # The confirmed change: the amount is set, and this is what the owner tells the
     # tenant. Both figures plus the date, because the confirmation can land weeks after
-    # the anniversary — "it went up" without a date is not actionable.
+    # the period boundary — "it went up" without a date is not actionable.
     "cpi_rent_change": {
         "en": {
             "title": "Rent changed",
@@ -43,7 +43,7 @@ _MESSAGES = {
             "body": "שכר הדירה של {label} השתנה מ-{old} ל-{new} ({delta}) החל מ-{date}.",
         },
     },
-    # The heads-up, fired before the anniversary's index is published — hence an
+    # The heads-up, fired before the boundary month's index is published — hence an
     # estimate, and it says so.
     "cpi_rent_change_upcoming": {
         "en": {

@@ -373,3 +373,123 @@ def test_property_renters_hides_then_reveals_an_ended_lease(client, db_session):
     ).json()
     row = next(r for r in included if r["id"] == renter.id)
     assert row["is_ended"] is True
+
+
+# ── Periods shorter than a year ──────────────────────────────────────────────────
+
+
+def test_a_lease_of_whole_years_still_stores_no_months_field(client):
+    """The absent-means-twelve default is what made this change free. If an ordinary
+    lease started emitting `months`, every stored blob would have drifted."""
+    resp = client.post(
+        "/renters",
+        json=_renter_payload(
+            lease_start="2026-01-01",
+            lease_years=[
+                {"amount": 5000, "type": "contract"},
+                {"amount": 5200, "type": "contract"},
+            ],
+        ),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["lease_years"] == [
+        {"amount": 5000, "type": "contract"},
+        {"amount": 5200, "type": "contract"},
+    ]
+    assert body["lease_end"] == "2028-01-01"
+    assert body["contract_end"] == "2028-01-01"
+
+
+def test_a_short_final_period_moves_both_end_dates(client):
+    """2 contract years + a 4-month tail, then a 1-year option."""
+    resp = client.post(
+        "/renters",
+        json=_renter_payload(
+            lease_start="2026-01-01",
+            lease_years=[
+                {"amount": 5000, "type": "contract"},
+                {"amount": 5200, "type": "contract"},
+                {"amount": 5200, "type": "contract", "months": 4},
+                {"amount": 5400, "type": "option"},
+            ],
+        ),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["lease_years"][2]["months"] == 4
+    assert body["contract_end"] == "2028-05-01"
+    assert body["lease_end"] == "2029-05-01"
+
+
+def test_an_eighteen_month_lease(client):
+    resp = client.post(
+        "/renters",
+        json=_renter_payload(
+            lease_start="2026-01-01",
+            lease_years=[
+                {"amount": 5000, "type": "contract"},
+                {"amount": 5000, "type": "contract", "months": 6},
+            ],
+        ),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["lease_end"] == "2027-07-01"
+
+
+def test_months_outside_one_to_twelve_are_rejected(client):
+    """A period of 0 months would stall every cumulative walk; one over 12 means the
+    caller restated a whole term as months and would double-count."""
+    for bad in (0, 13, -1):
+        resp = client.post(
+            "/renters",
+            json=_renter_payload(
+                lease_start="2026-01-01",
+                lease_years=[{"amount": 5000, "type": "contract", "months": bad}],
+            ),
+        )
+        assert resp.status_code == 422, bad
+
+
+@freeze_time("2026-08-19")
+def test_overdue_amount_uses_the_period_covering_this_month(client, db_session):
+    """The tail's rent, not the period the year-based arithmetic would have picked."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 3, 1),
+        payment_day_of_month=1,
+        lease_years=[
+            {"amount": 5000, "type": "contract"},
+            {"amount": 6000, "type": "contract"},
+            {"amount": 7000, "type": "contract", "months": 6},
+        ],
+    )
+    row = next(
+        r for r in client.get("/renters/overdue").json() if r["renter_id"] == renter.id
+    )
+    # Aug 2026 is month 29: past the two full years (0-23) and inside the 6-month tail
+    # (24-29). Dividing the elapsed months by 12 would have clamped to the last period
+    # here by accident, so the lease deliberately ends the month after.
+    assert row["monthly_amount"] == 7000
+
+
+@freeze_time("2026-06-15")
+def test_expiry_uses_the_contract_end_not_the_option_end(client, db_session):
+    """A 2+1 lease used to warn off 2029 while the app displayed 2028."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 8, 1),
+        lease_years=[
+            {"amount": 5000, "type": "contract"},
+            {"amount": 5000, "type": "contract"},
+            {"amount": 5000, "type": "option"},
+        ],
+    )
+    row = next(
+        r for r in client.get("/renters/expiring").json() if r["renter_id"] == renter.id
+    )
+    assert row["lease_end_date"] == "2026-08-01"

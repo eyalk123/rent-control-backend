@@ -100,6 +100,42 @@ def test_materialize_amounts_multiyear_with_floor():
     assert all(y["type"] == "contract" for y in out)
 
 
+def test_materialize_amounts_reprice_at_the_period_boundary_not_the_anniversary():
+    """A short period shifts every boundary after it. Repricing on the i-th anniversary
+    would read the wrong index month for the rest of the lease."""
+    lease_start = date(2020, 1, 1)
+
+    def lookup(d: date):
+        # Deliberately keyed by the exact boundary date, so a lookup on the wrong day
+        # returns nothing and the amount falls back to base_rent — a visible failure
+        # rather than a plausible-looking wrong number.
+        values = {
+            date(2020, 1, 1): 100.0,
+            date(2021, 1, 1): 110.0,
+            date(2021, 5, 1): 120.0,  # after a 4-month second period
+        }
+        value = values.get(d)
+        if value is None:
+            return None
+        year, month = reference_period(d)
+        return IndexReading(year, month, value)
+
+    years = [
+        {"amount": 5000, "type": "contract"},
+        {"amount": 5000, "type": "contract", "months": 4},
+        {"amount": 5000, "type": "contract"},
+    ]
+    out = materialize_cpi_amounts(
+        years, lease_start, 5000, base_index=100.0, index_lookup=lookup
+    )
+
+    assert [y["amount"] for y in out] == [5000, 5500, 6000]
+    # The period length survives the rebuild — it used to be dropped, silently turning
+    # every CPI lease back into whole years on the next indexing run.
+    assert out[1]["months"] == 4
+    assert "months" not in out[0]
+
+
 # --- per-year rules ("custom" mode): the forward walk ------------------------
 
 def _year(amount, rule=None, type_="contract"):

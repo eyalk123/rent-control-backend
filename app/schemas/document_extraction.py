@@ -29,6 +29,8 @@ class LeaseYearGuess(BaseModel):
 
     amount: float
     type: LeaseYearType
+    # Absent means a full twelve months, as everywhere else.
+    months: Optional[int] = None
 
 
 class ExtraContactGuess(BaseModel):
@@ -81,7 +83,12 @@ class ExtractedRenter(BaseModel):
     lease_start: Optional[str] = None  # ISO date (YYYY-MM-DD)
     lease_years: Optional[list[LeaseYearGuess]] = None
     contract_term_years: Optional[int] = None
+    # Months on top of the whole years, for a term the lease states as e.g. "two years
+    # and four months". Israeli leases do write odd terms, and rounding one to whole
+    # years would put the end date — and every renewal reminder — in the wrong month.
+    contract_term_months: Optional[int] = None
     option_years: Optional[int] = None
+    option_term_months: Optional[int] = None
     base_rent: Optional[float] = None
     rent_escalation_mode: Optional[RentEscalationMode] = None
     rent_escalation_value: Optional[float] = None

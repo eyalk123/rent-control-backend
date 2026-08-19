@@ -311,7 +311,10 @@ def test_feed_clears_lease_expiring_after_extension(client, db_session):
 
     assert _types(client.get("/notifications")) == ["lease_expiring"]
 
-    # Lease extended well beyond the 90-day window.
+    # Lease extended well beyond the 90-day window. Both dates move: the expiry warning
+    # counts to the end of the *binding* term, while lease_end still bounds the whole
+    # schedule — an extension through the service updates the pair together.
+    renter.contract_end = date(2026, 6, 15) + timedelta(days=400)
     renter.lease_end = date(2026, 6, 15) + timedelta(days=400)
     db_session.commit()
 

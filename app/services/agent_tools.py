@@ -29,6 +29,8 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from dateutil.relativedelta import relativedelta
+
+from app.services.lease_periods import period_index_on, period_months, period_start
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -96,18 +98,23 @@ def _load_lease_years(raw: Any) -> list[dict]:
     return raw or []
 
 
-def _current_year_index(lease_start: Optional[date], count: int, today: Optional[date] = None) -> int:
-    """0-based index of the lease year in effect today (clamped to the schedule)."""
-    if count <= 0:
-        return 0
-    if lease_start is None:
+def _current_year_index(
+    lease_start: Optional[date], lease_years: list[dict], today: Optional[date] = None
+) -> int:
+    """0-based index of the lease period in effect today (clamped to the schedule).
+
+    Takes the periods rather than their count: once a period can be shorter than a year,
+    the index no longer follows from how many anniversaries have passed.
+    """
+    if not lease_years or lease_start is None:
         return 0
     today = today or date.today()
-    idx = 0
-    for i in range(count):
-        if lease_start + relativedelta(years=i) <= today:
-            idx = i
-    return min(idx, count - 1)
+    idx = period_index_on(lease_start, lease_years, today)
+    if idx is not None:
+        return idx
+    # Outside the lease: before it started, year one; after it ended, the last period —
+    # the agent is answering "what is the rent", and a null there reads as missing data.
+    return 0 if today < lease_start else len(lease_years) - 1
 
 
 def _cell(mc: Any) -> dict:
@@ -497,7 +504,7 @@ class AgentTools:
             current_rent = None
             if current:
                 years = _load_lease_years(current.lease_years)
-                current_rent = years[_current_year_index(current.lease_start, len(years))]["amount"] if years else None
+                current_rent = years[_current_year_index(current.lease_start, years)]["amount"] if years else None
             out.append(
                 {
                     "id": p.id,
@@ -552,7 +559,7 @@ class AgentTools:
         rows = []
         for r in self.renter_service.list_renters(owner_id):
             years = _load_lease_years(r.lease_years)
-            current = years[_current_year_index(r.lease_start, len(years))]["amount"] if years else None
+            current = years[_current_year_index(r.lease_start, years)]["amount"] if years else None
             rows.append(
                 {
                     "id": r.id,
@@ -742,7 +749,7 @@ class AgentTools:
             if property_id is not None and r.property_id != property_id:
                 continue
             years = _load_lease_years(r.lease_years)
-            idx = _current_year_index(r.lease_start, len(years))
+            idx = _current_year_index(r.lease_start, years)
             current_amount = years[idx]["amount"] if years else None
             out.append(
                 {
@@ -777,14 +784,17 @@ class AgentTools:
         )
         schedule = []
         for i, y in enumerate(years):
-            starts = r.lease_start + relativedelta(years=i) if r.lease_start else None
-            ends = r.lease_start + relativedelta(years=i + 1) if r.lease_start else None
+            starts = period_start(r.lease_start, years, i) if r.lease_start else None
+            ends = period_start(r.lease_start, years, i + 1) if r.lease_start else None
             schedule.append(
                 {
                     "year_number": i + 1,
                     "type": y.get("type"),
                     "starts": _iso(starts),
                     "ends": _iso(ends),
+                    # Stated so "when does this lease end" stays answerable on a lease
+                    # that is not a whole number of years.
+                    "months": period_months(y),
                     "amount": _num(y.get("amount")),
                     "amount_display": format_shekels(y.get("amount")),
                     "rule": y.get("rule"),
@@ -832,7 +842,7 @@ class AgentTools:
 
         requested = params.get("year")
         if requested is None:
-            idx = _current_year_index(r.lease_start, len(years))
+            idx = _current_year_index(r.lease_start, years)
         else:
             idx = int(requested) - 1
             if idx < 0 or idx >= len(years):
@@ -840,7 +850,7 @@ class AgentTools:
 
         year_row = years[idx]
         rule = year_row.get("rule") if isinstance(year_row.get("rule"), dict) else None
-        anniversary = r.lease_start + relativedelta(years=idx)
+        anniversary = period_start(r.lease_start, years, idx)
 
         result: dict = {
             "renter_id": r.id,
@@ -908,7 +918,7 @@ class AgentTools:
             # Chained (custom per-year rule): measured against the PREVIOUS year's amount and index.
             prev_idx = max(idx - 1, 0)
             prev_amount = years[prev_idx].get("amount") if idx > 0 else round(base_rent)
-            prev_dict, _ = self._index_reading(r.lease_start + relativedelta(years=prev_idx))
+            prev_dict, _ = self._index_reading(period_start(r.lease_start, years, prev_idx))
             prev_index = prev_dict["value"] if prev_dict else None
             amount = compute_chained_cpi_amount(prev_amount, prev_index, known_index)
             ratio = (known_index / prev_index) if (prev_index and known_index) else None

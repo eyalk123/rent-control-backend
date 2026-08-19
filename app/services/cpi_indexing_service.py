@@ -26,6 +26,8 @@ from typing import Callable, Optional, Sequence
 
 from dateutil.relativedelta import relativedelta
 
+from app.services.lease_periods import period_start
+
 from app.config import settings
 from app.models.notification import NotificationTypeEnum
 from app.models.notification_settings import (
@@ -133,13 +135,19 @@ def materialize_cpi_amounts(
     today = today or date.today()
     result: list[dict] = []
     for i, year in enumerate(lease_years):
-        anniversary = lease_start + relativedelta(years=i)
+        # The boundary is where this period actually begins, which is only the i-th
+        # anniversary when every period before it ran a full twelve months.
+        anniversary = period_start(lease_start, lease_years, i)
+        # Rebuilt rather than copied, so a client-sent key can never sneak into storage —
+        # which means every field the server *does* own has to be carried across by hand.
+        carried = {k: year[k] for k in ("months",) if year.get(k) is not None}
         if not force_recompute and is_frozen(year, anniversary, today):
             result.append(
                 {
                     "amount": year["amount"],
                     "type": year["type"],
                     "cpi_reading": year["cpi_reading"],
+                    **carried,
                 }
             )
             continue
@@ -147,6 +155,7 @@ def materialize_cpi_amounts(
         out = {
             "amount": compute_cpi_amount(base_rent, base_index, _value_of(reading)),
             "type": year["type"],
+            **carried,
         }
         if reading is not None:
             out["cpi_reading"] = reading.as_dict()
@@ -238,7 +247,7 @@ def materialize_ruled_lease_years(
     prev_amount = base_rent if base_rent else lease_years[0].get("amount", 0)
     for i, year in enumerate(lease_years):
         out = dict(year)
-        anniversary = lease_start + relativedelta(years=i) if lease_start else None
+        anniversary = period_start(lease_start, lease_years, i) if lease_start else None
         if i == 0:
             out["amount"] = round(prev_amount)
         elif (
@@ -250,7 +259,7 @@ def materialize_ruled_lease_years(
         else:
             prev_reading = reading = None
             if lease_start is not None:
-                prev_reading = index_lookup(lease_start + relativedelta(years=i - 1))
+                prev_reading = index_lookup(period_start(lease_start, lease_years, i - 1))
                 reading = index_lookup(anniversary)
             out["amount"] = apply_year_rule(
                 prev_amount,
@@ -366,7 +375,7 @@ class CpiIndexingService:
         if self.notification_repository is None or not renter.owner_id:
             return 0
 
-        index = cpi.lease_year_index(renter.lease_start, len(new_years), today)
+        index = cpi.lease_year_index(renter.lease_start, new_years, today)
         if index is None:
             return 0
         old_amount = old_years[index].get("amount") if index < len(old_years) else None
@@ -380,7 +389,7 @@ class CpiIndexingService:
         if self._notifications_muted(renter.owner_id):
             return 0
 
-        anniversary = cpi.anniversary_of(renter.lease_start, index)
+        anniversary = cpi.anniversary_of(renter.lease_start, new_years, index)
         reading = new_years[index].get("cpi_reading") or {}
         source = self.cpi_index_repository.reading_on_or_before(self.index_id, anniversary)
         if self.notification_repository.was_generated(

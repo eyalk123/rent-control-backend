@@ -16,7 +16,7 @@ import json
 from datetime import date
 from typing import Optional
 
-from dateutil.relativedelta import relativedelta
+from app.services.lease_periods import period_index_on, period_start
 
 STAGE_UPCOMING = "upcoming"
 STAGE_CHANGED = "changed"
@@ -59,18 +59,24 @@ def is_cpi_linked(mode: Optional[str], lease_years: list[dict]) -> bool:
 
 
 def lease_year_index(
-    lease_start: Optional[date], year_count: int, on: date
+    lease_start: Optional[date], lease_years: list[dict], on: date
 ) -> Optional[int]:
-    """Zero-based index of the lease year containing ``on``, or ``None`` when ``on``
-    falls outside the lease."""
-    if lease_start is None or year_count <= 0 or on < lease_start:
-        return None
-    index = relativedelta(on, lease_start).years
-    return index if index < year_count else None
+    """Zero-based index of the lease period containing ``on``, or ``None`` when ``on``
+    falls outside the lease.
+
+    Takes the periods rather than just their count: with variable-length periods the
+    index is no longer derivable from the elapsed years alone.
+    """
+    return period_index_on(lease_start, lease_years, on)
 
 
-def anniversary_of(lease_start: date, year_index: int) -> date:
-    return lease_start + relativedelta(years=year_index)
+def anniversary_of(lease_start: date, lease_years: list[dict], year_index: int) -> date:
+    """When the given period begins — the date its rent is repriced on.
+
+    Still called an anniversary because that is what it is for the common lease of whole
+    years; for one carrying a short period it is simply the next period boundary.
+    """
+    return period_start(lease_start, lease_years, year_index)
 
 
 def is_material(

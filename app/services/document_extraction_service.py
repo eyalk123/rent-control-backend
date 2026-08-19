@@ -131,6 +131,7 @@ Joint vs. per-tenant rent: most leases with several tenants state ONE joint rent
 
 Lease term — describe it as INTENT; the app rebuilds the year-by-year schedule from these:
 - contract_term_years: number of binding (contract) years. option_years: number of renewal-option years.
+- contract_term_months / option_term_months: any ODD MONTHS ON TOP of those whole years, 0-11. A term stated as "24 months" is contract_term_years 2 and contract_term_months 0; "28 months" or "two years and four months" is contract_term_years 2 and contract_term_months 4; "18 months" is 1 and 6; a term shorter than a year ("8 months") is contract_term_years 0 and contract_term_months 8. Return 0 (not null) when the term is a whole number of years.
 - base_rent: the FIRST-YEAR MONTHLY rent (a single monthly figure, never annual). Leave null when rent_is_joint is true (use joint_monthly_rent instead).
 - rent_escalation_mode: how the monthly rent changes each year — "none" (flat, same every year), "percent" (rises a fixed % each year), "fixed" (rises a fixed money amount each year), "cpi" (linked/indexed to the Consumer Price Index — מדד המחירים לצרכן / הצמדה למדד), or "custom" (irregular per-year amounts that follow no single rule). Use "cpi" whenever the rent is tied to the index (הצמדה למדד המחירים לצרכן), even if a minimum increase is also mentioned.
 - rent_escalation_value: the percent (for "percent") or the money amount (for "fixed"). Null for "none"/"custom"/"cpi".
@@ -371,10 +372,27 @@ def _clean_renter(r: ExtractedRenter, discarded: Optional[list[str]] = None) -> 
     # lease_start must be a real ISO date; the form/back end store it as a `date`.
     if r.lease_start is not None and not _is_iso_date(r.lease_start):
         r.lease_start = None
-    for name in ("base_rent", "insurance_amount", "rent_escalation_value", "contract_term_years", "option_years"):
+    for name in (
+        "base_rent",
+        "insurance_amount",
+        "rent_escalation_value",
+        "contract_term_years",
+        "option_years",
+    ):
         v = getattr(r, name)
         if v is not None and v < 0:
             setattr(r, name, None)
+    # The months are a remainder on top of the years, so anything outside 0-11 means the
+    # model restated the whole term in months and the two would double-count.
+    for name in ("contract_term_months", "option_term_months"):
+        v = getattr(r, name)
+        if v is not None and not 0 <= v <= 11:
+            setattr(r, name, None)
+    # Same bound per row, where a `custom` schedule states its own period lengths.
+    if r.lease_years:
+        for ly in r.lease_years:
+            if ly.months is not None and not 1 <= ly.months <= 12:
+                ly.months = None
     # Drop the whole schedule if any year's amount is negative — a partial/garbled
     # schedule is confusing to review; the user re-enters a clean one.
     if r.lease_years is not None and any(ly.amount < 0 for ly in r.lease_years):
