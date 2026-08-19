@@ -27,9 +27,13 @@ def list_property_renters(
     property_id: int,
     current_user: Annotated[dict, Depends(get_current_user)],
     property_service: Annotated[PropertyService, Depends(get_property_service)],
+    include_ended: bool = False,
 ):
-    """Returns renters linked to the property (active leases) for e.g. add-revenue form."""
-    renters = property_service.get_property_renters(property_id, owner_id=current_user["user_id"])
+    """Returns renters linked to the property for e.g. the add-revenue form. Active
+    leases only unless `include_ended` is set — see the service for why that matters."""
+    renters = property_service.get_property_renters(
+        property_id, owner_id=current_user["user_id"], include_ended=include_ended
+    )
     if renters is None:
         raise HTTPException(status_code=404, detail="Property not found")
     return renters

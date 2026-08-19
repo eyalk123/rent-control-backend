@@ -241,3 +241,135 @@ def test_expiring_renters(client, db_session):
     body = client.get("/renters/expiring", params={"days_until": 90}).json()
     assert [r["renter_id"] for r in body] == [soon.id]
     assert body[0]["days_until_expiry"] == 30
+
+
+# ── Ending a lease early ─────────────────────────────────────────────────────────
+
+
+def _running_lease(db_session, prop, **kw):
+    """A lease that started 100 days ago and runs another 200 — overdue and, at a
+    90-day horizon, not yet expiring."""
+    today = date(2026, 6, 15)
+    defaults = dict(
+        property_id=prop.id,
+        lease_start=today - timedelta(days=100),
+        lease_end=today + timedelta(days=200),
+        payment_day_of_month=1,
+        lease_years=[{"amount": 9000, "type": "contract"}],
+    )
+    defaults.update(kw)
+    return make_renter(db_session, **defaults)
+
+
+@freeze_time("2026-06-15")
+def test_terminate_lease_stops_overdue_chasing(client, db_session):
+    prop = make_property(db_session)
+    renter = _running_lease(db_session, prop)
+    assert renter.id in {r["renter_id"] for r in client.get("/renters/overdue").json()}
+
+    resp = client.post(
+        f"/renters/{renter.id}/terminate",
+        json={"terminated_on": "2026-06-10", "reason": "Moved out"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["terminated_on"] == "2026-06-10"
+    assert resp.json()["termination_reason"] == "Moved out"
+
+    assert renter.id not in {r["renter_id"] for r in client.get("/renters/overdue").json()}
+
+
+@freeze_time("2026-06-15")
+def test_terminate_lease_preserves_the_signed_schedule(client, db_session):
+    """The whole point: closing a lease must not rewrite what it was priced from."""
+    prop = make_property(db_session)
+    renter = _running_lease(
+        db_session,
+        prop,
+        lease_years=[{"amount": 9000, "type": "contract"}, {"amount": 9500, "type": "contract"}],
+        cpi_base_index=101.5,
+    )
+
+    body = client.post(
+        f"/renters/{renter.id}/terminate", json={"terminated_on": "2026-06-10"}
+    ).json()
+
+    assert body["lease_years"] == [
+        {"amount": 9000, "type": "contract"},
+        {"amount": 9500, "type": "contract"},
+    ]
+    assert body["cpi_base_index"] == 101.5
+    assert body["lease_start"] == (date(2026, 6, 15) - timedelta(days=100)).isoformat()
+
+
+@freeze_time("2026-06-15")
+def test_terminated_lease_is_not_reported_as_expiring(client, db_session):
+    prop = make_property(db_session)
+    today = date(2026, 6, 15)
+    renter = _running_lease(db_session, prop, lease_end=today + timedelta(days=30))
+    assert renter.id in {r["renter_id"] for r in client.get("/renters/expiring").json()}
+
+    client.post(f"/renters/{renter.id}/terminate", json={"terminated_on": "2026-06-10"})
+    assert renter.id not in {r["renter_id"] for r in client.get("/renters/expiring").json()}
+
+
+@freeze_time("2026-06-15")
+def test_undo_termination_restores_the_renter(client, db_session):
+    prop = make_property(db_session)
+    renter = _running_lease(db_session, prop)
+    client.post(f"/renters/{renter.id}/terminate", json={"terminated_on": "2026-06-10"})
+
+    resp = client.delete(f"/renters/{renter.id}/terminate")
+    assert resp.status_code == 200
+    assert resp.json()["terminated_on"] is None
+    assert resp.json()["termination_reason"] is None
+    assert renter.id in {r["renter_id"] for r in client.get("/renters/overdue").json()}
+
+
+@freeze_time("2026-06-15")
+def test_terminate_rejects_a_date_outside_the_lease(client, db_session):
+    prop = make_property(db_session)
+    renter = _running_lease(db_session, prop)
+
+    before = client.post(
+        f"/renters/{renter.id}/terminate", json={"terminated_on": "2020-01-01"}
+    )
+    assert before.status_code == 400
+
+    after = client.post(
+        f"/renters/{renter.id}/terminate", json={"terminated_on": "2030-01-01"}
+    )
+    assert after.status_code == 400
+
+
+@freeze_time("2026-06-15")
+def test_terminate_renter_of_another_owner_is_denied(client, db_session):
+    prop = make_property(db_session, owner_id=OWNER_B)
+    renter = _running_lease(db_session, prop, owner_id=OWNER_B)
+    resp = client.post(
+        f"/renters/{renter.id}/terminate", json={"terminated_on": "2026-06-10"}
+    )
+    assert resp.status_code == 403
+
+
+def test_terminate_renter_not_found(client):
+    resp = client.post("/renters/999/terminate", json={"terminated_on": "2026-06-10"})
+    assert resp.status_code == 404
+
+
+@freeze_time("2026-06-15")
+def test_property_renters_hides_then_reveals_an_ended_lease(client, db_session):
+    """The transaction form needs the ended tenant back — a rent payment routinely
+    lands after the tenancy finishes, and editing its transaction must still show
+    the renter it is attached to."""
+    prop = make_property(db_session)
+    renter = _running_lease(db_session, prop)
+    client.post(f"/renters/{renter.id}/terminate", json={"terminated_on": "2026-06-10"})
+
+    default = client.get(f"/properties/{prop.id}/renters").json()
+    assert renter.id not in {r["id"] for r in default}
+
+    included = client.get(
+        f"/properties/{prop.id}/renters", params={"include_ended": True}
+    ).json()
+    row = next(r for r in included if r["id"] == renter.id)
+    assert row["is_ended"] is True

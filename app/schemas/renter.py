@@ -148,6 +148,20 @@ class RenterUpdate(BaseModel):
         return v
 
 
+class RenterTerminate(BaseModel):
+    """Body for POST /renters/{id}/terminate — closing a lease before its end date.
+
+    Deliberately its own schema rather than two more optional fields on RenterUpdate:
+    ending a tenancy is an explicit act, not something a form save should be able to do
+    by accident.
+    """
+
+    terminated_on: date
+    reason: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RenterRead(BaseModel):
     id: int
     property_id: Optional[int] = None
@@ -163,6 +177,10 @@ class RenterRead(BaseModel):
     rent_escalation_mode: Optional[RentEscalationMode] = None
     rent_escalation_value: Optional[float] = None
     cpi_base_index: Optional[float] = None  # server-set; read-only
+    # Read-only here on purpose — set and cleared through /renters/{id}/terminate so a
+    # lease can never be closed as a side effect of an ordinary form save.
+    terminated_on: Optional[date] = None
+    termination_reason: Optional[str] = None
     number_of_payments: Optional[int] = None
     payment_type: Optional[str] = None
     payment_day_of_month: Optional[int] = None
@@ -195,6 +213,10 @@ class PropertyRenterSummary(BaseModel):
     first_name: str
     last_name: str
     monthly_rent: float
+    # True when this tenancy has finished (ran its term, or was ended early). Only ever
+    # set when the caller asked for inactive renters; it lets the picker mark the option
+    # rather than the client having to re-derive it from lease dates it isn't sent.
+    is_ended: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

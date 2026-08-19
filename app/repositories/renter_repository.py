@@ -8,6 +8,18 @@ from app.models.renter import Renter
 from app.models.transaction import Transaction
 
 
+def _effective_lease_end():
+    """The date a lease actually stops, as a SQL expression.
+
+    An early termination ends the tenancy before the signed schedule does, and the
+    terminate endpoint validates ``terminated_on <= lease_end`` — so the coalesce is
+    always the earlier of the two. Every "is this renter active" window keys off this
+    rather than ``lease_end`` directly, which is what makes a terminated lease stop
+    being chased for rent without touching the schedule it was priced from.
+    """
+    return func.coalesce(Renter.terminated_on, Renter.lease_end)
+
+
 def _scope_conditions(
     property_ids: list[int] | None,
     property_owners: list[str] | None,
@@ -86,6 +98,9 @@ class RenterRepository:
             "rent_escalation_mode",
             "rent_escalation_value",
             "cpi_base_index",
+            # Nullable so undoing a termination can actually clear them.
+            "terminated_on",
+            "termination_reason",
         }
         always_set_fields = {"lease_years", "lease_end"}
         for key, value in data.items():
@@ -142,7 +157,7 @@ class RenterRepository:
             .where(
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
-                Renter.lease_end >= today,
+                _effective_lease_end() >= today,
                 # A missing payment day falls back to the 1st (backend-only; the
                 # column itself stays null and is never shown to the user).
                 func.coalesce(Renter.payment_day_of_month, 1) <= today.day,
@@ -171,6 +186,7 @@ class RenterRepository:
             .where(
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
+                Renter.terminated_on.is_(None),
                 Renter.lease_end > today,
                 Renter.lease_end <= cutoff,
                 *_scope_conditions(property_ids, property_owners, renter_ids),
@@ -196,7 +212,7 @@ class RenterRepository:
             .where(
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
-                Renter.lease_end >= today,
+                _effective_lease_end() >= today,
                 *_scope_conditions(property_ids, property_owners, renter_ids),
             )
         )
@@ -220,7 +236,7 @@ class RenterRepository:
         if active_only:
             stmt = stmt.where(
                 Renter.lease_start <= today,
-                Renter.lease_end >= today,
+                _effective_lease_end() >= today,
             )
         stmt = stmt.order_by(Renter.lease_start.desc())
         return list(self.session.scalars(stmt).all())

@@ -29,6 +29,12 @@ class Renter(Base):
     # Base CPI index frozen at signing (mode == "cpi" only). Rent for each lease
     # year is base_rent * max(known_index / cpi_base_index, 1). Server-set.
     cpi_base_index = Column(Float, nullable=True)
+    # Early exit. Set only via the terminate endpoint, never as a side effect of an
+    # edit. It records the lease ending *alongside* the signed terms rather than
+    # rewriting them: lease_years, cpi_base_index and the renter's transactions are
+    # deliberately untouched, so past reports still reconstruct. NULL == running.
+    terminated_on = Column(Date, nullable=True)
+    termination_reason = Column(String, nullable=True)
     number_of_payments = Column(Integer, nullable=True)
     payment_type = Column(String, nullable=True)
     payment_day_of_month = Column(Integer, nullable=True)

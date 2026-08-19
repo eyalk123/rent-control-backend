@@ -3,7 +3,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.dependencies import get_current_user, get_renter_service
-from app.schemas.renter import ExpiringRenterRead, OverdueRenterRead, RenterCreate, RenterListRead, RenterRead, RenterUpdate
+from app.schemas.renter import (
+    ExpiringRenterRead,
+    OverdueRenterRead,
+    RenterCreate,
+    RenterListRead,
+    RenterRead,
+    RenterTerminate,
+    RenterUpdate,
+)
 from app.services.renter_service import RenterService
 
 router = APIRouter()
@@ -78,6 +86,34 @@ def update_renter(
 ):
     """Partially updates a renter (edits, moving properties, or renewing leases)."""
     renter = renter_service.update_renter(renter_id, data, owner_id=current_user["user_id"])
+    if renter is None:
+        raise HTTPException(status_code=404, detail="Renter not found")
+    return renter
+
+
+@router.post("/{renter_id}/terminate", response_model=RenterRead)
+def terminate_lease(
+    renter_id: int,
+    data: RenterTerminate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    renter_service: Annotated[RenterService, Depends(get_renter_service)],
+):
+    """Ends a lease early. The signed schedule, the frozen CPI base and every
+    transaction are kept — only the tenancy's end date moves."""
+    renter = renter_service.terminate_lease(renter_id, data, owner_id=current_user["user_id"])
+    if renter is None:
+        raise HTTPException(status_code=404, detail="Renter not found")
+    return renter
+
+
+@router.delete("/{renter_id}/terminate", response_model=RenterRead)
+def undo_termination(
+    renter_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    renter_service: Annotated[RenterService, Depends(get_renter_service)],
+):
+    """Reopens a lease that was ended by mistake."""
+    renter = renter_service.undo_termination(renter_id, owner_id=current_user["user_id"])
     if renter is None:
         raise HTTPException(status_code=404, detail="Renter not found")
     return renter

@@ -10,7 +10,13 @@ from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.schemas.renter import ExpiringRenterRead, OverdueRenterRead, RenterCreate, RenterUpdate
+from app.schemas.renter import (
+    ExpiringRenterRead,
+    OverdueRenterRead,
+    RenterCreate,
+    RenterTerminate,
+    RenterUpdate,
+)
 from app.services.cpi_indexing_service import (
     IndexReading,
     materialize_cpi_amounts,
@@ -292,6 +298,78 @@ class RenterService:
                 count = len(json.loads(renter.lease_years))
             update_dict["lease_end"] = _compute_lease_end(lease_start, count) if lease_start else None
         return self.renter_repository.update(renter, update_dict)
+
+    def terminate_lease(self, renter_id: int, data: RenterTerminate, owner_id: str):
+        """Close a lease before its end date.
+
+        Records the early exit *alongside* the signed terms. `lease_years`,
+        `cpi_base_index` and the renter's transactions are deliberately left alone — the
+        alternative (shortening the schedule, or moving `lease_start`) re-anchors the
+        frozen CPI base and rewrites the amounts past transactions were priced against,
+        which is exactly the history this is meant to preserve.
+
+        From `terminated_on` the renter falls out of every active window
+        (`_effective_lease_end` in the repository), so rent-due, expiry and CPI repricing
+        all stop. Notifications already sent are not retracted.
+        """
+        renter = self.renter_repository.get_by_id(renter_id)
+        if renter is None:
+            return None
+        self._check_renter_access(renter, owner_id)
+
+        if renter.lease_start is not None and data.terminated_on < renter.lease_start:
+            raise HTTPException(
+                status_code=400, detail="Termination date is before the lease starts"
+            )
+        if renter.lease_end is not None and data.terminated_on > renter.lease_end:
+            raise HTTPException(
+                status_code=400,
+                detail="Termination date is after the lease ends — edit the lease term instead",
+            )
+
+        if self.activity_log_repository is not None:
+            self.activity_log_repository.record_action(
+                owner_id=owner_id,
+                action="terminate",
+                entity_type="renter",
+                entity_id=renter.id,
+                label=f"{renter.first_name} {renter.last_name}".strip(),
+                details={
+                    "terminated_on": data.terminated_on.isoformat(),
+                    "lease_end": renter.lease_end.isoformat() if renter.lease_end else None,
+                },
+            )
+
+        return self.renter_repository.update(
+            renter,
+            {"terminated_on": data.terminated_on, "termination_reason": data.reason},
+        )
+
+    def undo_termination(self, renter_id: int, owner_id: str):
+        """Reopen a lease closed by mistake. Nothing was destroyed, so this is a
+        straight clear of the two columns."""
+        renter = self.renter_repository.get_by_id(renter_id)
+        if renter is None:
+            return None
+        self._check_renter_access(renter, owner_id)
+
+        if self.activity_log_repository is not None:
+            self.activity_log_repository.record_action(
+                owner_id=owner_id,
+                action="reopen",
+                entity_type="renter",
+                entity_id=renter.id,
+                label=f"{renter.first_name} {renter.last_name}".strip(),
+                details={
+                    "was_terminated_on": (
+                        renter.terminated_on.isoformat() if renter.terminated_on else None
+                    )
+                },
+            )
+
+        return self.renter_repository.update(
+            renter, {"terminated_on": None, "termination_reason": None}
+        )
 
     def get_overdue_this_month(
         self,

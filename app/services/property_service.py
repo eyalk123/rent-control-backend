@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from app.models.property import Property, PropertyTypeEnum
 from app.repositories.activity_log_repository import ActivityLogRepository
@@ -94,16 +95,24 @@ class PropertyService:
         self.property_repository.delete_obj(property)
         return True
 
-    def get_property_renters(self, property_id: int, owner_id: str):
-        """Return renters linked to the property (active leases only) for e.g. add-revenue form."""
+    def get_property_renters(self, property_id: int, owner_id: str, include_ended: bool = False):
+        """Renters linked to the property, for e.g. the add-revenue form.
+
+        Active leases only by default. ``include_ended`` is what the transaction form
+        asks for: a payment can arrive after a tenancy finishes (the last month's rent
+        routinely lands late), and editing an old transaction has to be able to show the
+        renter it was already attached to — an option that silently vanished from the
+        dropdown would detach the transaction on the next save.
+        """
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
         renters = self.renter_repository.get_by_property_id(
             property_id=property_id,
             owner_id=owner_id,
-            active_only=True,
+            active_only=not include_ended,
         )
+        today = date.today()
         summaries = []
         for r in renters:
             lease_years_data = r.lease_years
@@ -114,12 +123,18 @@ class PropertyService:
                 # lease_years[i]["amount"] is stored as the MONTHLY rent everywhere
                 # else (overdue engine, extraction prompt, factories). Do not divide.
                 monthly_rent = lease_years_data[0]["amount"]
+            # Same rule the repository's active window uses: an early termination beats
+            # the signed end date.
+            effective_end = min(d for d in (r.terminated_on, r.lease_end) if d) if (
+                r.terminated_on or r.lease_end
+            ) else None
             summaries.append(
                 PropertyRenterSummary(
                     id=r.id,
                     first_name=r.first_name,
                     last_name=r.last_name,
                     monthly_rent=monthly_rent,
+                    is_ended=bool(effective_end and effective_end < today),
                 )
             )
         return summaries

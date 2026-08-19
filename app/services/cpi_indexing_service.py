@@ -485,6 +485,10 @@ class CpiIndexingService:
         for renter in self.renter_repository.get_by_escalation_modes(["cpi", "custom"]):
             if not renter.lease_start:
                 continue
+            # A closed lease is not repriced at the next period boundary — and the CPI
+            # change notification below would be about rent nobody owes.
+            if renter.terminated_on:
+                continue
             try:
                 current = json.loads(renter.lease_years) if renter.lease_years else []
             except (json.JSONDecodeError, TypeError):
