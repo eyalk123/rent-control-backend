@@ -13,6 +13,7 @@ from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.schemas.transaction import (
     MonthSummaryItem,
+    OwnerNetItem,
     PaymentMethod,
     TransactionCreateExpense,
     TransactionCreateRevenue,
@@ -187,7 +188,32 @@ class TransactionService:
                 profit=revenue - expenses,
             ))
 
-        return TransactionSummaryResponse(six_month_buckets=buckets)
+        by_owner = self._get_ytd_by_owner(owner_id, date(today.year, 1, 1))
+
+        return TransactionSummaryResponse(
+            six_month_buckets=buckets,
+            ytd_year=today.year,
+            ytd_net=sum(item.net for item in by_owner),
+            ytd_by_owner=by_owner,
+        )
+
+    def _get_ytd_by_owner(self, owner_id: str, from_date: date) -> list[OwnerNetItem]:
+        """Year-to-date net grouped by the free-text property owner, biggest net first."""
+        # NULL (deleted property) and a blank owner string both mean "unattributed",
+        # and the DB groups them separately — fold them into one bucket here.
+        totals: dict[str | None, list[float]] = {}
+        for row in self.transaction_repository.get_ytd_by_owner(owner_id, from_date):
+            owner = (row.owner or "").strip() or None
+            bucket = totals.setdefault(owner, [0.0, 0.0])
+            bucket[0] += float(row.revenue or 0)
+            bucket[1] += float(row.expenses or 0)
+
+        items = [
+            OwnerNetItem(owner=owner, revenue=revenue, expenses=expenses, net=revenue - expenses)
+            for owner, (revenue, expenses) in totals.items()
+        ]
+        items.sort(key=lambda item: item.net, reverse=True)
+        return items
 
     def update_revenue(self, transaction_id: int, data: TransactionUpdateRevenue, owner_id: str) -> TransactionRead | None:
         fields: dict = {}

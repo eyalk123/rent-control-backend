@@ -132,6 +132,30 @@ class TransactionRepository:
         )
         return list(self.session.execute(stmt).all())
 
+    def get_ytd_by_owner(self, owner_id: str, from_date: date) -> list:
+        # Net per *property owner* (the free-text Property.property_owner), same
+        # effective-date rule as the monthly summary so the sidebar card and the
+        # income/expense report agree. Outer join: property_id is ON DELETE SET NULL,
+        # so transactions of a deleted property must still count, unattributed.
+        stmt = (
+            select(
+                Property.property_owner.label('owner'),
+                func.sum(
+                    case((Transaction.type == TransactionTypeEnum.REVENUE, Transaction.amount), else_=0)
+                ).label('revenue'),
+                func.sum(
+                    case((Transaction.type == TransactionTypeEnum.EXPENSE, Transaction.amount), else_=0)
+                ).label('expenses'),
+            )
+            .outerjoin(Property, Transaction.property_id == Property.id)
+            .where(
+                Transaction.owner_id == owner_id,
+                EFFECTIVE_DATE >= from_date,
+            )
+            .group_by(Property.property_owner)
+        )
+        return list(self.session.execute(stmt).all())
+
     def update(self, transaction_id: int, owner_id: str, fields: dict, new_categories: Optional[list] = None) -> Transaction | None:
         transaction = self.get_by_id(transaction_id, owner_id)
         if transaction is None:

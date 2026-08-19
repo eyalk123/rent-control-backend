@@ -132,5 +132,15 @@ class MonthSummaryItem(BaseModel):
     profit: float
 
 
+class OwnerNetItem(BaseModel):
+    owner: str | None  # the free-text Property.property_owner; None = unattributed
+    revenue: float
+    expenses: float
+    net: float
+
+
 class TransactionSummaryResponse(BaseModel):
     six_month_buckets: list[MonthSummaryItem]  # 6 items, oldest → newest, padded with zeros
+    ytd_year: int  # calendar year the figures below cover
+    ytd_net: float  # Jan 1 → today, all owners
+    ytd_by_owner: list[OwnerNetItem]  # same window, split by property owner, net desc

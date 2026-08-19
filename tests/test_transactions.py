@@ -324,3 +324,50 @@ def test_summary_six_buckets(client, db_session):
     april = next(b for b in buckets if b["key"] == "2026-04")
     assert april["expenses"] == 1200.0
     assert april["profit"] == -1200.0
+
+
+@freeze_time("2026-06-15")
+def test_summary_ytd_by_owner(client, db_session):
+    jane = make_property(db_session, property_owner="Jane Cooper")
+    dana = make_property(db_session, property_owner="Dana Levi")
+    unowned = make_property(db_session, property_owner=None)
+    cat = make_expense_category(db_session)
+
+    # Jane: 9000 in, 1000 out -> 8000. Dana: 2000 in -> 2000. Unowned: 500 out -> -500.
+    make_transaction(db_session, type=TransactionTypeEnum.REVENUE, property_id=jane.id,
+                     amount=4000, date_of_payment=date(2026, 1, 5))
+    make_transaction(db_session, type=TransactionTypeEnum.REVENUE, property_id=jane.id,
+                     amount=5000, date_of_payment=date(2026, 6, 5))
+    make_transaction(db_session, type=TransactionTypeEnum.EXPENSE, property_id=jane.id,
+                     amount=1000, date_of_payment=date(2026, 3, 5), categories=[cat])
+    make_transaction(db_session, type=TransactionTypeEnum.REVENUE, property_id=dana.id,
+                     amount=2000, date_of_payment=date(2026, 2, 5))
+    make_transaction(db_session, type=TransactionTypeEnum.EXPENSE, property_id=unowned.id,
+                     amount=500, date_of_payment=date(2026, 4, 5), categories=[cat])
+    # Last year: outside the window, must not count.
+    make_transaction(db_session, type=TransactionTypeEnum.REVENUE, property_id=jane.id,
+                     amount=7777, date_of_payment=date(2025, 12, 5))
+
+    body = client.get("/transactions/summary").json()
+    assert body["ytd_year"] == 2026
+    assert body["ytd_net"] == 9500.0
+    assert body["ytd_by_owner"] == [
+        {"owner": "Jane Cooper", "revenue": 9000.0, "expenses": 1000.0, "net": 8000.0},
+        {"owner": "Dana Levi", "revenue": 2000.0, "expenses": 0.0, "net": 2000.0},
+        {"owner": None, "revenue": 0.0, "expenses": 500.0, "net": -500.0},
+    ]
+
+
+@freeze_time("2026-06-15")
+def test_summary_ytd_counts_revenue_under_month_for(client, db_session):
+    """Rent paid in Dec *for* January belongs to the new year, like the report."""
+    prop = make_property(db_session, property_owner="Jane Cooper")
+    make_transaction(db_session, type=TransactionTypeEnum.REVENUE, property_id=prop.id,
+                     amount=3000, date_of_payment=date(2025, 12, 28),
+                     month_for=date(2026, 1, 1))
+
+    body = client.get("/transactions/summary").json()
+    assert body["ytd_net"] == 3000.0
+    assert body["ytd_by_owner"] == [
+        {"owner": "Jane Cooper", "revenue": 3000.0, "expenses": 0.0, "net": 3000.0},
+    ]
