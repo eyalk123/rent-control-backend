@@ -14,6 +14,7 @@ from app.api.dependencies import (
 from app.database import get_db
 from app.repositories.owner_repository import OwnerRepository
 from app.schemas.owner import OwnerRead
+from app.schemas.tour_state import TourStateRead, TourStateUpdate
 from app.services.export_service import build_export_zip
 from app.services.user_service import UserService
 
@@ -30,6 +31,36 @@ def get_my_profile(
     if owner is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Owner profile not found")
     return owner
+
+
+@router.get("/me/tour-state", response_model=TourStateRead)
+def get_my_tour_state(
+    current_user: Annotated[dict, Depends(get_current_owner)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+):
+    """Which onboarding tours and seeds this owner has already been shown.
+
+    Never 404s: an owner with no row yet has simply seen nothing, and the clients must be
+    able to ask this on first launch without special-casing the answer.
+    """
+    return TourStateRead(**owner_repository.get_tour_state(current_user["user_id"]))
+
+
+@router.patch("/me/tour-state", response_model=TourStateRead)
+def update_my_tour_state(
+    payload: TourStateUpdate,
+    current_user: Annotated[dict, Depends(get_current_owner)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+):
+    """Records that a tour finished or a seed was shown. Merges — see the schema for why."""
+    state = owner_repository.merge_tour_state(
+        current_user["user_id"],
+        tours_seen=payload.tours_seen,
+        seeds_shown=payload.seeds_shown,
+        tours_disabled=payload.tours_disabled,
+        reset=payload.reset,
+    )
+    return TourStateRead(**state)
 
 
 @router.get("/me/export")
