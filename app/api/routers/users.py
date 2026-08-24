@@ -1,6 +1,7 @@
 from datetime import date
 from typing import Annotated
 
+import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -72,9 +73,11 @@ def export_my_data(
     try:
         content = build_export_zip(db, current_user["user_id"])
     except Exception as exc:
+        # Reported rather than echoed: the raw exception text could carry row data.
+        sentry_sdk.capture_exception(exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Export failed: {exc}",
+            detail="Export failed. Please try again.",
         )
 
     filename = f"rent-control-export-{date.today().isoformat()}.zip"

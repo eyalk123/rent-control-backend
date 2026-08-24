@@ -54,6 +54,8 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON as a string |
 | `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
+| `SENTRY_DSN` | No | Sentry error monitoring; empty disables it entirely (no init, no network calls) |
+| `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
 | `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them. Prefer scheduling `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them — but it is no longer required: `run-reminders` checks `job_runs` and runs indexing inline if it hasn't run today |
@@ -98,6 +100,22 @@ Router → Service → Repository → Model → PostgreSQL
 ```
 
 Each layer has a corresponding file per domain. Dependencies are wired in `app/api/dependencies.py` via FastAPI `Depends()`.
+
+## Error Monitoring (Sentry)
+
+Configured in `app/monitoring.py`; errors only, no performance tracing. Disabled
+entirely when `SENTRY_DSN` is empty, which is how the test suite and local development
+run. Two invariants a future change must not break:
+
+1. **`init_sentry()` runs before `FastAPI()` is constructed** (`app/main.py`). The
+   Starlette integration patches `Starlette.__init__`, so an app built first is never
+   wrapped and captures nothing — silently.
+2. **HTTP-status-based capture is off** (`failed_request_status_codes=set()`), because
+   the app raises `HTTPException(502/503)` deliberately for handled conditions. Any new
+   place that converts a real exception into an `HTTPException` must call
+   `sentry_sdk.capture_exception(exc)` first, or the cause is lost.
+
+Only the Firebase UID is attached to events (`get_current_owner`) — never email or name.
 
 ## Additional Documentation
 

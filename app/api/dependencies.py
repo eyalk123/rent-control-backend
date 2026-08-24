@@ -2,6 +2,7 @@ import logging
 from typing import Annotated
 
 import requests as http_requests
+import sentry_sdk
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.exceptions import TransportError
@@ -98,15 +99,25 @@ def get_current_owner(
     same ``current_user`` dict. The upsert is best-effort telemetry — a write failure must
     never break an otherwise-valid authenticated request.
     """
+    # Firebase UID only — deliberately no email/name/picture, so error reports stay free
+    # of personal data while still being traceable to one account. `.get()` because the
+    # test suite overrides get_current_user with a dict holding only user_id and role.
+    uid = current_user.get("user_id")
+    if uid:
+        sentry_sdk.set_user({"id": uid})
+
     try:
         owner_repository.upsert(
-            uid=current_user["user_id"],
+            uid=uid,
             email=current_user.get("email"),
             display_name=current_user.get("name"),
             picture_url=current_user.get("picture"),
         )
     except Exception as exc:
-        logger.warning("Owner profile upsert failed for %s: %s", current_user["user_id"], exc)
+        logger.warning("Owner profile upsert failed for %s: %s", uid, exc)
+        # Swallowed on purpose (best-effort telemetry write), but a broken owners table
+        # should not be invisible.
+        sentry_sdk.capture_exception(exc)
     return current_user
 
 

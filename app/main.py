@@ -18,6 +18,12 @@ from app.api.routers import (
     users,
 )
 from app.config import settings
+from app.monitoring import init_sentry
+
+# Must run before FastAPI() is constructed: the Sentry Starlette integration patches
+# Starlette.__init__, so an app built before this call is never wrapped and captures
+# nothing — silently.
+init_sentry()
 
 app = FastAPI(title="Property Management API")
 

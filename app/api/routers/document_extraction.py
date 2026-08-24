@@ -1,6 +1,7 @@
 import time
 from typing import Annotated
 
+import sentry_sdk
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.dependencies import (
@@ -51,8 +52,9 @@ async def extract_lease(
                     latency_ms=int((time.monotonic() - started) * 1000),
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Never let the audit write mask the original error — but don't lose it.
+            sentry_sdk.capture_exception(exc)
 
     try:
         result = service.extract_lease(file_bytes, file.content_type)
@@ -63,6 +65,10 @@ async def extract_lease(
         # Convert any unexpected error (e.g. an Anthropic SDK error) into a proper
         # response so it goes through CORS middleware and the client sees a real message
         # instead of an opaque "CORS"/network failure.
+        # The real cause is discarded below in favour of a clean 502, and the 502
+        # itself is not reported (failed_request_status_codes is disabled), so this is
+        # the only chance to capture it.
+        sentry_sdk.capture_exception(exc)
         _log_failure("error", f"{type(exc).__name__}: {exc}")
         raise HTTPException(
             status_code=502, detail="Document extraction failed. Please try again."

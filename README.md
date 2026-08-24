@@ -206,6 +206,8 @@ live in `.claude/docs/architectural_patterns.md`.
 | `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease` **and** the chat agent. Empty ⇒ both return 503 |
 | `EXTRACTION_MODEL` | No | Default `claude-sonnet-4-6`; use `claude-opus-4-8` if accuracy on hard scans is insufficient |
 | `CORS_ORIGINS` | No | Comma-separated browser origins; default `http://localhost:5173`. Mobile is unaffected (CORS is browser-only) |
+| `SENTRY_DSN` | No | Sentry error monitoring (errors only, no tracing). Empty disables it entirely — no init, no network calls. Set per-environment in Railway |
+| `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push; only needed with Expo "Enhanced Security" |
 | `REMINDER_CRON_SECRET` | No | Guards the `/internal/*` endpoints via the `X-Cron-Secret` header. **Empty disables them** |

@@ -15,6 +15,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
+import sentry_sdk
 from anthropic import Anthropic
 from fastapi import HTTPException, status
 
@@ -263,6 +264,12 @@ class AgentService:
                 yield {"type": "text", "delta": _ITER_CAP_TEXT}
         except Exception as exc:  # Anthropic SDK / network errors, mid-stream
             logger.warning("Agent request failed for %s: %s", owner_id, exc)
+            # The stream already returned HTTP 200, so this failure is invisible to the
+            # ASGI integration — it only ever surfaces as an SSE "error" frame. The web
+            # client deliberately does not report that frame; this is its one report.
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("agent_stream", "mid_stream_failure")
+                sentry_sdk.capture_exception(exc)
             self._finalize(reserve, usage, tool_calls, "error", str(exc)[:500], started)
             yield {"type": "error", "detail": "The agent request failed upstream."}
             return

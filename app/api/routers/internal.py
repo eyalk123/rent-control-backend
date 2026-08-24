@@ -3,6 +3,7 @@ import secrets
 from datetime import date
 from typing import Annotated, Any, Callable
 
+import sentry_sdk
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 
@@ -54,6 +55,11 @@ def _record(
     """
     run = job_runs.start(job_name)
     started_at = run.started_at
+    # Tag the request scope rather than capturing here: the exception is re-raised and
+    # the ASGI integration reports it once, with this tag attached. Capturing here too
+    # would file the same failure twice. These endpoints are unauthenticated, so the job
+    # name is the only useful grouping key.
+    sentry_sdk.get_isolation_scope().set_tag("job_name", job_name)
     try:
         result = work()
     except Exception as exc:

@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     # Mobile clients are unaffected (CORS is a browser-only mechanism).
     # In Railway set e.g. "https://app.example.com,https://web.up.railway.app".
     CORS_ORIGINS: str = "http://localhost:5173"
+    # Sentry error monitoring (errors only, no performance tracing). Leave empty to
+    # disable: nothing is initialised and no network calls are made, which is what the
+    # test suite and local development run with.
+    SENTRY_DSN: str = ""
+    # Tags every Sentry event so production noise stays separable. Normally left unset:
+    # Railway injects the environment name and `resolve_environment()` picks it up. Set
+    # this only to override that.
+    ENVIRONMENT: str = ""
     # Push notifications (Expo Push Service).
     # Optional access token; only required when Expo "Enhanced Security" is enabled.
     EXPO_ACCESS_TOKEN: str = ""
