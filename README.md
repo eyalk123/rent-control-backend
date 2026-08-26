@@ -290,6 +290,39 @@ today and performs it inline if the scheduler hasn't, so either order produces t
 jobs are idempotent, so the catch-up costs a request and nothing else. Keep the order anyway: it
 means the catch-up never fires.
 
+### Switching the onboarding tour on
+
+The guided tour (PLATFORM.md §3) is finished on both clients but ships **off**, behind a master
+flag in each app's `src/features/onboarding/flags.ts`. Turning it on is configuration, not a code
+change:
+
+- **Web** — set `VITE_ONBOARDING_TOURS=on` as a Railway variable on the web service. The
+  `Dockerfile` forwards it into the build. `rentControlTours(true)` in the browser console is a
+  per-browser override that outranks it, for checking a deployed build without switching it on for
+  everyone.
+- **Mobile** — `EXPO_PUBLIC_ONBOARDING_TOURS=on`. The `preview` and `simulator` EAS profiles
+  already set it; `production` deliberately does not.
+
+**Run this once, before the first switch-on:**
+
+```sql
+UPDATE owners SET tour_state = '{}';
+```
+
+An unfinished version of the tour was briefly live, so some accounts already have progress recorded
+against tours they never really saw — those users would silently skip parts of the finished set.
+The column records nothing but which onboarding someone has been shown (`tours_seen`,
+`seeds_shown`, `tours_disabled`), so the worst case of clearing it is that somebody sees a tour once
+more. It is not personal data and there is nothing to preserve.
+
+Note this also clears the `tours_disabled` opt-out, so anyone who had turned tours off gets them
+back. That is a handful of accounts at most given the feature was never really live, and Settings
+lets them turn it off again — but if that matters, use
+`UPDATE owners SET tour_state = jsonb_build_object('tours_disabled', (tour_state::jsonb ->
+'tours_disabled'))::text;` instead, which keeps the opt-out and drops both progress maps. Either
+statement is safe to read back: `OwnerRepository._decode_tour_state` fills in missing maps and
+coerces a null `tours_disabled` to `False`, so a partial blob degrades to "seen nothing".
+
 ### Knowing whether the jobs ran
 
 Every invocation writes a row to **`job_runs`** — `job_name`, `started_at`, `finished_at`, `status`
