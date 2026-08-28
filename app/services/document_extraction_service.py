@@ -97,8 +97,6 @@ _MAX_PDF_PAGES = 20
 #   - electricity_meter_number, electricity_account_number, water_meter_number, water_account_number: utility identifiers.
 #   - property_tax, house_committee: periodic property tax ("arnona") and building-committee ("vaad bayit") amounts.
 #   - inventory_notes: any inventory / contents description.
-#   Renter:
-#   - email: tenant email address.
 _SYSTEM_PROMPT = """You extract structured data from rental lease / property contracts to pre-fill a property-management app's forms. Documents are often in Hebrew (right-to-left) and may mix Hebrew, English, and numbers in tables — read them carefully and preserve the correct values.
 
 A single lease usually describes a property and one or more renters (co-tenants who sign the same lease). Populate the property once and add one entry to `renters` for EACH tenant. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money/areas as plain numbers (no currency symbols or commas).
@@ -120,8 +118,9 @@ Property fields:
 Renter fields — one `renters` entry PER tenant. If several people sign as tenants, list them all; do not merge them or push them into extra_contacts.
 - first_name, last_name: the tenant's given and family name.
 - phone: the tenant's PHONE number only. An Israeli phone is typically 9-10 digits starting with 0 (mobile 05X-XXXXXXX) or +972. Before filling this, check the number really looks like a phone. A 9-digit national ID number (תעודת זהות / ת"ז) is NOT a phone — if the only number you see near the tenant is an ID, leave phone null rather than putting the ID here.
+- email: the tenant's EMAIL address, exactly as written (one "@", no spaces). Take it only from the tenant's own details — an email in the landlord's / agent's / lawyer's block belongs to none of these fields, so leave this null rather than borrowing one.
 - lease_start: the lease commencement date (ISO YYYY-MM-DD).
-- payment_type: payment method described (e.g. bank transfer, checks).
+- payment_type: how the rent is paid — exactly one of "bank_transfer" (העברה בנקאית / הוראת קבע), "check" (המחאות / צ'קים / שיקים), "cash" (מזומן) or "bit" (ביט). Return null when the document doesn't say, or describes a method that is none of these — do not stretch one to fit.
 - payment_day_of_month: the day OF THE MONTH rent is due — a single whole number 1-31, nothing else. It is NOT a phone number, NOT a 9-digit ID (ת"ז), NOT a bank account/branch number, NOT a full date, NOT a sum of money. In Hebrew it reads like "בכל 1 לחודש", "עד ה-10 בכל חודש", "ב-1 לכל חודש" — take just the day number from such a clause. If the document never says which day of the month rent is due, return null; never borrow a nearby number just because one appears next to the payment terms.
 - insurance_type: the required security/collateral type — exactly one of "bank_guarantee" (ערבות בנקאית) or "wire_transfer" (פיקדון / העברה בנקאית / cash deposit). insurance_amount: its amount (usually stated right next to the type). Return null for insurance_type if it isn't one of those two.
 - number_of_payments: installments per year (e.g. 12 for monthly).
@@ -353,6 +352,21 @@ def _clean_property(p: ExtractedProperty) -> None:
 # Security/collateral type the renter form accepts; other free text is dropped.
 _SECURITY_TYPES = {"bank_guarantee", "wire_transfer"}
 
+# Payment methods the renter form's paymentType select accepts. "wire_transfer" is a legacy
+# alias the old web form stored for a bank transfer, so map it instead of dropping it.
+_PAYMENT_TYPES = {"cash", "bank_transfer", "bit", "check"}
+_PAYMENT_TYPE_ALIASES = {"wire_transfer": "bank_transfer"}
+
+
+def _looks_like_email(value: str) -> bool:
+    """Shape check only — one "@" with non-blank text either side and a dot in the domain.
+    Deliberately loose: the point is to catch a phone/ID/name landing in `email`, not to
+    referee which addresses are deliverable."""
+    local, sep, domain = value.strip().partition("@")
+    if not sep or any(c.isspace() for c in value.strip()):
+        return False
+    return bool(local) and "@" not in domain and "." in domain and not domain.endswith(".")
+
 
 def _looks_like_israeli_id(value: str) -> bool:
     """A bare 9-digit number is almost certainly a national ID (ת\"ז), not a phone."""
@@ -400,6 +414,17 @@ def _clean_renter(r: ExtractedRenter, discarded: Optional[list[str]] = None) -> 
     # Insurance/security type must be one of the enum values the renter form accepts.
     if r.insurance_type is not None and r.insurance_type not in _SECURITY_TYPES:
         r.insurance_type = None
+    # Same for the payment method: the form's select has no option for free text, so an
+    # unmapped value would render a blank control and then fail validation on submit.
+    if r.payment_type is not None:
+        canonical = _PAYMENT_TYPE_ALIASES.get(r.payment_type, r.payment_type)
+        if canonical in _PAYMENT_TYPES:
+            r.payment_type = canonical
+        else:
+            _drop("payment_type")
+    # An email that isn't address-shaped is a phone/ID/name that wandered into the field.
+    if r.email is not None and not _looks_like_email(r.email):
+        _drop("email")
     # Guard against the national ID being mistaken for a phone (see the prompt).
     if r.phone is not None and _looks_like_israeli_id(r.phone):
         _drop("phone")

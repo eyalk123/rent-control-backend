@@ -296,6 +296,44 @@ def test_clean_keeps_known_insurance_type():
     assert e.renters[0].insurance_type == "bank_guarantee"
 
 
+def test_clean_maps_legacy_wire_transfer_payment_type():
+    e = _one_renter()
+    e.renters[0].payment_type = "wire_transfer"  # legacy alias the old web form stored
+    _clean_extraction(e)
+    assert e.renters[0].payment_type == "bank_transfer"
+
+
+def test_clean_keeps_known_payment_type():
+    e = _one_renter()
+    e.renters[0].payment_type = "check"
+    _clean_extraction(e)
+    assert e.renters[0].payment_type == "check"
+
+
+def test_clean_drops_unknown_payment_type():
+    e = _one_renter()
+    e.renters[0].payment_type = "standing order"  # free text the form's select can't show
+    discarded: list[str] = []
+    _clean_extraction(e, discarded)
+    assert e.renters[0].payment_type is None
+    assert discarded == ["payment_type='standing order'"]
+
+
+def test_clean_keeps_address_shaped_email():
+    e = _one_renter()
+    e.renters[0].email = "noa@example.co.il"
+    _clean_extraction(e)
+    assert e.renters[0].email == "noa@example.co.il"
+
+
+@pytest.mark.parametrize("value", ["0521234567", "Noa Cohen", "noa@example", "noa @example.com"])
+def test_clean_drops_non_email_shaped_email(value):
+    e = _one_renter()
+    e.renters[0].email = value
+    _clean_extraction(e)
+    assert e.renters[0].email is None
+
+
 def test_clean_drops_national_id_mistaken_for_phone():
     e = _one_renter()
     e.renters[0].phone = "312345678"  # bare 9-digit national ID, not a phone

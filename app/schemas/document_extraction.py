@@ -78,8 +78,7 @@ class ExtractedRenter(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
-    # DISABLED (rarely in a lease). Re-enable here + restore its _SYSTEM_PROMPT bullet.
-    # email: Optional[str] = None
+    email: Optional[str] = None
     lease_start: Optional[str] = None  # ISO date (YYYY-MM-DD)
     lease_years: Optional[list[LeaseYearGuess]] = None
     contract_term_years: Optional[int] = None
