@@ -8,6 +8,7 @@ development, so importing this module is always safe (``tests/conftest.py`` impo
 import logging
 import os
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -22,6 +23,52 @@ logger = logging.getLogger(__name__)
 # Cookie automatically but knows nothing about this header, so it would otherwise be
 # sent in clear text on any cron-job error event.
 _EXTRA_SENSITIVE_HEADERS = {"x-cron-secret"}
+
+# `send_default_pii=False` does NOT cover the query string: sentry-sdk attaches it
+# verbatim (see `sentry_sdk.integrations._asgi_common._get_request_data` — the non-PII
+# branch still sets `request["query_string"]`). The search box on `/transactions` and
+# `/suppliers` sends `?q=<free text>`, which is where an owner types a renter or supplier
+# name, so a 500 on a search would file that name in Sentry.
+#
+# An allowlist rather than a denylist, for two reasons. A new query parameter is filtered
+# until someone decides it is safe, which is the right default for a product where most
+# free text is tenant data. And the SDK hands us an already-unquoted query string, so a
+# search for "Levi & Sons" arrives as `q=Levi & Sons` and splits into a `q` pair plus a
+# stray `Sons` key — per-key redaction would leak the fragment, whereas an allowlist
+# drops it.
+#
+# Keep this in sync with the `Query(...)` parameters in `app/api/routers/`: everything
+# here is an id, an enum, a date or a paging value — the things that make an event
+# reproducible — and nothing here is free text.
+_ALLOWED_QUERY_PARAMS = frozenset(
+    {
+        "category_id",
+        "format",
+        "from_date",
+        "include_inactive",
+        "lang",
+        "limit",
+        "offset",
+        "property_id",
+        "renter_id",
+        "to_date",
+        "type",
+        "year",
+    }
+)
+
+
+def _filter_query_string(query_string: str) -> str:
+    """Drop every query parameter that is not explicitly known to be free of user text.
+
+    Returns a re-encoded string holding only allowlisted pairs, so `?q=Levi&limit=50`
+    becomes `limit=50`. A query string that survives intact is left byte-identical.
+    """
+    pairs = parse_qsl(query_string, keep_blank_values=True)
+    kept = [(k, v) for k, v in pairs if k in _ALLOWED_QUERY_PARAMS]
+    if len(kept) == len(pairs):
+        return query_string
+    return urlencode(kept)
 
 
 def resolve_environment() -> str:
@@ -40,11 +87,18 @@ def resolve_environment() -> str:
 
 
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
-    headers = (event.get("request") or {}).get("headers")
+    request = event.get("request") or {}
+
+    headers = request.get("headers")
     if isinstance(headers, dict):
         for key in list(headers):
             if key.lower() in _EXTRA_SENSITIVE_HEADERS:
                 headers[key] = "[Filtered]"
+
+    query_string = request.get("query_string")
+    if isinstance(query_string, str) and query_string:
+        request["query_string"] = _filter_query_string(query_string)
+
     return event
 
 
