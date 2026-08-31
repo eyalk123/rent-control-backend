@@ -44,7 +44,7 @@ is the general CPI) and refreshed monthly by a scheduled job.
 
 **AI lease extraction.** Upload a lease as a PDF or DOCX and the backend sends it to Claude,
 which extracts the property, the renter, and the lease terms so they can be pre-filled instead of
-typed in by hand. PDFs are rasterised page-by-page (PyMuPDF) and sent as images, so scanned
+typed in by hand. PDFs are rasterised page-by-page (pypdfium2) and sent as images, so scanned
 leases work too. Extracted values are validated and implausible ones are discarded rather than
 trusted — a field that looks wrong is dropped, not guessed. Every extraction is logged with a
 token-cost estimate. Requires `ANTHROPIC_API_KEY`; without it the endpoint returns 503 and the
@@ -206,7 +206,8 @@ live in `.claude/docs/architectural_patterns.md`.
 | `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease` **and** the chat agent. Empty ⇒ both return 503 |
 | `EXTRACTION_MODEL` | No | Default `claude-sonnet-4-6`; use `claude-opus-4-8` if accuracy on hard scans is insufficient |
 | `CORS_ORIGINS` | No | Comma-separated browser origins; default `http://localhost:5173`. Mobile is unaffected (CORS is browser-only) |
-| `SENTRY_DSN` | No | Sentry error monitoring (errors only, no tracing). Empty disables it entirely — no init, no network calls. Set per-environment in Railway |
+| `SENTRY_DSN` | No | Sentry error monitoring **and** backend performance tracing (100% of requests; `/health` excluded). Empty disables it entirely — no init, no network calls. Set per-environment in Railway |
+| `LOG_LEVEL` | No | Root log level; default `INFO`. Without this configuration uvicorn leaves the root logger handler-less and `logger.info` goes nowhere — see `app/logging_config.py` |
 | `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push; only needed with Expo "Enhanced Security" |

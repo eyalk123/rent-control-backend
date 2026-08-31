@@ -18,7 +18,12 @@ from app.api.routers import (
     users,
 )
 from app.config import settings
+from app.logging_config import configure_logging
 from app.monitoring import init_sentry
+
+# First, so that anything the rest of this module logs is actually formatted and
+# emitted. Uvicorn leaves the root logger without handlers; see app/logging_config.py.
+configure_logging()
 
 # Must run before FastAPI() is constructed: the Sentry Starlette integration patches
 # Starlette.__init__, so an app built before this call is never wrapped and captures

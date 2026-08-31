@@ -4,7 +4,7 @@ The service is the only place that talks to the Anthropic API. It receives the
 raw upload bytes, builds the right content blocks for the file type, and asks Claude
 to return a :class:`LeaseExtraction` conforming to our schema.
 
-PDFs are rasterized to page images (via PyMuPDF) and sent as `image` blocks rather
+PDFs are rasterized to page images (via pypdfium2) and sent as `image` blocks rather
 than as a native `document` block. Some leases embed subsetted fonts with a broken
 ToUnicode map, so the PDF's hidden text layer reports wrong digits (rent, dates, unit
 numbers) even though the page *renders* correctly. Anthropic's native PDF handling
@@ -193,30 +193,30 @@ class DocumentExtractionService:
     def _pdf_to_image_blocks(file_bytes: bytes) -> list[dict]:
         """Render each PDF page to a PNG image block. Bypasses the (sometimes corrupt)
         embedded text layer by reading only the rendered pixels — see module docstring."""
-        import fitz  # PyMuPDF, imported lazily so the dep is only needed at runtime
+        import pypdfium2 as pdfium  # imported lazily so the dep is only needed at runtime
 
         try:
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            doc = pdfium.PdfDocument(file_bytes)
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="The document could not be processed.",
             )
 
-        zoom = _RENDER_DPI / 72
-        matrix = fitz.Matrix(zoom, zoom)
+        scale = _RENDER_DPI / 72
         blocks: list[dict] = []
         try:
             for page in doc:
                 if len(blocks) >= _MAX_PDF_PAGES:
                     break
-                pixmap = page.get_pixmap(matrix=matrix)
+                png = io.BytesIO()
+                page.render(scale=scale).to_pil().save(png, format="PNG")
                 blocks.append({
                     "type": "image",
                     "source": {
                         "type": "base64",
                         "media_type": "image/png",
-                        "data": base64.standard_b64encode(pixmap.tobytes("png")).decode(),
+                        "data": base64.standard_b64encode(png.getvalue()).decode(),
                     },
                 })
         finally:

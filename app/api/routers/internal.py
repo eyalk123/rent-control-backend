@@ -29,6 +29,36 @@ JOB_REMINDERS = "reminders"
 JOB_CPI_INDEXING = "cpi_indexing"
 JOB_RETENTION = "retention"
 
+# The Railway cron schedules that call these endpoints, mirrored here so Sentry can tell
+# a late run from one that never happened. `job_runs` records what happened when a job
+# runs; only a monitor with the expected schedule can report the case where nothing ran
+# at all — no code executes, so nothing raises, and error reporting stays silent.
+#
+# Declared in code rather than clicked into the Sentry UI so the schedule lives next to
+# the job it describes; Sentry upserts the monitor from the `monitor_config` sent with
+# each check-in. Keep in sync with the Railway cron jobs — they run in UTC and do not
+# shift with Israeli DST, so the timezone here is UTC too.
+_CRON_SCHEDULES = {
+    JOB_CPI_INDEXING: "0 3 * * *",
+    JOB_RETENTION: "0 4 * * *",
+    JOB_REMINDERS: "0 9 * * *",
+}
+
+
+def _monitor_config(job_name: str) -> dict[str, Any] | None:
+    schedule = _CRON_SCHEDULES.get(job_name)
+    if schedule is None:
+        return None
+    return {
+        "schedule": {"type": "crontab", "value": schedule},
+        "timezone": "UTC",
+        # Minutes a run may be late before Sentry calls it missed.
+        "checkin_margin": 30,
+        # Minutes a run may take before Sentry calls it timed out. Generous because
+        # run-reminders absorbs an inline CPI catch-up on days indexing has not run.
+        "max_runtime": 30,
+    }
+
 
 def verify_cron_secret(x_cron_secret: Annotated[str | None, Header()] = None) -> None:
     """Guard internal endpoints with a shared secret instead of user auth, so an
@@ -60,13 +90,31 @@ def _record(
     # would file the same failure twice. These endpoints are unauthenticated, so the job
     # name is the only useful grouping key.
     sentry_sdk.get_isolation_scope().set_tag("job_name", job_name)
+
+    # Paired with the terminal check-in below. This is what makes a job that is never
+    # called visible; `job_runs` cannot show it, because nothing writes a row.
+    check_in_id = sentry_sdk.crons.capture_checkin(
+        monitor_slug=job_name,
+        status="in_progress",
+        monitor_config=_monitor_config(job_name),
+    )
+
     try:
         result = work()
     except Exception as exc:
         job_runs.fail(job_name, started_at, f"{type(exc).__name__}: {exc}")
+        sentry_sdk.crons.capture_checkin(
+            monitor_slug=job_name, check_in_id=check_in_id, status="error"
+        )
         logger.exception("Job %s failed", job_name)
         raise
     job_runs.finish(run, status_of(result), summary=result)
+    # "ok" means the job completed; `degraded` and `stale` are recorded in job_runs and
+    # deliberately not escalated here. They describe the quality of the outcome, which
+    # is not what this monitor is for — it answers whether the job ran.
+    sentry_sdk.crons.capture_checkin(
+        monitor_slug=job_name, check_in_id=check_in_id, status="ok"
+    )
     return result
 
 

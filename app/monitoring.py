@@ -1,8 +1,13 @@
-"""Sentry error monitoring. Errors only — no performance tracing, no profiling.
+"""Sentry error monitoring and backend performance tracing. No profiling, no replay.
 
 A no-op when ``SENTRY_DSN`` is empty, which is the case in every test run and in local
 development, so importing this module is always safe (``tests/conftest.py`` imports
 ``app.main``, which initialises Sentry at import time).
+
+Tracing is **backend-only**: the web and mobile clients stay error-only, which is what
+keeps them out of consent-banner territory and keeps the privacy policies true (see
+``rent-control-web/DEPLOYMENT_CHECKLIST.md`` B7). Nothing here sends PII — see
+``_before_send`` and the ``send_default_pii=False`` note below.
 """
 
 import logging
@@ -86,6 +91,23 @@ def resolve_environment() -> str:
     )
 
 
+# Paths excluded from tracing. `/health` answers every uptime-monitor ping and does no
+# work: at a one-minute interval that is ~43,000 empty transactions a month, plausibly
+# more than real traffic, and it does not stop when nobody is using the app. Sampling
+# every real request is only affordable because this one is sampled at zero.
+_UNTRACED_PATHS = frozenset({"/health"})
+
+
+def _traces_sampler(sampling_context: dict[str, Any]) -> float:
+    """Trace every real request, and none of the monitoring pings.
+
+    The ASGI integration puts the raw scope in the sampling context under
+    ``asgi_scope``; a non-HTTP transaction has none, and is traced.
+    """
+    asgi_scope = sampling_context.get("asgi_scope") or {}
+    return 0.0 if asgi_scope.get("path") in _UNTRACED_PATHS else 1.0
+
+
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
     request = event.get("request") or {}
 
@@ -117,10 +139,14 @@ def init_sentry() -> None:
         # Railway injects the deployed commit SHA. Matching it to the Sentry release is
         # what makes "which deploy introduced this" answerable.
         release=os.getenv("RAILWAY_GIT_COMMIT_SHA") or None,
-        # Errors only. Tracing stays off deliberately: it keeps the paired web app in
-        # the "strictly functional" bucket (no consent banner required) and keeps the
-        # event quota for actual errors.
-        traces_sample_rate=0.0,
+        # Every real request is traced — traffic is low enough that sampling would
+        # mostly cost the ability to look up one specific slow request. `/health` is
+        # excluded; see `_traces_sampler`. Revisit against the Sentry usage graph, and
+        # keep a spend cap set so an overrun is a decision rather than a surprise.
+        traces_sampler=_traces_sampler,
+        # No profiling: it samples the interpreter itself, which is a different order of
+        # overhead and answers a question this app is not asking yet.
+        profiles_sample_rate=0.0,
         # No PII: no email, no name, no IP, no request bodies. The only user data sent
         # is the Firebase UID, set explicitly in `get_current_owner`.
         send_default_pii=False,

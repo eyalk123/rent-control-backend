@@ -54,7 +54,8 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON as a string |
 | `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
-| `SENTRY_DSN` | No | Sentry error monitoring; empty disables it entirely (no init, no network calls) |
+| `SENTRY_DSN` | No | Sentry errors + backend tracing; empty disables it entirely (no init, no network calls) |
+| `LOG_LEVEL` | No | Root log level; default `INFO`. See `app/logging_config.py` |
 | `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
@@ -101,11 +102,14 @@ Router → Service → Repository → Model → PostgreSQL
 
 Each layer has a corresponding file per domain. Dependencies are wired in `app/api/dependencies.py` via FastAPI `Depends()`.
 
-## Error Monitoring (Sentry)
+## Monitoring (Sentry)
 
-Configured in `app/monitoring.py`; errors only, no performance tracing. Disabled
-entirely when `SENTRY_DSN` is empty, which is how the test suite and local development
-run. Two invariants a future change must not break:
+Configured in `app/monitoring.py`: errors, plus **backend** performance tracing at 100%
+of requests. No profiling, no replay; the web and mobile clients stay error-only, which
+is what keeps them clear of consent-banner territory (`rent-control-web/DEPLOYMENT_CHECKLIST.md`
+B7) and the privacy policies true. Disabled entirely when `SENTRY_DSN` is empty, which is
+how the test suite and local development run. Four invariants a future change must not
+break:
 
 1. **`init_sentry()` runs before `FastAPI()` is constructed** (`app/main.py`). The
    Starlette integration patches `Starlette.__init__`, so an app built first is never
@@ -114,8 +118,34 @@ run. Two invariants a future change must not break:
    the app raises `HTTPException(502/503)` deliberately for handled conditions. Any new
    place that converts a real exception into an `HTTPException` must call
    `sentry_sdk.capture_exception(exc)` first, or the cause is lost.
+3. **`/health` is not traced** (`_traces_sampler`). It answers every uptime-monitor ping
+   and does no work; at a one-minute interval it would be ~43,000 empty transactions a
+   month, plausibly more than real traffic. Tracing every real request is only
+   affordable because this one is sampled at zero.
+4. **The query-string allowlist stays an allowlist** (`_ALLOWED_QUERY_PARAMS`).
+   `send_default_pii=False` does *not* cover the query string, and `/transactions` and
+   `/suppliers` take a free-text `?q=`. A new query parameter is filtered until someone
+   adds it, which is the safe direction.
 
 Only the Firebase UID is attached to events (`get_current_owner`) — never email or name.
+
+**Cron monitors.** `_record()` in `app/api/routers/internal.py` sends a Sentry check-in
+around every `/internal/*` job, with the Railway cron schedule declared in
+`_CRON_SCHEDULES` (UTC). This is the only thing that can report a job that was *never
+called* — no code runs, so nothing raises, and `job_runs` gets no row. Keep
+`_CRON_SCHEDULES` in sync with the Railway cron jobs. Expect a second `cpi_indexing`
+check-in on days `run-reminders` performs its inline catch-up.
+
+## Logging
+
+Configured in `app/logging_config.py`, called first in `app/main.py`. Uvicorn configures
+only its own loggers and leaves the root logger without handlers, so without this
+`logger.info` is discarded and `logger.warning` prints a bare message through
+`logging.lastResort`. Level comes from `LOG_LEVEL`.
+
+**Never log tenant data** — owner UIDs and row ids only, never renter names, addresses,
+phone numbers or lease text. Records at INFO and above also become Sentry breadcrumbs on
+error events, so anything logged can leave the box when something else fails.
 
 ## Additional Documentation
 

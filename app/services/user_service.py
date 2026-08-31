@@ -1,6 +1,7 @@
 import hashlib
 import logging
 
+import sentry_sdk
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -114,3 +115,7 @@ class UserService:
             logger.info("Deleted %d Storage files for user %s", len(blobs), owner_id)
         except Exception as exc:
             logger.warning("Firebase Storage cleanup failed for %s: %s", owner_id, exc)
+            # Swallowed so a Storage outage cannot block the erasure of the DB rows —
+            # but this is the account-deletion path, so "the files may still be there"
+            # has to be answerable later. The log line alone is not enough.
+            sentry_sdk.capture_exception(exc)

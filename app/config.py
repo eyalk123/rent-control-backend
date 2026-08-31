@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # Railway injects the environment name and `resolve_environment()` picks it up. Set
     # this only to override that.
     ENVIRONMENT: str = ""
+    # Root log level, applied by `configure_logging()` in app/main.py. INFO is the
+    # useful default: the app logs one line per job summary and per Storage cleanup,
+    # all of which you want in the Railway stream. Raise to WARNING to quieten it.
+    LOG_LEVEL: str = "INFO"
     # Push notifications (Expo Push Service).
     # Optional access token; only required when Expo "Enhanced Security" is enabled.
     EXPO_ACCESS_TOKEN: str = ""
