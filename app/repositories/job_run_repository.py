@@ -83,6 +83,20 @@ class JobRunRepository:
         )
         return self.session.scalar(stmt)
 
+    def last_success_at(self, job_name: str) -> Optional[datetime]:
+        """When ``job_name`` last finished having done its work, or ``None`` if it never
+        has.
+
+        Read from the successful run rather than written as its own timestamp: failures
+        are recorded here too, and this must never move for one. ``finished_at`` is the
+        moment the work was complete, which is what a freshness window should measure;
+        it falls back to ``started_at`` only for a row written without one.
+        """
+        run = self.last_success(job_name)
+        if run is None:
+            return None
+        return run.finished_at or run.started_at
+
     def succeeded_on(self, job_name: str, day: date) -> bool:
         """Whether ``job_name`` has a successful run dated ``day``.
 

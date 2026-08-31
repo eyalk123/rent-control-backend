@@ -22,8 +22,8 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/config.py` | Pydantic `Settings` — reads all env vars from `.env` |
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/api/dependencies.py` | All DI factories: auth, repos, services |
-| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`) |
-| `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion; `job_runs` records every `/internal/*` invocation (status + summary, no tenant data) so a stalled external scheduler is discoverable — never swept by retention |
+| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`, `/internal/run-nightly-rollup`) |
+| `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion; `job_runs` records every `/internal/*` invocation (status + summary, no tenant data) so a stalled external scheduler is discoverable — never swept by retention, and it is what `run-nightly-rollup` reads to decide whether a job has gone stale |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations. `export_service.py` builds the `GET /users/me/export` archive: an openpyxl workbook (a sheet per record type) plus the owner's Storage files, degrading to workbook-only if Storage is unavailable |
 | `app/schemas/` | Pydantic schemas: `Create`, `Update`, `Read` variants per domain |
@@ -54,7 +54,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON as a string |
 | `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
-| `SENTRY_DSN` | No | Sentry errors + backend tracing; empty disables it entirely (no init, no network calls) |
+| `SENTRY_DSN` | No | Sentry errors + backend tracing + the single `nightly-jobs` cron monitor (see README, *The nightly rollup*); empty disables it entirely (no init, no network calls) |
 | `LOG_LEVEL` | No | Root log level; default `INFO`. See `app/logging_config.py` |
 | `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |

@@ -1,6 +1,6 @@
 import logging
 import secrets
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Callable
 
 import sentry_sdk
@@ -29,35 +29,45 @@ JOB_REMINDERS = "reminders"
 JOB_CPI_INDEXING = "cpi_indexing"
 JOB_RETENTION = "retention"
 
-# The Railway cron schedules that call these endpoints, mirrored here so Sentry can tell
-# a late run from one that never happened. `job_runs` records what happened when a job
-# runs; only a monitor with the expected schedule can report the case where nothing ran
-# at all — no code executes, so nothing raises, and error reporting stays silent.
+# The single Sentry cron monitor this backend declares. `job_runs` records what happened
+# when a job runs; only a monitor with an expected schedule can report the case where
+# nothing ran at all — no code executes, so nothing raises, and error reporting stays
+# silent.
+#
+# One monitor, not one per job: the Sentry plan includes exactly one cron monitor seat
+# for the whole org, so three self-declaring monitors meant whichever job checked in
+# first claimed the seat and the other two were rejected over quota — and a rejected
+# monitor reports nothing. So the three jobs check in nowhere; they leave their rows in
+# `job_runs`, and `run-nightly-rollup` reads those rows and checks in once on their
+# behalf, half an hour after the last of them.
 #
 # Declared in code rather than clicked into the Sentry UI so the schedule lives next to
 # the job it describes; Sentry upserts the monitor from the `monitor_config` sent with
-# each check-in. Keep in sync with the Railway cron jobs — they run in UTC and do not
+# the check-in. Keep in sync with the Railway cron entry — it runs in UTC and does not
 # shift with Israeli DST, so the timezone here is UTC too.
-_CRON_SCHEDULES = {
-    JOB_CPI_INDEXING: "0 3 * * *",
-    JOB_RETENTION: "0 4 * * *",
-    JOB_REMINDERS: "0 9 * * *",
+ROLLUP_MONITOR_SLUG = "nightly-jobs"
+
+ROLLUP_MONITOR_CONFIG: dict[str, Any] = {
+    "schedule": {"type": "crontab", "value": "30 9 * * *"},
+    "timezone": "UTC",
+    # Minutes the rollup may be late before Sentry calls it missed.
+    "checkin_margin": 15,
+    # Minutes it may take before Sentry calls it timed out. Small on purpose: the rollup
+    # reads three rows and sends a message — it has no real work to be slow at.
+    "max_runtime": 5,
+    # Alert on the first bad check-in and clear on the first good one. The jobs are
+    # daily, so waiting for a second failure would mean waiting another day.
+    "failure_issue_threshold": 1,
+    "recovery_threshold": 1,
 }
 
+# The jobs the rollup watches, in the order they run.
+ROLLUP_WATCHED_JOBS = (JOB_CPI_INDEXING, JOB_RETENTION, JOB_REMINDERS)
 
-def _monitor_config(job_name: str) -> dict[str, Any] | None:
-    schedule = _CRON_SCHEDULES.get(job_name)
-    if schedule is None:
-        return None
-    return {
-        "schedule": {"type": "crontab", "value": schedule},
-        "timezone": "UTC",
-        # Minutes a run may be late before Sentry calls it missed.
-        "checkin_margin": 30,
-        # Minutes a run may take before Sentry calls it timed out. Generous because
-        # run-reminders absorbs an inline CPI catch-up on days indexing has not run.
-        "max_runtime": 30,
-    }
+# How long a job may go without a successful run before the rollup calls it stale. Every
+# watched job runs daily and the rollup runs at a fixed offset from all three, so "no
+# success in 24h" means exactly one skipped run — the first thing worth alerting on.
+STALE_AFTER = timedelta(hours=24)
 
 
 def verify_cron_secret(x_cron_secret: Annotated[str | None, Header()] = None) -> None:
@@ -91,30 +101,15 @@ def _record(
     # name is the only useful grouping key.
     sentry_sdk.get_isolation_scope().set_tag("job_name", job_name)
 
-    # Paired with the terminal check-in below. This is what makes a job that is never
-    # called visible; `job_runs` cannot show it, because nothing writes a row.
-    check_in_id = sentry_sdk.crons.capture_checkin(
-        monitor_slug=job_name,
-        status="in_progress",
-        monitor_config=_monitor_config(job_name),
-    )
-
     try:
         result = work()
     except Exception as exc:
         job_runs.fail(job_name, started_at, f"{type(exc).__name__}: {exc}")
-        sentry_sdk.crons.capture_checkin(
-            monitor_slug=job_name, check_in_id=check_in_id, status="error"
-        )
         logger.exception("Job %s failed", job_name)
         raise
+    # `degraded` and `stale` count as having run: they describe the quality of the
+    # outcome, not whether the job happened, and the rollup only asks the latter.
     job_runs.finish(run, status_of(result), summary=result)
-    # "ok" means the job completed; `degraded` and `stale` are recorded in job_runs and
-    # deliberately not escalated here. They describe the quality of the outcome, which
-    # is not what this monitor is for — it answers whether the job ran.
-    sentry_sdk.crons.capture_checkin(
-        monitor_slug=job_name, check_in_id=check_in_id, status="ok"
-    )
     return result
 
 
@@ -221,3 +216,97 @@ def run_agent_retention(
     """Deprecated alias for `run-retention`, kept so an existing scheduler entry doesn't
     silently stop working. It now sweeps every class, not just the chat agent."""
     return _record(job_runs, JOB_RETENTION, lambda: retention_service.run().as_dict())
+
+
+def _stale_jobs(
+    job_runs: JobRunRepository, now: datetime
+) -> list[tuple[str, datetime | None]]:
+    """The watched jobs with no successful run inside ``STALE_AFTER``, each paired with
+    its last success — ``None`` for a job that has never had one."""
+    stale = []
+    for job_name in ROLLUP_WATCHED_JOBS:
+        last_success_at = job_runs.last_success_at(job_name)
+        if last_success_at is None or now - last_success_at >= STALE_AFTER:
+            stale.append((job_name, last_success_at))
+    return stale
+
+
+def _close_check_in(check_in_id: str | None, check_in_status: str) -> None:
+    """Send the terminal check-in, best effort.
+
+    Swallows its own failures because the rollup must not raise: a transport error while
+    reporting a stale job would otherwise replace the report with a crash.
+    """
+    if check_in_id is None:
+        return
+    try:
+        sentry_sdk.crons.capture_checkin(
+            monitor_slug=ROLLUP_MONITOR_SLUG,
+            check_in_id=check_in_id,
+            status=check_in_status,
+        )
+    except Exception:
+        logger.exception("Could not close the %s check-in", ROLLUP_MONITOR_SLUG)
+
+
+@router.post("/run-nightly-rollup", dependencies=[Depends(verify_cron_secret)])
+def run_nightly_rollup(
+    job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
+):
+    """Check in to Sentry on behalf of all three daily jobs. Call daily from the external
+    scheduler at 09:30 UTC — half an hour after `run-reminders`, the last of them.
+
+    This is the **only** place that talks to Sentry's cron API; see the note on
+    `ROLLUP_MONITOR_CONFIG` for why there is one monitor rather than three. The jobs
+    themselves record their runs in `job_runs`; this reads those rows and asks one
+    question of each — did it succeed at least once in the last `STALE_AFTER`? Any that
+    did not are named in an error-level message, which is what says *which* job broke,
+    and the check-in closes as ERROR. A job legitimately running twice in a day (the
+    inline CPI catch-up in `run-reminders`) is not interesting here: once is enough.
+
+    Never raises. A crash would send no terminal check-in at all, which Sentry reports as
+    a missed or timed-out run — true, but it loses the message naming the culprit, so the
+    stale path in particular is reported rather than thrown. For the same reason a stale
+    result is still a 200: the alert channel is Sentry, and failing the HTTP call would
+    only make the scheduler retry and check in twice.
+    """
+    check_in_id = None
+    try:
+        check_in_id = sentry_sdk.crons.capture_checkin(
+            monitor_slug=ROLLUP_MONITOR_SLUG,
+            status="in_progress",
+            monitor_config=ROLLUP_MONITOR_CONFIG,
+        )
+
+        stale = _stale_jobs(job_runs, datetime.utcnow())
+        if stale:
+            stale_names = [job_name for job_name, _ in stale]
+            with sentry_sdk.new_scope() as scope:
+                # The timestamps go in the context, not the message: the message text is
+                # the grouping key, so keeping it to the job names means one issue per
+                # broken job rather than a new one every night.
+                scope.set_context(
+                    "stale_jobs",
+                    {
+                        job_name: last.isoformat() if last else "never succeeded"
+                        for job_name, last in stale
+                    },
+                )
+                sentry_sdk.capture_message(
+                    "Daily jobs with no successful run in the last "
+                    f"{int(STALE_AFTER.total_seconds() // 3600)}h: "
+                    f"{', '.join(stale_names)}",
+                    level="error",
+                )
+            logger.error("Stale daily jobs: %s", ", ".join(stale_names))
+            _close_check_in(check_in_id, "error")
+            return {"status": "error", "stale": stale_names}
+
+        _close_check_in(check_in_id, "ok")
+        return {"status": "ok", "stale": []}
+    except Exception:
+        # Reported as an issue like any other unhandled error, but not re-raised.
+        logger.exception("Nightly rollup failed")
+        sentry_sdk.capture_exception()
+        _close_check_in(check_in_id, "error")
+        return {"status": "error", "stale": []}

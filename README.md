@@ -80,7 +80,7 @@ Latin-1 only and raises on the first Hebrew character.
 | `/extract/lease` | AI lease extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration. Three event types: `overdue`, `lease_expiring`, `cpi_rent_change` (the last has no rules — mute + materiality threshold instead) |
-| `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-retention` (`?dry_run=true` supported) — cron-triggered, guarded by a shared secret |
+| `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-retention` (`?dry_run=true` supported), and `run-nightly-rollup` (the single Sentry cron check-in for all three) — cron-triggered, guarded by a shared secret |
 | `/health` | Unauthenticated liveness check |
 
 Every router except `/internal` and `/health` requires a Firebase ID token. Interactive API docs
@@ -206,7 +206,7 @@ live in `.claude/docs/architectural_patterns.md`.
 | `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease` **and** the chat agent. Empty ⇒ both return 503 |
 | `EXTRACTION_MODEL` | No | Default `claude-sonnet-4-6`; use `claude-opus-4-8` if accuracy on hard scans is insufficient |
 | `CORS_ORIGINS` | No | Comma-separated browser origins; default `http://localhost:5173`. Mobile is unaffected (CORS is browser-only) |
-| `SENTRY_DSN` | No | Sentry error monitoring **and** backend performance tracing (100% of requests; `/health` excluded). Empty disables it entirely — no init, no network calls. Set per-environment in Railway |
+| `SENTRY_DSN` | No | Sentry error monitoring, backend performance tracing (100% of requests; `/health` excluded) **and** the `nightly-jobs` cron monitor. Empty disables it entirely — no init, no network calls. Set per-environment in Railway |
 | `LOG_LEVEL` | No | Root log level; default `INFO`. Without this configuration uvicorn leaves the root logger handler-less and `logger.info` goes nowhere — see `app/logging_config.py` |
 | `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default `ILS` |
@@ -282,7 +282,27 @@ the deployed web origin in `CORS_ORIGINS` or the browser will block the web app.
 The `/internal/*` jobs are **not** self-scheduling — an external scheduler must call them with the
 `X-Cron-Secret` header: `run-reminders`, `run-cpi-indexing`, and `run-retention`, all daily. (The
 index itself only updates monthly, but running the job daily costs one request and picks up a new
-reading the day it lands.)
+reading the day it lands.) The Railway cron entries, in UTC — they do not shift with Israeli DST:
+
+| Job | Schedule (UTC) |
+|---|---|
+| `run-cpi-indexing` | `0 3 * * *` |
+| `run-retention` | `0 4 * * *` |
+| `run-reminders` | `0 9 * * *` |
+| `run-nightly-rollup` | `30 9 * * *` |
+
+### The nightly rollup
+
+A job that is never called writes no row and raises nothing, so only a monitor with an expected
+schedule can report it. Sentry's plan includes **one** cron monitor seat for the whole org, so the
+three jobs do not check in themselves — three self-declaring monitors meant whichever checked in
+first took the seat and the rest were rejected over quota. Instead each job records its run in
+`job_runs`, and `run-nightly-rollup` checks in once, half an hour after `run-reminders`, as the
+`nightly-jobs` monitor. It reads the last successful run of all three and, if any is missing or
+older than 24 hours, sends an error-level Sentry message **naming the stale jobs** and closes the
+check-in as errored. Keep the cron entry and `ROLLUP_MONITOR_CONFIG` in
+`app/api/routers/internal.py` in sync — Sentry upserts the monitor from the config sent with each
+check-in. If the rollup itself never runs, Sentry reports it as a missed check-in.
 
 **Schedule `run-cpi-indexing` before `run-reminders`** — though it is no longer load-bearing. The
 indexing job writes the `cpi_rent_change` confirmation as it reprices a lease; the reminders job is
