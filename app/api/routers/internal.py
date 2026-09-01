@@ -208,16 +208,6 @@ def run_retention(
     return _record(job_runs, JOB_RETENTION, lambda: retention_service.run().as_dict())
 
 
-@router.post("/run-agent-retention", dependencies=[Depends(verify_cron_secret)])
-def run_agent_retention(
-    retention_service: Annotated[RetentionService, Depends(get_retention_service)],
-    job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
-):
-    """Deprecated alias for `run-retention`, kept so an existing scheduler entry doesn't
-    silently stop working. It now sweeps every class, not just the chat agent."""
-    return _record(job_runs, JOB_RETENTION, lambda: retention_service.run().as_dict())
-
-
 def _stale_jobs(
     job_runs: JobRunRepository, now: datetime
 ) -> list[tuple[str, datetime | None]]:

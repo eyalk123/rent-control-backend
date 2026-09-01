@@ -392,9 +392,7 @@ re-derives everything downstream of the provisional figure.
 > curl -X POST -H "X-Cron-Secret: $SECRET" "$API/internal/run-retention?dry_run=true"
 > ```
 >
-> It reports what *would* go, per class, and changes nothing. `run-agent-retention` still works as
-> a deprecated alias so an existing scheduler entry doesn't break, but it now sweeps every class,
-> not just the chat agent.
+> It reports what *would* go, per class, and changes nothing.
 
 The web app also deploys to Railway (Docker + Caddy); the mobile app ships through EAS to the App
 Store. See their respective repos.
