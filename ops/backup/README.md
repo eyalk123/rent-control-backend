@@ -46,8 +46,11 @@ rest anyway; this protects against the bucket itself being exposed.
 > **Losing `BACKUP_ENCRYPTION_KEY` means losing every backup.** Store it in a
 > password manager before you set it. It is not recoverable from anywhere else.
 
-**A failed run exits non-zero and reports `error` to Sentry.** A backup that
-stops running silently is worse than no backup, because you think you have one.
+**A failed run exits non-zero and pings the dead-man's switch as failed.** The
+job is not tied to any one monitoring provider — it reports to whatever
+`HEARTBEAT_URL` points at, and this deployment points it at healthchecks.io
+(step 5). A backup that stops running silently is worse than no backup, because
+you think you have one.
 
 ## One-time setup
 
@@ -130,9 +133,10 @@ the right one is picked automatically:
 * **healthchecks.io / Cronitor** (`BASE/start`, `BASE`, `BASE/fail`) — the
   default, and free for a single check.
 * **Sentry Crons** (`BASE/?status=ok`) — used automatically when the URL is on
-  `sentry.io`. Note that each Sentry cron monitor counts against the plan's
-  monitor quota; if that quota is already spoken for, use a ping service
-  instead rather than displacing an existing monitor.
+  `sentry.io`. **Not what this deployment uses:** each Sentry cron monitor
+  counts against the plan's monitor quota, and the organisation's single seat is
+  already spent on `nightly-jobs`. Displacing that one to watch this job would
+  just move the blind spot, so this job runs on healthchecks.io instead.
 
 Set the URL in `HEARTBEAT_URL`, schedule `0 2 * * *`, grace period 30 minutes.
 The grace period doubles as a run-duration limit — the clock starts at the
