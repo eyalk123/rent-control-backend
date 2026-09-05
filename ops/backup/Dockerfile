@@ -1,7 +1,14 @@
 # Daily Postgres backup job for rent-control.
 # Runs once, uploads one dump, exits. Railway runs it on a cron schedule.
 
-FROM python:3.12-slim
+# Pinned to bookworm rather than plain `slim`: the PGDG suite below is hardcoded
+# to `bookworm-pgdg`, and the base image and that suite have to name the same
+# Debian release. When the `slim` tag rolled from bookworm to trixie, apt went
+# on installing the Debian 12 build of postgresql-client-18, whose libpq5 wants
+# libldap-2.5-0 — a package trixie does not ship at all — and the build died on
+# an unsatisfiable dependency. Moving to a newer base means changing both lines
+# in the same commit.
+FROM python:3.12-slim-bookworm
 
 # pg_dump must be at least as new as the server (Railway runs Postgres 18),
 # so we take the client from the official PostgreSQL apt repository rather
