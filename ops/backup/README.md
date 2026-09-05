@@ -116,7 +116,10 @@ the right one is picked automatically:
   monitor quota; if that quota is already spoken for, use a ping service
   instead rather than displacing an existing monitor.
 
-Set the URL in `HEARTBEAT_URL`, schedule `0 2 * * *`, grace period 15 minutes.
+Set the URL in `HEARTBEAT_URL`, schedule `0 2 * * *`, grace period 30 minutes.
+The grace period doubles as a run-duration limit — the clock starts at the
+`in_progress` ping — so keep it at or above `PGDUMP_TIMEOUT` (1800s). Set it
+shorter and a slow-but-successful dump is reported as a failure.
 `HEARTBEAT_STYLE` (`path` or `query`) overrides the auto-detection if needed.
 
 Deliberately **not** wired into the application's own job-tracking table: this
