@@ -1,0 +1,5 @@
+# restore.sh runs on Linux (and inside containers), where a CRLF shebang makes
+# the kernel look for an interpreter literally named "bash\r" and fail with a
+# confusing "bad interpreter" error. The repo has core.autocrlf=true, so pin the
+# line endings here rather than relying on that round-trip holding.
+*.sh text eol=lf

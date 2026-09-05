@@ -47,3 +47,9 @@ htmlcov/
 
 # Alembic
 # (keep versions tracked, but not local overrides)
+
+# Backup service secrets and artifacts (ops/backup) — never commit these.
+# key.json is the GCP service-account key; the dumps contain renter data.
+key.json
+*.dump
+*.dump.enc
