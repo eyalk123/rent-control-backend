@@ -1,0 +1,4 @@
+README.md
+lifecycle.json
+*.pyc
+__pycache__/

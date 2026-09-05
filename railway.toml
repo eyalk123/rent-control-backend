@@ -1,5 +1,9 @@
 [build]
 builder = "NIXPACKS"
+# The backup cron (ops/backup) is its own Railway service with its own Dockerfile.
+# Without this, every change to it would rebuild the API too — and Nixpacks would
+# still build the API, not the backup, so the rebuild would be pure noise.
+watchPatterns = ["**", "!ops/backup/**"]
 
 [deploy]
 startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"

@@ -291,6 +291,13 @@ reading the day it lands.) The Railway cron entries, in UTC — they do not shif
 | `run-reminders` | `0 9 * * *` |
 | `run-nightly-rollup` | `30 9 * * *` |
 
+### Database backups
+
+The production database is dumped daily to a Cloud Storage bucket in the EU by a **separate**
+Railway cron service in [`ops/backup/`](ops/backup/README.md) — deliberately sharing no config,
+logging or job-tracking with this app, so it can still report a failure caused by the database
+being unreachable. That README covers the bucket, the variables, and the restore drill.
+
 ### The nightly rollup
 
 A job that is never called writes no row and raises nothing, so only a monitor with an expected
