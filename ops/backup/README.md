@@ -38,6 +38,17 @@ rest anyway; this protects against the bucket itself being exposed.
 > **Losing `BACKUP_ENCRYPTION_KEY` means losing every backup.** Store it in a
 > password manager before you set it. It is not recoverable from anywhere else.
 
+**The first connection is waited for; nothing else is retried.** `pg_dump` is
+the first thing this container does against the database, and a fresh
+container's first connection is the fragile one — the private network may not
+be resolvable yet, or the database may still be coming back from a restart.
+So the run probes with `pg_isready` first, five attempts three seconds apart,
+and dumps only once the database answers. A blip of a few seconds no longer
+costs a whole day's backup. Everything after that point — the dump, the
+encryption, the upload — is not retried, and a database still refusing
+connections on the fifth attempt fails the run in the ordinary way, so the
+dead-man's switch sees it.
+
 **A failed run exits non-zero and reports `error` to Sentry.** A backup that
 stops running silently is worse than no backup, because you think you have one.
 
@@ -87,7 +98,8 @@ Dockerfile (`ops/backup` if you keep it in the backend repo). Then:
   `run-cpi-indexing`, so a full dump and the indexing job do not hit the database together
 * **Settings → Deploy → Region**: same region as the database
 * **Settings → Deploy → Restart Policy**: `Never` (a cron job that restarts on
-  failure will hammer the database)
+  failure will hammer the database). The transient case is handled inside the
+  job by the readiness wait described above, not by restarting it
 * **Settings → Source → Watch Paths**: `ops/backup/**`, so application deploys
   do not rebuild this job and vice versa
 
@@ -119,7 +131,8 @@ the right one is picked automatically:
 Set the URL in `HEARTBEAT_URL`, schedule `0 2 * * *`, grace period 30 minutes.
 The grace period doubles as a run-duration limit — the clock starts at the
 `in_progress` ping — so keep it at or above `PGDUMP_TIMEOUT` (1800s). Set it
-shorter and a slow-but-successful dump is reported as a failure.
+shorter and a slow-but-successful dump is reported as a failure. The readiness
+wait sits ahead of the dump and adds at most ~40s to a run.
 `HEARTBEAT_STYLE` (`path` or `query`) overrides the auto-detection if needed.
 
 Deliberately **not** wired into the application's own job-tracking table: this
