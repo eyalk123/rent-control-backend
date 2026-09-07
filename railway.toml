@@ -6,7 +6,10 @@ builder = "NIXPACKS"
 watchPatterns = ["**", "!ops/backup/**"]
 
 [deploy]
-startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# The wait is not belt-and-braces for the restart policy below: ON_FAILURE does recover
+# from a database that is not up yet, but only by crash-looping until it is. See
+# ops/wait_for_db.py.
+startCommand = "python ops/wait_for_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

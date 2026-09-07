@@ -323,7 +323,7 @@ class RenterService:
         which is exactly the history this is meant to preserve.
 
         From `terminated_on` the renter falls out of every active window
-        (`_effective_lease_end` in the repository), so rent-due, expiry and CPI repricing
+        (`effective_lease_end` in the repository), so rent-due, expiry and CPI repricing
         all stop. Notifications already sent are not retracted.
         """
         renter = self.renter_repository.get_by_id(renter_id)

@@ -245,7 +245,7 @@ has its own window and `0` disables that class; the response names the disabled 
 |---|---|---|
 | `AGENT_RETENTION_DAYS` | `90` | Chat conversations, by last-updated, with their messages. The shortest window because `agent_messages` holds tenant PII verbatim. Usage logs are detached, not deleted — cost history has no PII |
 | `ACTIVITY_LOG_RETENTION_DAYS` | `365` | The deletion trace. Its `label` holds names and addresses, but its job is answering "what happened months ago?", so it outlives the chats |
-| `NOTIFICATION_RETENTION_DAYS` | `365` | Sent-notification history |
+| `NOTIFICATION_RETENTION_DAYS` | `365` | Sent-notification history. **`cpi_rent_change` is the one exception**: it is kept past the window while the renter's lease is still running (`terminated_on` or `lease_end` in the future), and ages out normally once the lease has ended. It is the only point-in-time record of the amount the owner was shown, and the calculation behind it is not reproducible — leases routinely run longer than a year |
 
 Not swept: `document_extraction_logs` (scanner-quality telemetry, holds no lease content) and
 `agent_usage_logs` (cost only). Both are kept indefinitely on purpose.

@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     # Deletion trace (activity_log). `label` holds names and addresses; the log's job is
     # answering "what happened months ago?", so it outlives the chats.
     ACTIVITY_LOG_RETENTION_DAYS: int = 365
-    # Sent-notification history.
+    # Sent-notification history. One exception: a `cpi_rent_change` row is held past this
+    # window while the renter's lease is still running, because it is the only
+    # point-in-time record of the figure the owner was shown and leases outlast a year.
     NOTIFICATION_RETENTION_DAYS: int = 365
     # Deliberately NOT swept: document_extraction_logs (scanner-quality telemetry, holds no
     # lease content) and agent_usage_logs (cost only, no PII — retention detaches them from

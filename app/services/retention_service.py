@@ -10,15 +10,17 @@ is visible rather than looking like success.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.activity_log import ActivityLog
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationTypeEnum
+from app.models.renter import Renter
 from app.repositories.agent_repository import AgentRepository
+from app.repositories.renter_repository import effective_lease_end
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,28 @@ class RetentionResult:
 
 def _cutoff(days: int) -> datetime:
     return datetime.utcnow() - timedelta(days=days)
+
+
+def _cpi_notification_for_an_active_renter():
+    """A `cpi_rent_change` row whose renter's lease is still running, as a SQL predicate.
+
+    `Notification.entity_id` holds the renter id but carries no foreign key, so this is a
+    correlated EXISTS rather than a join, and it is only meaningful together with the type
+    check — `entity_id` is interpretable only through `type`. "Still running" reuses
+    `effective_lease_end` from the renter repository so there is one definition of an
+    active lease, not a copy of it here.
+    """
+    today = date.today()
+    return and_(
+        Notification.type == NotificationTypeEnum.CPI_RENT_CHANGE,
+        select(Renter.id)
+        .where(
+            Renter.id == Notification.entity_id,
+            Renter.lease_start <= today,
+            effective_lease_end() >= today,
+        )
+        .exists(),
+    )
 
 
 class RetentionService:
@@ -94,6 +118,16 @@ class RetentionService:
         )
 
     def _sweep_notifications(self, result: RetentionResult, dry_run: bool) -> None:
+        """One exception to the window: a `cpi_rent_change` notification outlives it while
+        the lease it is about is still running.
+
+        A CPI notification is the only point-in-time record of the figure the owner was
+        actually shown — the calculation behind it is not reproducible once a cached index
+        reading is superseded or a lease is edited. Leases routinely run longer than a
+        year, so the plain window deletes the evidence while the lease it belongs to is
+        still live. Once the lease has ended the row ages out on the normal window like
+        any other; nothing is kept forever.
+        """
         self._sweep_by_column(
             result,
             dry_run,
@@ -101,19 +135,33 @@ class RetentionService:
             model=Notification,
             column=Notification.sent_at,
             days=settings.NOTIFICATION_RETENTION_DAYS,
+            extra_where=~_cpi_notification_for_an_active_renter(),
         )
 
     def _sweep_by_column(
-        self, result: RetentionResult, dry_run: bool, *, name: str, model, column, days: int
+        self,
+        result: RetentionResult,
+        dry_run: bool,
+        *,
+        name: str,
+        model,
+        column,
+        days: int,
+        extra_where=None,
     ) -> None:
+        """`extra_where` narrows what the window is allowed to take, and is ANDed into
+        both the count and the delete so a dry run reports exactly what a real run does."""
         if days <= 0:
             result.disabled.append(name)
             return
 
         cutoff = _cutoff(days)
+        condition = column < cutoff
+        if extra_where is not None:
+            condition = and_(condition, extra_where)
         count = int(
-            self.db.scalar(select(func.count()).select_from(model).where(column < cutoff)) or 0
+            self.db.scalar(select(func.count()).select_from(model).where(condition)) or 0
         )
         if not dry_run and count:
-            self.db.execute(delete(model).where(column < cutoff))
+            self.db.execute(delete(model).where(condition))
         result.swept[name] = count

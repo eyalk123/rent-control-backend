@@ -194,6 +194,10 @@ def run_retention(
     history. Each window is configured separately and `0` disables that class — the response
     lists which are disabled, so "scheduled but doing nothing" doesn't look like success.
 
+    One row type outlives its window: a `cpi_rent_change` notification is held while the
+    renter's lease is still running, because it is the only point-in-time record of the
+    figure the owner was shown and leases routinely run longer than the window.
+
     Call daily from an external scheduler with the X-Cron-Secret header.
 
     `?dry_run=true` reports what *would* be deleted and changes nothing. Worth running before

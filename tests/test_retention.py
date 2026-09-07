@@ -4,7 +4,7 @@ The behaviour that matters most is the dry run. Turning a window on for the firs
 everything already older than it, which on a live database can be a lot — so `dry_run` has to
 be trustworthy about counting without touching anything.
 """
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -13,6 +13,7 @@ from app.models.activity_log import ActivityLog
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 from app.models.notification import Notification, NotificationTypeEnum
 from tests.conftest import OWNER_A
+from tests.factories import make_renter
 
 SECRET = "s3cret"
 
@@ -134,3 +135,110 @@ def test_disabled_classes_are_named_not_silently_skipped(client, db_session, mon
     db_session.expire_all()
     assert len(db_session.scalars(select(AgentConversation)).all()) == 1
     assert len(db_session.scalars(select(ActivityLog)).all()) == 1
+
+
+def _cpi_notification(db_session, *, renter_id: int, age_days: int) -> None:
+    db_session.add(
+        Notification(
+            owner_id=OWNER_A, type=NotificationTypeEnum.CPI_RENT_CHANGE, entity_id=renter_id,
+            period_key="2024-01-01", sent_at=datetime.utcnow() - timedelta(days=age_days),
+        )
+    )
+    db_session.commit()
+
+
+def test_cpi_notifications_outlive_the_window_while_the_lease_runs(
+    client, db_session, monkeypatch
+):
+    """The only point-in-time record of the figure the owner was shown, on a lease that
+    is still running — a three-year lease would otherwise lose its first year of them."""
+    renter = make_renter(db_session, lease_start=date.today() - timedelta(days=500),
+                         lease_end=date.today() + timedelta(days=500))
+    _cpi_notification(db_session, renter_id=renter.id, age_days=400)
+    _enable(monkeypatch)
+
+    body = client.post("/internal/run-retention", headers=_headers()).json()
+
+    assert body["swept"]["notifications"] == 0
+    db_session.expire_all()
+    assert len(db_session.scalars(select(Notification)).all()) == 1
+
+
+def test_cpi_notifications_are_swept_once_the_lease_has_ended(client, db_session, monkeypatch):
+    renter = make_renter(db_session, lease_start=date.today() - timedelta(days=900),
+                         lease_end=date.today() - timedelta(days=10))
+    _cpi_notification(db_session, renter_id=renter.id, age_days=400)
+    _enable(monkeypatch)
+
+    body = client.post("/internal/run-retention", headers=_headers()).json()
+
+    assert body["swept"]["notifications"] == 1
+    db_session.expire_all()
+    assert db_session.scalars(select(Notification)).all() == []
+
+
+def test_an_early_termination_ends_the_reprieve_too(client, db_session, monkeypatch):
+    """`terminated_on` is what stops a tenancy before the signed schedule does, so the
+    reprieve has to key off it and not off `lease_end` alone."""
+    renter = make_renter(db_session, lease_start=date.today() - timedelta(days=900),
+                         lease_end=date.today() + timedelta(days=500),
+                         terminated_on=date.today() - timedelta(days=10))
+    _cpi_notification(db_session, renter_id=renter.id, age_days=400)
+    _enable(monkeypatch)
+
+    body = client.post("/internal/run-retention", headers=_headers()).json()
+
+    assert body["swept"]["notifications"] == 1
+    db_session.expire_all()
+    assert db_session.scalars(select(Notification)).all() == []
+
+
+def test_the_reprieve_is_only_for_cpi_notifications(client, db_session, monkeypatch):
+    """Same active renter, same age: an overdue alert still ages out. It is reproducible
+    from the transactions, so it is not evidence of anything the CPI one is."""
+    renter = make_renter(db_session, lease_start=date.today() - timedelta(days=500),
+                         lease_end=date.today() + timedelta(days=500))
+    db_session.add(
+        Notification(
+            owner_id=OWNER_A, type=NotificationTypeEnum.OVERDUE, entity_id=renter.id,
+            period_key="2025-03", sent_at=datetime.utcnow() - timedelta(days=400),
+        )
+    )
+    db_session.commit()
+    _enable(monkeypatch)
+
+    body = client.post("/internal/run-retention", headers=_headers()).json()
+
+    assert body["swept"]["notifications"] == 1
+    db_session.expire_all()
+    assert db_session.scalars(select(Notification)).all() == []
+
+
+def test_a_cpi_notification_whose_renter_is_gone_is_swept(client, db_session, monkeypatch):
+    """entity_id carries no foreign key, so a deleted renter leaves the row orphaned.
+    Retention stays its only route out."""
+    _cpi_notification(db_session, renter_id=99999, age_days=400)
+    _enable(monkeypatch)
+
+    body = client.post("/internal/run-retention", headers=_headers()).json()
+
+    assert body["swept"]["notifications"] == 1
+    db_session.expire_all()
+    assert db_session.scalars(select(Notification)).all() == []
+
+
+def test_dry_run_counts_the_reprieve_the_same_way(client, db_session, monkeypatch):
+    """A dry run that ignored the exception would report a deletion that never happens."""
+    active = make_renter(db_session, lease_start=date.today() - timedelta(days=500),
+                         lease_end=date.today() + timedelta(days=500))
+    ended = make_renter(db_session, lease_start=date.today() - timedelta(days=900),
+                        lease_end=date.today() - timedelta(days=10))
+    _cpi_notification(db_session, renter_id=active.id, age_days=400)
+    _cpi_notification(db_session, renter_id=ended.id, age_days=400)
+    _enable(monkeypatch)
+
+    body = client.post("/internal/run-retention?dry_run=true", headers=_headers()).json()
+
+    assert body["swept"]["notifications"] == 1
+    db_session.expire_all()
+    assert len(db_session.scalars(select(Notification)).all()) == 2

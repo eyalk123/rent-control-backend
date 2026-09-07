@@ -39,8 +39,8 @@ python run.py                    # starts on $PORT (default 8000), no reload
 alembic upgrade head             # apply all pending migrations
 alembic revision --autogenerate -m "description"  # generate new migration
 
-# Production (Railway uses this)
-alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+# Production (Railway uses this — see railway.toml)
+python ops/wait_for_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
 ## Environment Variables
