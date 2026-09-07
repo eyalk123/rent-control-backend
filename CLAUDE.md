@@ -22,7 +22,7 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/config.py` | Pydantic `Settings` — reads all env vars from `.env` |
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/api/dependencies.py` | All DI factories: auth, repos, services |
-| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/health`, `/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`, `/internal/run-nightly-rollup`) |
+| `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent) plus `internal.py` (`/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`, `/internal/run-nightly-rollup` — cron-only; the guard is declared on the router, so every route in the file is covered) |
 | `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion; `job_runs` records every `/internal/*` invocation (status + summary, no tenant data) so a stalled external scheduler is discoverable — never swept by retention, and it is what `run-nightly-rollup` reads to decide whether a job has gone stale |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations. `export_service.py` builds the `GET /users/me/export` archive: an openpyxl workbook (a sheet per record type) plus the owner's Storage files, degrading to workbook-only if Storage is unavailable |
@@ -59,7 +59,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
 | `DEFAULT_CURRENCY` | No | Default: `ILS` |
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
-| `REMINDER_CRON_SECRET` | No | Shared secret for all three `POST /internal/*` jobs (`X-Cron-Secret` header); empty disables them. Prefer scheduling `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them — but it is no longer required: `run-reminders` checks `job_runs` and runs indexing inline if it hasn't run today |
+| `REMINDER_CRON_SECRET` | No | Shared secret for every `POST /internal/*` job (`X-Cron-Secret` header) — all four, enforced by a router-level dependency; empty disables them (it then rejects every request rather than allowing them). Prefer scheduling `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them — but it is no longer required: `run-reminders` checks `job_runs` and runs indexing inline if it hasn't run today |
 | `CBS_API_BASE_URL` | No | **Primary** CPI source; default `https://api.cbs.gov.il` (CPI rent linkage) |
 | `CPI_INDEX_ID` | No | CBS series id for CPI linkage; default `120010` (general Consumer Price Index) |
 | `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |
@@ -129,12 +129,20 @@ break:
 
 Only the Firebase UID is attached to events (`get_current_owner`) — never email or name.
 
-**Cron monitors.** `_record()` in `app/api/routers/internal.py` sends a Sentry check-in
-around every `/internal/*` job, with the Railway cron schedule declared in
-`_CRON_SCHEDULES` (UTC). This is the only thing that can report a job that was *never
-called* — no code runs, so nothing raises, and `job_runs` gets no row. Keep
-`_CRON_SCHEDULES` in sync with the Railway cron jobs. Expect a second `cpi_indexing`
-check-in on days `run-reminders` performs its inline catch-up.
+**Cron monitors.** One Sentry cron monitor for the whole backend, not one per job: the
+plan includes a single monitor seat, so self-declaring monitors fought over it and the
+losers reported nothing. `_record()` in `app/api/routers/internal.py` therefore talks to Sentry
+only to tag the request scope with `job_name`; what it actually does is write a `job_runs`
+row per invocation (start, then finish/fail), which is the durable record of what ran.
+
+The single check-in is sent by `run-nightly-rollup`, which is the only caller of Sentry's
+cron API. It reads `job_runs`, names any of `ROLLUP_WATCHED_JOBS` with no success in
+`STALE_AFTER` (24h) in an error-level message, and closes the check-in as ERROR. The
+monitor's schedule is `ROLLUP_MONITOR_CONFIG` (UTC, so it does not shift with Israeli
+DST) — keep it in sync with the Railway cron entry for `run-nightly-rollup`. A check-in
+that never arrives is what reports a job that was *never called*: no code runs, so nothing
+raises and `job_runs` gets no row. A job that legitimately runs twice in a day (the inline
+CPI catch-up in `run-reminders`) is not interesting to the rollup — once is enough.
 
 ## Logging
 

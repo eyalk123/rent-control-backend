@@ -21,7 +21,22 @@ from app.services.retention_service import RetentionService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+
+def verify_cron_secret(x_cron_secret: Annotated[str | None, Header()] = None) -> None:
+    """Guard internal endpoints with a shared secret instead of user auth, so an
+    external scheduler can call them. Uses a constant-time comparison."""
+    expected = settings.REMINDER_CRON_SECRET
+    if not expected or not x_cron_secret or not secrets.compare_digest(x_cron_secret, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid cron secret")
+
+
+# The guard is declared on the router, not repeated on each endpoint, so it covers every
+# route in this file including ones not written yet. It lives here rather than on the
+# include_router() call in app/main.py deliberately: mounted from anywhere — a test app, a
+# second mount — these endpoints stay guarded, and there is no way to add a route to this
+# file that quietly isn't. Nothing here is meant to be reachable without the secret; an
+# endpoint that ever is would have to say so explicitly rather than by omission.
+router = APIRouter(dependencies=[Depends(verify_cron_secret)])
 
 # Job names as they appear in job_runs.job_name. Constants because the reminders job
 # looks up the indexing job by name, and a typo there would silently mean "never ran".
@@ -70,14 +85,6 @@ ROLLUP_WATCHED_JOBS = (JOB_CPI_INDEXING, JOB_RETENTION, JOB_REMINDERS)
 STALE_AFTER = timedelta(hours=24)
 
 
-def verify_cron_secret(x_cron_secret: Annotated[str | None, Header()] = None) -> None:
-    """Guard internal endpoints with a shared secret instead of user auth, so an
-    external scheduler can call them. Uses a constant-time comparison."""
-    expected = settings.REMINDER_CRON_SECRET
-    if not expected or not x_cron_secret or not secrets.compare_digest(x_cron_secret, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid cron secret")
-
-
 def _record(
     job_runs: JobRunRepository,
     job_name: str,
@@ -113,7 +120,7 @@ def _record(
     return result
 
 
-@router.post("/run-reminders", dependencies=[Depends(verify_cron_secret)])
+@router.post("/run-reminders")
 def run_reminders(
     reminder_service: Annotated[ReminderService, Depends(get_reminder_service)],
     cpi_indexing_service: Annotated[CpiIndexingService, Depends(get_cpi_indexing_service)],
@@ -151,7 +158,7 @@ def run_reminders(
     return {"status": "ok", "sent": sent, "cpi_caught_up": caught_up}
 
 
-@router.post("/run-cpi-indexing", dependencies=[Depends(verify_cron_secret)])
+@router.post("/run-cpi-indexing")
 def run_cpi_indexing(
     cpi_indexing_service: Annotated[CpiIndexingService, Depends(get_cpi_indexing_service)],
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
@@ -183,7 +190,7 @@ def run_cpi_indexing(
     return body
 
 
-@router.post("/run-retention", dependencies=[Depends(verify_cron_secret)])
+@router.post("/run-retention")
 def run_retention(
     retention_service: Annotated[RetentionService, Depends(get_retention_service)],
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
@@ -243,7 +250,7 @@ def _close_check_in(check_in_id: str | None, check_in_status: str) -> None:
         logger.exception("Could not close the %s check-in", ROLLUP_MONITOR_SLUG)
 
 
-@router.post("/run-nightly-rollup", dependencies=[Depends(verify_cron_secret)])
+@router.post("/run-nightly-rollup")
 def run_nightly_rollup(
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
 ):
