@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import Column, DateTime, Enum, Integer, String
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -13,4 +12,4 @@ class ReportExport(Base):
     report_type = Column(Enum("income_expense", "expense_log", name="reporttype"), nullable=False)
     year = Column(Integer, nullable=False)
     format = Column(Enum("pdf", "csv", name="reportformat"), nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)

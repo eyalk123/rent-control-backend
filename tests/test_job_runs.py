@@ -6,11 +6,12 @@ there was nothing to tell you either had happened. Two things are being tested: 
 invocation leaves an honest row (including failures), and that the reminders job no longer
 depends on the scheduler calling CPI indexing first.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select
 
+from app.clock import utc_now_naive, utc_today
 from app.api.routers.internal import JOB_CPI_INDEXING, JOB_REMINDERS, JOB_RETENTION
 from app.config import settings
 from app.models.job_run import JobRun
@@ -98,8 +99,8 @@ def test_reminders_skips_the_catch_up_when_indexing_already_ran_today(
     db_session.add(
         JobRun(
             job_name=JOB_CPI_INDEXING,
-            started_at=datetime.utcnow(),
-            finished_at=datetime.utcnow(),
+            started_at=utc_now_naive(),
+            finished_at=utc_now_naive(),
             status="ok",
         )
     )
@@ -113,7 +114,7 @@ def test_reminders_skips_the_catch_up_when_indexing_already_ran_today(
 
 def test_yesterdays_indexing_run_does_not_count_as_todays(client, db_session, monkeypatch):
     _enable(monkeypatch)
-    yesterday = datetime.utcnow() - timedelta(days=1)
+    yesterday = utc_now_naive() - timedelta(days=1)
     db_session.add(
         JobRun(
             job_name=JOB_CPI_INDEXING,
@@ -138,8 +139,8 @@ def test_a_failed_indexing_run_today_does_not_satisfy_the_check(
     db_session.add(
         JobRun(
             job_name=JOB_CPI_INDEXING,
-            started_at=datetime.utcnow(),
-            finished_at=datetime.utcnow(),
+            started_at=utc_now_naive(),
+            finished_at=utc_now_naive(),
             status="failed",
             error="boom",
         )
@@ -178,4 +179,4 @@ def test_indexing_called_directly_is_recorded_once(client, db_session, monkeypat
     runs = _runs(db_session, JOB_CPI_INDEXING)
     assert len(runs) == 1
     assert runs[0].status in ("ok", "degraded", "stale")
-    assert runs[0].started_at.date() == date.today()
+    assert runs[0].started_at.date() == utc_today()

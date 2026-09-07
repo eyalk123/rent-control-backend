@@ -31,8 +31,10 @@ async def extract_lease(
 ):
     """Extract a property + renter draft from an uploaded lease (PDF / DOCX / image).
 
-    The file is processed in-memory and discarded — nothing is stored. An audit-log row
-    is written for the call (telemetry only); the user updates it on submit via PATCH.
+    The file is processed in-memory and is not persisted by this service. It is sent to
+    Anthropic to be read, and is retained there for up to 30 days under their retention
+    policy. An audit-log row is written for the call (telemetry only — filename, size,
+    model, cost); the user updates it on submit via PATCH.
     """
     file_bytes = await file.read()
     started = time.monotonic()

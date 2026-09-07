@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import and_, delete, func, select
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive
 from app.config import settings
 from app.models.activity_log import ActivityLog
 from app.models.notification import Notification, NotificationTypeEnum
@@ -41,7 +42,7 @@ class RetentionResult:
 
 
 def _cutoff(days: int) -> datetime:
-    return datetime.utcnow() - timedelta(days=days)
+    return utc_now_naive() - timedelta(days=days)
 
 
 def _cpi_notification_for_an_active_renter():

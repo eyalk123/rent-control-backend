@@ -1,12 +1,13 @@
 import logging
 import secrets
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Callable
 
 import sentry_sdk
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from app.clock import utc_now_naive, utc_today
 from app.api.dependencies import (
     get_cpi_indexing_service,
     get_job_run_repository,
@@ -141,7 +142,7 @@ def run_reminders(
     unrelated pushes.
     """
     caught_up = False
-    if not job_runs.succeeded_on(JOB_CPI_INDEXING, date.today()):
+    if not job_runs.succeeded_on(JOB_CPI_INDEXING, utc_today()):
         try:
             _record(
                 job_runs,
@@ -279,7 +280,7 @@ def run_nightly_rollup(
             monitor_config=ROLLUP_MONITOR_CONFIG,
         )
 
-        stale = _stale_jobs(job_runs, datetime.utcnow())
+        stale = _stale_jobs(job_runs, utc_now_naive())
         if stale:
             stale_names = [job_name for job_name, _ in stale]
             with sentry_sdk.new_scope() as scope:

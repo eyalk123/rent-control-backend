@@ -1,9 +1,9 @@
 import json
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive
 from app.models.document_extraction_log import DocumentExtractionLog
 
 
@@ -42,7 +42,7 @@ class DocumentExtractionLogRepository:
         log.fields_given_count = (log.fields_given_count or 0) + fields_given_count
         log.forms_submitted_count = (log.forms_submitted_count or 0) + 1
         if log.submitted_at is None:
-            log.submitted_at = datetime.utcnow()
+            log.submitted_at = utc_now_naive()
         if entity_type == "property" and created_id is not None:
             log.created_property_id = created_id
         elif entity_type == "renter" and created_id is not None:

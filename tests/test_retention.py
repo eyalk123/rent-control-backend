@@ -4,10 +4,11 @@ The behaviour that matters most is the dry run. Turning a window on for the firs
 everything already older than it, which on a live database can be a lot — so `dry_run` has to
 be trustworthy about counting without touching anything.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import select
 
+from app.clock import utc_now_naive
 from app.config import settings
 from app.models.activity_log import ActivityLog
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
@@ -24,7 +25,7 @@ def _headers():
 
 def _seed(db_session, *, age_days: int) -> None:
     """One row of each swept class, aged by `age_days`."""
-    when = datetime.utcnow() - timedelta(days=age_days)
+    when = utc_now_naive() - timedelta(days=age_days)
     convo = AgentConversation(owner_id=OWNER_A, title="c", updated_at=when)
     db_session.add(convo)
     db_session.commit()
@@ -141,7 +142,7 @@ def _cpi_notification(db_session, *, renter_id: int, age_days: int) -> None:
     db_session.add(
         Notification(
             owner_id=OWNER_A, type=NotificationTypeEnum.CPI_RENT_CHANGE, entity_id=renter_id,
-            period_key="2024-01-01", sent_at=datetime.utcnow() - timedelta(days=age_days),
+            period_key="2024-01-01", sent_at=utc_now_naive() - timedelta(days=age_days),
         )
     )
     db_session.commit()
@@ -201,7 +202,7 @@ def test_the_reprieve_is_only_for_cpi_notifications(client, db_session, monkeypa
     db_session.add(
         Notification(
             owner_id=OWNER_A, type=NotificationTypeEnum.OVERDUE, entity_id=renter.id,
-            period_key="2025-03", sent_at=datetime.utcnow() - timedelta(days=400),
+            period_key="2025-03", sent_at=utc_now_naive() - timedelta(days=400),
         )
     )
     db_session.commit()

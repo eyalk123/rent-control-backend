@@ -5,10 +5,10 @@ including the tool_use / tool_result blocks. So we store each message's content
 verbatim (as JSON) and replay it. One ``agent_usage_log`` row is written per user
 message for cost accounting and the daily rate limit.
 """
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -20,8 +20,8 @@ class AgentConversation(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_id = Column(String, nullable=False, index=True)
     title = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class AgentMessage(Base):
@@ -38,7 +38,7 @@ class AgentMessage(Base):
     )
     role = Column(String, nullable=False)  # user | assistant
     content = Column(Text, nullable=False)  # JSON (string or list of blocks)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
 
 
 class AgentUsageLog(Base):
@@ -52,7 +52,7 @@ class AgentUsageLog(Base):
     conversation_id = Column(
         Integer, ForeignKey("agent_conversations.id", ondelete="SET NULL"), nullable=True
     )
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive, index=True)
 
     model = Column(String, nullable=True)
     status = Column(String, nullable=False)  # success | refusal | error

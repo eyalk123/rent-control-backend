@@ -13,8 +13,9 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
+from app.clock import utc_now_naive
 from app.models.notification import Notification
 from app.repositories.device_token_repository import DeviceTokenRepository
 from app.repositories.notification_repository import NotificationRepository
@@ -127,7 +128,7 @@ class ReminderService:
         self.notification_repository.dismiss_expired(
             owner_id,
             list(NON_RESOLVING_EVENTS),
-            before=datetime.utcnow() - timedelta(days=cpi.AUTO_DISMISS_DAYS),
+            before=utc_now_naive() - timedelta(days=cpi.AUTO_DISMISS_DAYS),
         )
 
     def _dismiss_resolved(
@@ -167,7 +168,7 @@ class ReminderService:
         stale un-pushed backlog, then push every still-un-pushed row (whether created by
         this run or earlier by the in-app feed) to owners with a registered device.
         Returns a summary."""
-        cutoff = datetime.utcnow() - timedelta(days=PUSH_FRESHNESS_DAYS)
+        cutoff = utc_now_naive() - timedelta(days=PUSH_FRESHNESS_DAYS)
         summary = {"created": 0, "pushed": 0}
         for owner_id in self.renter_repository.list_distinct_owner_ids():
             summary["created"] += len(self.generate_for_owner(owner_id, today).created)

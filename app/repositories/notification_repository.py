@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive
 from app.models.notification import Notification, NotificationTypeEnum
 
 
@@ -91,7 +92,7 @@ class NotificationRepository:
                 Notification.pushed_at.is_(None),
                 Notification.sent_at < before,
             )
-            .values(pushed_at=datetime.utcnow())
+            .values(pushed_at=utc_now_naive())
         )
         result = self.session.execute(stmt)
         self.session.commit()
@@ -116,7 +117,7 @@ class NotificationRepository:
                 Notification.dismissed_at.is_(None),
                 Notification.sent_at < before,
             )
-            .values(dismissed_at=datetime.utcnow())
+            .values(dismissed_at=utc_now_naive())
         )
         result = self.session.execute(stmt)
         self.session.commit()
@@ -134,7 +135,7 @@ class NotificationRepository:
         if notification is None:
             return None
         if notification.read_at is None:
-            notification.read_at = datetime.utcnow()
+            notification.read_at = utc_now_naive()
             self.session.commit()
             self.session.refresh(notification)
         return notification
@@ -143,7 +144,7 @@ class NotificationRepository:
         stmt = (
             update(Notification)
             .where(Notification.owner_id == owner_id, Notification.read_at.is_(None))
-            .values(read_at=datetime.utcnow())
+            .values(read_at=utc_now_naive())
         )
         result = self.session.execute(stmt)
         self.session.commit()
@@ -154,7 +155,7 @@ class NotificationRepository:
         if notification is None:
             return None
         if notification.dismissed_at is None:
-            notification.dismissed_at = datetime.utcnow()
+            notification.dismissed_at = utc_now_naive()
             self.session.commit()
             self.session.refresh(notification)
         return notification
@@ -178,7 +179,7 @@ class NotificationRepository:
                 Notification.period_key == period_key,
                 Notification.dismissed_at.is_(None),
             )
-            .values(dismissed_at=datetime.utcnow())
+            .values(dismissed_at=utc_now_naive())
         )
         result = self.session.execute(stmt)
         self.session.commit()
@@ -190,7 +191,7 @@ class NotificationRepository:
         stmt = (
             update(Notification)
             .where(Notification.id.in_(notification_ids))
-            .values(pushed_at=datetime.utcnow())
+            .values(pushed_at=utc_now_naive())
         )
         self.session.execute(stmt)
         self.session.commit()

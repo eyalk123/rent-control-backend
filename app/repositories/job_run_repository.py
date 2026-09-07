@@ -5,6 +5,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive
 from app.models.job_run import JobRun
 
 # Statuses that mean "the job did its work". ``degraded`` counts: a CPI refresh served
@@ -26,7 +27,7 @@ class JobRunRepository:
         nothing or a row with a NULL ``finished_at`` — both of which read as "did not
         complete", which is the honest answer.
         """
-        run = JobRun(job_name=job_name, started_at=datetime.utcnow(), status="running")
+        run = JobRun(job_name=job_name, started_at=utc_now_naive(), status="running")
         self.session.add(run)
         self.session.flush()
         return run
@@ -37,7 +38,7 @@ class JobRunRepository:
         status: str,
         summary: Optional[dict[str, Any]] = None,
     ) -> JobRun:
-        run.finished_at = datetime.utcnow()
+        run.finished_at = utc_now_naive()
         run.status = status
         run.summary = json.dumps(summary, default=str) if summary is not None else None
         self.session.commit()
@@ -55,7 +56,7 @@ class JobRunRepository:
         run = JobRun(
             job_name=job_name,
             started_at=started_at,
-            finished_at=datetime.utcnow(),
+            finished_at=utc_now_naive(),
             status="failed",
             error=error,
         )
@@ -103,6 +104,11 @@ class JobRunRepository:
         Compared on the UTC calendar date rather than an elapsed-hours window because
         the jobs are daily and the question being asked is "has today's run happened
         yet", not "how long since the last one".
+
+        ``day`` must therefore be a UTC date — ``app.clock.utc_today()``, not
+        ``date.today()``. ``started_at`` is UTC, so a local "today" compares two
+        different calendars and answers wrongly for as many hours as the host is
+        offset from UTC.
         """
         run = self.last_success(job_name)
         return run is not None and run.started_at.date() >= day

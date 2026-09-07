@@ -13,8 +13,10 @@ tends to trust the authoritative-looking text. Rendering to pixels ourselves dro
 text layer entirely, so Claude reads only what a human sees. Images go to Claude
 directly; DOCX (real text, no glyph problem) is converted to text with python-docx.
 
-The file is processed in-memory and never written to disk or Firebase — clients hold
-the original and attach it to Firebase only when the reviewed form is submitted.
+The file is processed in-memory and never written to our disk or Firebase — clients hold
+the original and attach it to Firebase only when the reviewed form is submitted. It is not
+gone, though: the bytes go to Anthropic, which retains them for up to 30 days under its own
+retention policy. Say "we don't store it" only about our own storage — never as an absolute.
 """
 import base64
 import io

@@ -1,9 +1,10 @@
 """API tests for the /agent endpoints (agent service stubbed — no network)."""
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 
+from app.clock import utc_now_naive
 from app.api.dependencies import get_agent_service
 from app.config import settings
 from app.main import app
@@ -138,7 +139,7 @@ def test_delete_conversation_cross_owner_404(client_factory, db_session):
 
 def test_agent_retention_deletes_old_conversations(client, db_session, monkeypatch):
     old = AgentConversation(
-        owner_id=OWNER_A, title="old", updated_at=datetime.utcnow() - timedelta(days=400)
+        owner_id=OWNER_A, title="old", updated_at=utc_now_naive() - timedelta(days=400)
     )
     recent = AgentConversation(owner_id=OWNER_A, title="recent")
     db_session.add_all([old, recent])
@@ -161,7 +162,7 @@ def test_agent_retention_deletes_old_conversations(client, db_session, monkeypat
 def test_agent_retention_disabled_is_noop(client, db_session, monkeypatch):
     db_session.add(
         AgentConversation(
-            owner_id=OWNER_A, title="old", updated_at=datetime.utcnow() - timedelta(days=400)
+            owner_id=OWNER_A, title="old", updated_at=utc_now_naive() - timedelta(days=400)
         )
     )
     db_session.commit()

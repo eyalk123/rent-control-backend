@@ -1,8 +1,7 @@
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive
 from app.models.device_token import DevicePlatformEnum, DeviceToken
 
 
@@ -26,7 +25,7 @@ class DeviceTokenRepository:
             existing.owner_id = owner_id
             existing.platform = platform
             existing.locale = locale
-            existing.last_used_at = datetime.utcnow()
+            existing.last_used_at = utc_now_naive()
             self.session.commit()
             self.session.refresh(existing)
             return existing

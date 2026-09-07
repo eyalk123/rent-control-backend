@@ -14,10 +14,10 @@ everything else (see `user_service.delete_account`).
 The shape is generic (`action` + `entity_type`) so this can grow into the general activity log
 the analytics work wants, rather than being redesigned. Only deletions are written today.
 """
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, JSON, String
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -31,4 +31,4 @@ class ActivityLog(Base):
     entity_id = Column(Integer, nullable=False)
     label = Column(String, nullable=True)  # e.g. "רחוב הרצל 12" — personal data
     details = Column(JSON, nullable=True)  # small summary; never the full row
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive, index=True)
