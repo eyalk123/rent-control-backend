@@ -10,6 +10,7 @@ from app.models.deleted_account import DeletedAccount
 from app.models.device_token import DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory
+from app.models.legal_acceptance import LegalAcceptance
 from app.models.notification import Notification
 from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings
@@ -64,6 +65,11 @@ class UserService:
         # The activity log's labels are renter names and property addresses — personal data,
         # so it cannot outlive the account it describes.
         self.db.execute(delete(ActivityLog).where(ActivityLog.owner_id == owner_id))
+
+        # The record of which terms they accepted goes too. It is owner-scoped personal
+        # data like everything else here, and once the account is erased there is nothing
+        # left for it to evidence.
+        self.db.execute(delete(LegalAcceptance).where(LegalAcceptance.owner_id == owner_id))
 
         # Chat-agent data: conversations, messages, usage logs. Portfolio PII is stored
         # verbatim in agent_messages, so this must go too.

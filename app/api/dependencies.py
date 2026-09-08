@@ -26,6 +26,7 @@ from app.repositories.notification_settings_repository import (
 )
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.job_run_repository import JobRunRepository
+from app.repositories.legal_acceptance_repository import LegalAcceptanceRepository
 from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.repositories.property_repository import PropertyRepository
@@ -167,6 +168,12 @@ def get_activity_log_repository(
 
 def get_job_run_repository(db: Annotated[Session, Depends(get_db)]) -> JobRunRepository:
     return JobRunRepository(db)
+
+
+def get_legal_acceptance_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> LegalAcceptanceRepository:
+    return LegalAcceptanceRepository(db)
 
 
 def get_retention_service(db: Annotated[Session, Depends(get_db)]) -> RetentionService:

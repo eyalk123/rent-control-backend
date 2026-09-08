@@ -95,6 +95,20 @@ class Settings(BaseSettings):
     # reports failure (503). Absorbs a late publication; catches a dead feed.
     CPI_MAX_STALE_MONTHS: int = 2
 
+    # --- Legal documents ---
+    # The versions this server considers current. Reported by GET /users/me/legal; NOT
+    # enforced there. Each client bundles its own copy of the document text and gates on
+    # its own `TERMS_VERSION` / `PRIVACY_VERSION` in `features/legal/legalContent.ts`, so
+    # that nobody is ever asked to accept wording their build cannot display — a mobile
+    # build waiting on app-store review would otherwise be locked out of the product for
+    # a document it does not have. These two exist so the gap is measurable: compare them
+    # against `legal_acceptances.version` to see who is still on the previous text.
+    #
+    # Revising a document means bumping it in THREE places, in this order: both copies of
+    # `legalContent.ts` (web and mobile — they are manually-synced duplicates), then here.
+    CURRENT_TERMS_VERSION: str = "2026-06-09"
+    CURRENT_PRIVACY_VERSION: str = "2026-06-09"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property
