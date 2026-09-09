@@ -30,7 +30,12 @@ from typing import Any, Optional
 
 from dateutil.relativedelta import relativedelta
 
-from app.services.lease_periods import period_index_on, period_months, period_start
+from app.services.lease_periods import (
+    is_tenancy_ended,
+    period_index_on,
+    period_months,
+    period_start,
+)
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -233,7 +238,8 @@ TOOL_SCHEMAS: list[dict] = [
         "description": (
             "List all of the owner's properties with their address, type, the free-text "
             "'property owner' (e.g. a parent the unit belongs to), whether each is occupied "
-            "(occupied = the property has any renter, same as the app), and the current renter. "
+            "(occupied = the property has a renter whose lease has not ended, same as the app; "
+            "renter_count counts past tenants too), and the current renter. "
             "Returns total count plus occupied_count / vacant_count so you never tally them "
             "yourself. Use this to find property ids or list them; for a FILTERED count (e.g. "
             "occupied in a city, or with a lease past a date) use the aggregate tool instead."
@@ -320,8 +326,9 @@ TOOL_SCHEMAS: list[dict] = [
             "operation: count | sum | avg | min | max (sum/avg/min/max require value_field).\n"
             "filters: {field: value} for equals, or {field: {gte|lte|gt|lt|eq|ne|contains|in: X}}. "
             "Dates are ISO YYYY-MM-DD. Optional group_by returns a per-group breakdown.\n"
-            "Fields — properties: id, address, city, type, property_owner, occupied(bool), "
-            "renter_count, current_lease_end(date), purchase_price(₪). "
+            "Fields — properties: id, address, city, type, property_owner, occupied(bool — has a "
+            "renter whose lease has not ended), renter_count (every renter ever linked, past "
+            "tenants included), current_lease_end(date), purchase_price(₪). "
             "renters: id, name, property_id, has_property(bool), lease_start(date), lease_end(date), "
             "contract_term_years, option_years, current_monthly_rent(₪), rent_escalation_mode, "
             "payment_frequency, insurance_type. "
@@ -467,10 +474,26 @@ class AgentTools:
             return {"error": "not found"}
 
     # -- tools ----------------------------------------------------------------------
+    @staticmethod
+    def _current_renters(prop_renters: list) -> list:
+        """The tenancies on a property that have not finished.
+
+        The app's occupancy rule, ``PropertyRead.hasRenters``. Past tenants stay attached
+        to their property forever — they are the record of who was here — so "has any
+        linked renter" reports a flat as occupied for the rest of its life, from the first
+        lease it ever had. Not the repository's stricter active window either: a lease
+        signed to start next month still holds the property.
+        """
+        today = date.today()
+        return [
+            r for r in prop_renters
+            if not is_tenancy_ended(r.terminated_on, r.lease_end, today)
+        ]
+
     def _grouped_renters(self, owner_id: str):
-        """(properties, {property_id: [Renter, ...]}). Occupancy = a property having ANY
-        linked renter — matching the app's ``PropertyRead.hasRenters`` — not just a
-        currently-active lease window (which under-counted vs. what the UI shows)."""
+        """(properties, {property_id: [Renter, ...]}) — every linked renter, past ones
+        included, since ``renter_count`` counts them the way the app's renters tab does.
+        Occupancy is :meth:`_current_renters` over that list, not its length."""
         properties = self.property_service.list_properties(owner_id)
         by_prop: dict[int, list] = defaultdict(list)
         for r in self.renter_service.list_renters(owner_id):
@@ -489,7 +512,11 @@ class AgentTools:
             r for r in prop_renters
             if r.lease_start and r.lease_end and r.lease_start <= today <= r.lease_end
         ]
-        pool = active or prop_renters
+        # An ended tenancy is never "current": on a flat whose last tenant moved out the
+        # answer is that there is nobody, not the person who used to be there.
+        pool = active or AgentTools._current_renters(prop_renters)
+        if not pool:
+            return None
         return sorted(pool, key=lambda r: (r.lease_start or date.min), reverse=True)[0]
 
     def _tool_list_properties(self, owner_id: str, params: dict) -> dict:
@@ -498,7 +525,7 @@ class AgentTools:
         occupied_count = 0
         for p in properties:
             prop_renters = by_prop.get(p.id, [])
-            occupied = len(prop_renters) > 0
+            occupied = bool(self._current_renters(prop_renters))
             occupied_count += 1 if occupied else 0
             current = self._current_renter(prop_renters)
             current_rent = None
@@ -547,7 +574,7 @@ class AgentTools:
                     "city": p.city,
                     "type": p.type.value if hasattr(p.type, "value") else p.type,
                     "property_owner": p.property_owner,
-                    "occupied": len(prop_renters) > 0,
+                    "occupied": bool(self._current_renters(prop_renters)),
                     "renter_count": len(prop_renters),
                     "current_lease_end": max(lease_ends).isoformat() if lease_ends else None,
                     "purchase_price": _num(p.purchase_price),

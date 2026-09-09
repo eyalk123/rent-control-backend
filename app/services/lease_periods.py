@@ -123,3 +123,31 @@ def contract_end(lease_start: date, lease_years: list[dict]) -> Optional[date]:
     if last_contract < 0:
         return None
     return lease_start + relativedelta(months=months_before(lease_years, last_contract + 1))
+
+
+def effective_lease_end(
+    terminated_on: Optional[date], lease_end: Optional[date]
+) -> Optional[date]:
+    """The date a tenancy actually stops, in Python.
+
+    The row-level twin of ``effective_lease_end()`` in the renter repository, which is the
+    same rule as a SQL expression: an early termination ends the lease before the signed
+    schedule does. ``lease_end`` is :func:`schedule_end` — options included — because an
+    option year is still a year the tenant may be living there.
+    """
+    dates = [d for d in (terminated_on, lease_end) if d is not None]
+    return min(dates) if dates else None
+
+
+def is_tenancy_ended(
+    terminated_on: Optional[date], lease_end: Optional[date], today: date
+) -> bool:
+    """Has this tenancy finished?
+
+    A renter with no dates at all is *not* ended — a half-entered record is something the
+    owner is still working on, not an archived one. Deliberately says nothing about a
+    lease that has not started yet: an upcoming tenancy still occupies the property as far
+    as the apps are concerned, it simply has not begun paying.
+    """
+    end = effective_lease_end(terminated_on, lease_end)
+    return end is not None and end < today

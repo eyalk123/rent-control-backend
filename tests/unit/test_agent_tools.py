@@ -48,17 +48,48 @@ def test_list_properties_reports_occupancy_and_current_renter(db_session):
 
 
 def test_list_properties_occupied_matches_app_hasrenters(db_session):
-    """Occupied = the property has ANY linked renter (the app's hasRenters), even if that
-    renter's lease has ended — the old active-lease-window rule under-counted vs. the UI."""
-    prop = make_property(db_session)
-    make_renter(db_session, property_id=prop.id, lease_start=date(2020, 1, 1), lease_end=date(2021, 1, 1))
-    make_property(db_session)  # genuinely empty
+    """Occupied = a renter whose lease has not ended — the app's ``PropertyRead.hasRenters``.
+
+    A past tenant stays linked to its property forever, because it is the record of who
+    lived there and what they paid. Counting linked renters therefore reported a flat as
+    occupied for the rest of its life, from the first lease it ever had; the renter_count
+    below is what that reading was actually measuring.
+    """
+    moved_out = make_property(db_session)
+    make_renter(
+        db_session, property_id=moved_out.id, lease_start=date(2020, 1, 1), lease_end=date(2021, 1, 1)
+    )
+    let = make_property(db_session)
+    make_renter(db_session, property_id=let.id, **_ACTIVE_LEASE)
+    make_property(db_session)  # never let
 
     result = AgentTools(db_session).dispatch("list_properties", OWNER_A, {})
     by_id = {p["id"]: p for p in result["properties"]}
-    assert by_id[prop.id]["status"] == "occupied"  # 'vacant' under the old active-only rule
+    assert by_id[moved_out.id]["status"] == "vacant"
+    assert by_id[moved_out.id]["current_renter"] is None
+    assert by_id[moved_out.id]["renter_count"] == 1  # the past tenant is still on record
+    assert by_id[let.id]["status"] == "occupied"
     assert result["occupied_count"] == 1
-    assert result["vacant_count"] == 1
+    assert result["vacant_count"] == 2
+
+
+def test_list_properties_occupied_through_an_option_period(db_session):
+    """``lease_end`` covers the option periods, so a tenant who took up their renewal year
+    is still occupying the flat — the boundary is schedule end, not contract end."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=_TODAY - timedelta(days=400),
+        lease_years=[
+            {"amount": 5000, "type": "contract"},
+            {"amount": 5250, "type": "option"},
+        ],
+    )
+
+    result = AgentTools(db_session).dispatch("list_properties", OWNER_A, {})
+    assert result["properties"][0]["status"] == "occupied"
+    assert result["occupied_count"] == 1
 
 
 def test_aggregate_count_occupied_properties_with_lease_to_2027(db_session):

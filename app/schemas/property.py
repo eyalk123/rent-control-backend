@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from enum import Enum
 from typing import Optional
 
@@ -159,8 +160,23 @@ class PropertyRead(BaseModel):
 
     @model_validator(mode="after")
     def compute_has_renters(self):
+        """Occupied = at least one tenancy that has not finished.
+
+        ``renters`` deliberately carries the past tenants too — they are the record of who
+        was here and what they paid, and the apps list them under "previous tenants" — so
+        a bare ``len(...) > 0`` marked a long-empty flat as occupied forever, from the
+        first lease it ever had.
+        """
+        # Imported here, not at module scope: `app.services.__init__` pulls in
+        # `property_service`, which imports this module back.
+        from app.services.lease_periods import is_tenancy_ended
+
         if self.hasRenters is None and self.renters is not None:
-            self.hasRenters = len(self.renters) > 0
+            today = date.today()
+            self.hasRenters = any(
+                not is_tenancy_ended(r.terminated_on, r.lease_end, today)
+                for r in self.renters
+            )
         return self
 
 
