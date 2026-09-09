@@ -151,3 +151,25 @@ def is_tenancy_ended(
     """
     end = effective_lease_end(terminated_on, lease_end)
     return end is not None and end < today
+
+
+def rent_for_month(
+    lease_years: list[dict], lease_start: Optional[date], month: date
+) -> float:
+    """Monthly rent from the lease period covering ``month``, clamped to the last one.
+
+    Mirrors the clients' ``getRentForMonth`` so the overdue amount, the payment grid and
+    the ``expected_amount`` snapshot taken when a payment is recorded all agree about what
+    was owed. Falls back to period one when there is no ``lease_start`` or the month
+    predates it.
+    """
+    if not lease_years:
+        return 0.0
+    if lease_start is None:
+        return lease_years[0].get("amount") or 0.0
+    index = period_index_for_month(lease_start, lease_years, month)
+    if index is None:
+        # Before the lease starts, fall back to period one; past its end, clamp to the
+        # last period — the payment grid draws months either side and expects a figure.
+        index = 0 if month < lease_start else len(lease_years) - 1
+    return lease_years[index].get("amount") or 0.0

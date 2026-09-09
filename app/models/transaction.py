@@ -44,6 +44,14 @@ class Transaction(Base):
     date_of_payment = Column(Date, nullable=False)
     month_for = Column(Date, nullable=True)
     amount = Column(Numeric(precision=12, scale=2), nullable=False)
+    # What the lease schedule said was owed for `month_for`, frozen when the payment was
+    # recorded. Revenue only, and NULL for anything recorded before this existed — the
+    # clients fall back to the live schedule then, which is what they always did.
+    #
+    # It exists because the schedule is mutable and carries no history: editing a renter's
+    # base rent or escalation value re-derives every period, elapsed ones included, so
+    # without this a paid month starts reading as underpaid the moment the rent is raised.
+    expected_amount = Column(Numeric(precision=12, scale=2), nullable=True)
     currency_code = Column(String, nullable=False)
     category_id = Column(
         Integer,

@@ -290,6 +290,149 @@ def test_delete_transaction_not_found(client):
     assert client.delete("/transactions/999").status_code == 404
 
 
+# --- expected_amount snapshot -----------------------------------------------
+#
+# The lease schedule is mutable and keeps no history: raising a renter's base rent
+# re-derives every period, elapsed ones included. Without a snapshot on the payment, a
+# correctly-paid month starts reading as short the moment the rent goes up.
+
+ESCALATING_LEASE = [
+    {"amount": 5000, "type": "contract"},
+    {"amount": 5250, "type": "contract"},
+    {"amount": 5513, "type": "option"},
+]
+
+
+def test_create_revenue_snapshots_the_rent_for_that_month(client, db_session):
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 1, 1),
+        lease_years=ESCALATING_LEASE,
+    )
+    # A payment for the *second* lease year is quoted at that year's rent, not year one's
+    # and not the last one's.
+    body = client.post(
+        "/transactions/revenue",
+        json={
+            "property_id": prop.id,
+            "renter_id": renter.id,
+            "amount": 5250,
+            "month_for": "2025-06-01",
+        },
+    ).json()
+    assert body["expected_amount"] == "5250.00"
+
+
+def test_snapshot_survives_a_rent_rise(client, db_session):
+    """The regression this column exists for."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 1, 1),
+        lease_years=ESCALATING_LEASE,
+    )
+    tx = client.post(
+        "/transactions/revenue",
+        json={
+            "property_id": prop.id,
+            "renter_id": renter.id,
+            "amount": 5000,
+            "month_for": "2024-06-01",
+        },
+    ).json()
+    assert tx["expected_amount"] == "5000.00"
+
+    # The owner raises the rent, which re-derives the whole schedule — year one included.
+    client.put(
+        f"/renters/{renter.id}",
+        json={
+            "lease_years": [
+                {"amount": 5500, "type": "contract"},
+                {"amount": 5775, "type": "contract"},
+                {"amount": 6064, "type": "option"},
+            ]
+        },
+    )
+
+    # The payment still records what was actually being charged in June 2024.
+    assert client.get(f"/transactions/{tx['id']}").json()["expected_amount"] == "5000.00"
+
+
+def test_no_snapshot_without_a_renter(client, db_session):
+    prop = make_property(db_session)
+    body = client.post(
+        "/transactions/revenue",
+        json={"property_id": prop.id, "amount": 5000, "month_for": "2024-06-01"},
+    ).json()
+    # Nothing quoted it, so the clients fall back to the live schedule as they always did.
+    assert body["expected_amount"] is None
+
+
+def test_expense_has_no_snapshot(client, db_session):
+    prop = make_property(db_session)
+    cat = make_expense_category(db_session)
+    body = client.post(
+        "/transactions/expense",
+        json={
+            "property_id": prop.id,
+            "amount": 350,
+            "date_of_payment": "2024-06-05",
+            "payment_method": "cash",
+            "category_ids": [cat.id],
+        },
+    ).json()
+    assert body["expected_amount"] is None
+
+
+def test_moving_a_payment_to_another_month_re_snapshots(client, db_session):
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 1, 1),
+        lease_years=ESCALATING_LEASE,
+    )
+    tx = client.post(
+        "/transactions/revenue",
+        json={
+            "property_id": prop.id,
+            "renter_id": renter.id,
+            "amount": 5000,
+            "month_for": "2024-06-01",
+        },
+    ).json()
+    # Recorded against the wrong month and corrected: the quote follows the row.
+    body = client.patch(f"/transactions/revenue/{tx['id']}", json={"month_for": "2025-06-01"}).json()
+    assert body["expected_amount"] == "5250.00"
+
+
+def test_correcting_the_amount_keeps_the_snapshot(client, db_session):
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 1, 1),
+        lease_years=ESCALATING_LEASE,
+    )
+    tx = client.post(
+        "/transactions/revenue",
+        json={
+            "property_id": prop.id,
+            "renter_id": renter.id,
+            "amount": 5000,
+            "month_for": "2024-06-01",
+        },
+    ).json()
+    # A short payment is the payment disagreeing with the lease — which is exactly what
+    # the flag is for, so the quote must not move to match it.
+    body = client.patch(f"/transactions/revenue/{tx['id']}", json={"amount": 4700}).json()
+    assert body["amount"] == "4700.00"
+    assert body["expected_amount"] == "5000.00"
+
+
 # --- summary (exercises the SQLite extract shim) ----------------------------
 
 @freeze_time("2026-06-15")
@@ -371,3 +514,25 @@ def test_summary_ytd_counts_revenue_under_month_for(client, db_session):
     assert body["ytd_by_owner"] == [
         {"owner": "Jane Cooper", "revenue": 3000.0, "expenses": 0.0, "net": 3000.0},
     ]
+
+
+def test_expected_amount_survives_the_list_endpoint(client, db_session):
+    """The grid reads the list, not the detail — the snapshot has to come back there too."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2024, 1, 1),
+        lease_years=ESCALATING_LEASE,
+    )
+    client.post(
+        "/transactions/revenue",
+        json={
+            "property_id": prop.id,
+            "renter_id": renter.id,
+            "amount": 5000,
+            "month_for": "2024-06-01",
+        },
+    )
+    rows = client.get(f"/transactions?renter_id={renter.id}").json()
+    assert [r["expected_amount"] for r in rows] == ["5000.00"]

@@ -67,6 +67,9 @@ class TransactionRead(BaseModel):
     date_of_payment: date
     month_for: Optional[date] = None
     amount: Decimal
+    # Server-owned snapshot of what the lease quoted for `month_for` — never accepted from
+    # a client, same as property_name/renter_name. NULL on expenses and on rows predating it.
+    expected_amount: Optional[Decimal] = None
     currencyCode: str = Field(validation_alias="currency_code")
     category_id: Optional[int] = None
     category_ids: list[int] = []
