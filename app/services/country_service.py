@@ -62,6 +62,17 @@ def is_known(country_code: str | None) -> bool:
     return code is not None and code in COUNTRIES
 
 
+def countries_with_index_linkage() -> list[str]:
+    """Country codes whose accounts have a real index source behind them.
+
+    Derived from the capability flags rather than written down, so adding a second market
+    is one flag rather than a list someone has to remember to update. Today this is Israel
+    alone; the day an INE or INSEE adapter lands, flipping that country's flag scopes the
+    job to it automatically.
+    """
+    return [code for code, cfg in COUNTRIES.items() if cfg.capabilities.cpi_linkage]
+
+
 def all_countries() -> list[CountryConfig]:
     """Every country, name-ordered — what ``GET /countries`` serves to the signup picker."""
     return sorted(COUNTRIES.values(), key=lambda c: c.name)
