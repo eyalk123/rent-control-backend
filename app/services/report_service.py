@@ -120,6 +120,9 @@ CATEGORY_LABELS = {
         "gardening": "Gardening",
         "air_conditioning": "Air conditioning",
         "management_fee": "Management fee",
+        "mortgage_interest": "Mortgage interest",
+        "building_fees": "Building / HOA fees",
+        "legal_professional": "Legal & professional fees",
         "other": "Other",
     },
     "he": {
@@ -134,6 +137,9 @@ CATEGORY_LABELS = {
         "gardening": "גינון",
         "air_conditioning": "מיזוג אוויר",
         "management_fee": "דמי ניהול",
+        "mortgage_interest": "ריבית משכנתא",
+        "building_fees": "דמי ועד בית",
+        "legal_professional": "שכר טרחה מקצועי",
         "other": "אחר",
     },
 }

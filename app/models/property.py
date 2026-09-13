@@ -43,6 +43,11 @@ class Property(Base):
     basic_contract_url = Column(String, nullable=True)
     land_registry_url = Column(String, nullable=True)
     currency_code = Column(String, nullable=True)
+    # ISO 3166-1 alpha-2, copied from the owner at creation and never shown as a picker.
+    # **This is the value every country rule reads** — rules attach to where the building
+    # is, not to where the account holder signed up. NULL resolves to Israel, since every
+    # row predating this column was Israeli.
+    country = Column(String(2), nullable=True)
     floor = Column(Integer, nullable=True)
     apartment = Column(String, nullable=True)
     block = Column(String, nullable=True)
