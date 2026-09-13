@@ -4,6 +4,7 @@ from typing import Annotated
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
@@ -15,6 +16,7 @@ from app.api.dependencies import (
 )
 from app.config import settings
 from app.database import get_db
+from app.models.country_notify_request import CountryNotifyRequest
 from app.models.legal_acceptance import LegalDocumentEnum
 from app.repositories.legal_acceptance_repository import LegalAcceptanceRepository
 from app.repositories.owner_repository import OwnerRepository
@@ -23,8 +25,14 @@ from app.schemas.legal_acceptance import (
     LegalAcceptanceRecord,
     LegalStatusRead,
 )
+from app.schemas.country import (
+    CountryNotifyRequestCreate,
+    CountryNotifyRequestRead,
+    CountryUpdate,
+)
 from app.schemas.owner import OwnerRead
 from app.schemas.tour_state import TourStateRead, TourStateUpdate
+from app.services import country_service
 from app.services.export_service import build_export_zip
 from app.services.user_service import UserService
 
@@ -41,6 +49,70 @@ def get_my_profile(
     if owner is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Owner profile not found")
     return owner
+
+
+@router.patch("/me/country", response_model=OwnerRead)
+def set_my_country(
+    payload: CountryUpdate,
+    current_user: Annotated[dict, Depends(get_current_owner)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+):
+    """Record the country chosen at signup.
+
+    Its own endpoint rather than a field on a general profile PATCH, and its own repository
+    method rather than the profile upsert, because that upsert is best-effort telemetry
+    inside a swallowed try/except. A country that fails to save has to surface as an error:
+    the alternative is a user landing in the app with no country, formatted as Israel, with
+    nothing having told them.
+
+    The code is validated against the ISO table. Unknown codes are rejected here rather
+    than stored and resolved to defaults later — this is the one moment the mistake is
+    still cheap to fix.
+    """
+    if not country_service.is_known(payload.country):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unknown country code",
+        )
+    return owner_repository.set_country(current_user["user_id"], payload.country)
+
+
+@router.post(
+    "/me/notify-country",
+    response_model=CountryNotifyRequestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def request_country_notification(
+    payload: CountryNotifyRequestCreate,
+    current_user: Annotated[dict, Depends(get_current_owner)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """"Tell me when you add {Country}". Optional, and nothing depends on it.
+
+    Idempotent: asking twice is the same fact, not a stronger one, and double-counting
+    would skew the only signal the table exists to give. A repeat returns 201 with the
+    existing row rather than a conflict — the user did nothing wrong.
+    """
+    if not country_service.is_known(payload.country_code):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unknown country code",
+        )
+    owner_id = current_user["user_id"]
+    existing = db.scalar(
+        select(CountryNotifyRequest).where(
+            CountryNotifyRequest.owner_id == owner_id,
+            CountryNotifyRequest.country_code == payload.country_code,
+        )
+    )
+    if existing is None:
+        existing = CountryNotifyRequest(
+            owner_id=owner_id, country_code=payload.country_code
+        )
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+    return existing
 
 
 @router.get("/me/tour-state", response_model=TourStateRead)

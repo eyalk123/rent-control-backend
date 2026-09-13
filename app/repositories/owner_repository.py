@@ -64,6 +64,29 @@ class OwnerRepository:
 
         return owner
 
+    # ── country ────────────────────────────────────────────────────────────
+
+    def set_country(self, uid: str, country_code: str) -> Owner:
+        """Record the signup country choice.
+
+        Deliberately *not* routed through ``upsert``: that write is best-effort telemetry
+        wrapped in a swallowed try/except, and is throttled. A country is neither — if it
+        fails to store, the user must see an error and try again, not land in the app with
+        no country and no idea anything went wrong.
+
+        Creates the row if the profile upsert has not happened yet, which is possible on a
+        brand-new account since that write is allowed to fail silently.
+        """
+        owner = self.session.get(Owner, uid)
+        if owner is None:
+            owner = Owner(id=uid, country=country_code, last_seen_at=utc_now_naive())
+            self.session.add(owner)
+        else:
+            owner.country = country_code
+        self.session.commit()
+        self.session.refresh(owner)
+        return owner
+
     # ── onboarding tour state ──────────────────────────────────────────────
 
     def get_tour_state(self, uid: str) -> dict:
