@@ -9,6 +9,8 @@ from fpdf import FPDF
 from sqlalchemy import and_, extract, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.countries.config import CountryConfig
+from app.services import country_service
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.report import (
     ExpenseLogReportResponse,
@@ -208,8 +210,38 @@ FONT = "NotoSans"
 FONT_FALLBACK = "NotoSansHebrew"
 
 
-def _fmt(amount: Decimal, lang: str = DEFAULT_LANG) -> str:
-    return f"{_t(lang, 'currency')}{amount:,.0f}"
+# How a currency is written on a report.
+#
+# Keyed by ISO 4217, **not** by country — nothing here branches on where the owner is. An
+# entry overrides the country config's symbol and position; anything absent falls through
+# to the config, which is what every currency but one does.
+#
+# ILS has an entry because the Israeli report has always printed a *language-dependent*
+# label in the prefix position: "ILS 5,000" in English, "₪5,000" in Hebrew. That is the
+# artifact users hand to an accountant, and the config's suffix form would silently change
+# every report they have ever filed. Preserved deliberately.
+CURRENCY_LABELS: dict[str, dict[str, str]] = {
+    "ILS": {"en": "ILS ", "he": "₪"},
+}
+
+
+def _fmt(
+    amount: Decimal,
+    lang: str = DEFAULT_LANG,
+    currency: CountryConfig | None = None,
+) -> str:
+    """An amount with its currency, as the report prints it.
+
+    ``currency`` is the owner's country config. ``None`` means "unknown", which resolves to
+    Israel — every report that predates this parameter was Israeli.
+    """
+    config = currency or country_service.config_for(None)
+    legacy = CURRENCY_LABELS.get(config.currency)
+    if legacy is not None:
+        return f"{legacy[normalise_lang(lang)]}{amount:,.0f}"
+    if config.currency_symbol_position == "suffix":
+        return f"{amount:,.0f}{config.currency_symbol}"
+    return f"{config.currency_symbol}{amount:,.0f}"
 
 
 # Table shading. The faint grid is what makes a property block read as one unit; the strong
@@ -480,9 +512,20 @@ def get_expense_log_data(
 # ---------------------------------------------------------------------------
 
 class _PDF(FPDF):
-    def __init__(self, title_key: str, year: int, lang: str = DEFAULT_LANG, **kwargs):
+    def __init__(
+        self,
+        title_key: str,
+        year: int,
+        lang: str = DEFAULT_LANG,
+        currency: CountryConfig | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.lang = normalise_lang(lang)
+        # Carried alongside the language, but resolved from the *data* rather than from the
+        # reader's locale: a report is about a portfolio, and the portfolio's currency does
+        # not change because someone switched the app to English.
+        self.currency = currency or country_service.config_for(None)
         self.rtl = self.lang == "he"
         self._title = _t(self.lang, title_key)
         self._year = year
@@ -613,7 +656,9 @@ class _PDF(FPDF):
 
 
 def generate_income_expense_pdf(
-    data: IncomeExpenseReportResponse, lang: str = DEFAULT_LANG
+    data: IncomeExpenseReportResponse,
+    lang: str = DEFAULT_LANG,
+    currency: CountryConfig | None = None,
 ) -> bytes:
     """One block per property — Revenue, Expenses and Net on adjacent rows, months as columns.
 
@@ -625,7 +670,10 @@ def generate_income_expense_pdf(
     bands) is what makes the report readable: you can compare a month's income against its
     costs without looking in two places, and the Total column gives that property's net.
     """
-    pdf = _PDF("income_title", data.year, lang=lang, orientation="L", unit="mm", format="A4")
+    pdf = _PDF(
+        "income_title", data.year, lang=lang, currency=currency,
+        orientation="L", unit="mm", format="A4",
+    )
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -803,9 +851,9 @@ def generate_income_expense_pdf(
     pdf.set_fill_color(200, 220, 200)
     summary = [
         (t("grand_total"), None),
-        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang)}', None),
-        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang)}', None),
-        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang)}',
+        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang, pdf.currency)}', None),
+        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang, pdf.currency)}', None),
+        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang, pdf.currency)}',
          _sign_colour(data.grand_total.net, strong=True)),
     ]
     cells = [(pdf.get_string_width(text) + 6, text,
@@ -843,8 +891,15 @@ def _draw_coloured_row(pdf: "_PDF", cells: list[tuple], height: float,
         pdf.set_text_color(0, 0, 0)
 
 
-def generate_expense_log_pdf(data: ExpenseLogReportResponse, lang: str = DEFAULT_LANG) -> bytes:
-    pdf = _PDF("expense_title", data.year, lang=lang, orientation="L", unit="mm", format="A4")
+def generate_expense_log_pdf(
+    data: ExpenseLogReportResponse,
+    lang: str = DEFAULT_LANG,
+    currency: CountryConfig | None = None,
+) -> bytes:
+    pdf = _PDF(
+        "expense_title", data.year, lang=lang, currency=currency,
+        orientation="L", unit="mm", format="A4",
+    )
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 

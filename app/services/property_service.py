@@ -8,6 +8,7 @@ from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyUpdate
 from app.schemas.renter import PropertyRenterSummary
+from app.services import country_service
 
 
 class PropertyService:
@@ -47,6 +48,7 @@ class PropertyService:
 
     def create_property(self, data: PropertyCreate, owner_id: str):
         property_type = PropertyTypeEnum(data.type.value)
+        country = self._owner_country(owner_id)
         parking_numbers_str = (
             json.dumps(data.parking_numbers) if data.parking_numbers is not None else None
         )
@@ -79,7 +81,12 @@ class PropertyService:
             # because it must not move if the account's country is ever corrected: a lease
             # already priced under one country's rules cannot be re-based by an edit
             # somewhere else.
-            country=self._owner_country(owner_id),
+            country=country,
+            # Frozen at creation from the country, not read through a join, for the same
+            # reason `country` is: a transaction already recorded in one currency cannot be
+            # re-denominated by an edit somewhere else. `transaction_service` snapshots this
+            # onto every row it writes.
+            currency_code=country_service.config_for(country).currency,
         )
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)
