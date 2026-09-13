@@ -8,11 +8,22 @@ from app.models.base import Base
 
 
 class PropertyTypeEnum(str, enum.Enum):
+    """Every type the column can hold, everywhere.
+
+    Nothing is removed per country — a PostgreSQL enum value cannot be dropped without
+    rewriting the type and every column using it, and existing Israeli rows hold the last
+    two. The skimmed set is produced by filtering what the clients offer and what the API
+    accepts (``capabilities.israeli_property_types``), not by narrowing the storage.
+    """
+
     APARTMENT = "apartment"
     HOUSE = "house"
     COMMERCIAL = "commercial"
-    GARDEN_APARTMENT = "garden_apartment"
-    HOUSING_UNIT = "housing_unit"
+    GARDEN_APARTMENT = "garden_apartment"  # Israel only
+    HOUSING_UNIT = "housing_unit"  # Israel only
+    CONDO_TOWNHOUSE = "condo_townhouse"
+    ROOM = "room"
+    OTHER = "other"
 
 
 class Property(Base):

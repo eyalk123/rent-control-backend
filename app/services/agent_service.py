@@ -21,7 +21,7 @@ from fastapi import HTTPException, status
 
 from app.config import settings
 from app.repositories.agent_repository import AgentRepository
-from app.services.agent_tools import TOOL_SCHEMAS, AgentTools
+from app.services.agent_tools import AgentTools, tool_schemas_for
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,9 @@ class AgentService:
         tool_calls: list[str] = []
         status_str = "success"
         final_text = ""
+        # Resolved once per turn, not per iteration: the owner's country cannot change
+        # mid-conversation, and the schema list is what the prompt cache keys on.
+        tools = tool_schemas_for(self.tools.owner_country(owner_id))
 
         try:
             for _ in range(self.max_tool_iters + 1):
@@ -219,7 +222,7 @@ class AgentService:
                     system=[
                         {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
                     ],
-                    tools=TOOL_SCHEMAS,
+                    tools=tools,
                     messages=messages,
                 ) as stream:
                     for delta in stream.text_stream:

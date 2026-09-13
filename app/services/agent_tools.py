@@ -42,11 +42,13 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.repositories.cpi_index_repository import CpiIndexRepository, reference_period
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services import report_service
+from app.services import country_service
 from app.services.cpi_indexing_service import compute_chained_cpi_amount, compute_cpi_amount
 from app.services.property_service import PropertyService
 from app.services.renter_service import RenterService
@@ -427,9 +429,38 @@ TOOL_SCHEMAS: list[dict] = [
 
 _TOOL_NAMES = {spec["name"] for spec in TOOL_SCHEMAS}
 
+# Tools that only exist where the capability behind them does. `explain_cpi` walks the
+# index engine — base index, known-index rule, the floor — and for an account with no index
+# source there is nothing to walk: every answer it could give would be about a calculation
+# that never ran.
+TOOL_REQUIREMENTS: dict[str, str] = {
+    "explain_cpi": "cpi_linkage",
+}
+
+
+def tool_schemas_for(country_code: str | None) -> list[dict]:
+    """The tools this owner's country can actually use — ten become nine outside Israel.
+
+    Filtered before the schemas reach the model rather than after: a tool the model can see
+    is a tool it will eventually call, and refusing it at dispatch wastes a round-trip and
+    puts an error in the transcript for no reason.
+    """
+    caps = country_service.capabilities_for(country_code)
+    return [
+        spec
+        for spec in TOOL_SCHEMAS
+        if (req := TOOL_REQUIREMENTS.get(spec["name"])) is None or getattr(caps, req)
+    ]
+
 
 class AgentTools:
     """Owner-scoped, read-only tool executor. One instance per request/session."""
+
+    def owner_country(self, owner_id: str) -> str | None:
+        """The owner's country, for capability checks. Public because the agent
+        service needs it to pick the tool list before the turn starts."""
+        owner = OwnerRepository(self.db).get(owner_id)
+        return owner.country if owner else None
 
     def __init__(self, db: Session):
         self.db = db
@@ -458,6 +489,15 @@ class AgentTools:
         dict (the model reads it and can retry) rather than raising."""
         if name not in _TOOL_NAMES:
             return {"error": f"unknown tool: {name}"}
+        # Belt and braces. The schemas handed to the model are already filtered, so this
+        # should be unreachable — but the tool name arrives from model output, and a
+        # read-only tool that quietly runs the index engine for an account with no index is
+        # not something to leave resting on the prompt alone.
+        requires = TOOL_REQUIREMENTS.get(name)
+        if requires is not None and not getattr(
+            country_service.capabilities_for(self.owner_country(owner_id)), requires
+        ):
+            return {"error": f"{name} is not available for this account"}
         params = dict(tool_input or {})
         params.pop("owner_id", None)  # never let the model set the tenant
         try:

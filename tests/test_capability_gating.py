@@ -188,3 +188,29 @@ class TestTheJobIsScopedNotNoOpped:
         prop = _property(db_session, "IL")
         client.post("/renters", json=_renter_payload(prop.id, rent_escalation_mode="cpi"))
         assert RenterRepository(db_session).get_by_escalation_modes(["cpi", "custom"])
+
+
+class TestTheAssistant:
+    def test_ten_tools_become_nine_without_index_linkage(self):
+        from app.services.agent_tools import TOOL_SCHEMAS, tool_schemas_for
+
+        assert len(TOOL_SCHEMAS) == 10
+        assert len(tool_schemas_for("IL")) == 10
+        assert len(tool_schemas_for("US")) == 9
+
+    def test_the_cpi_tool_is_the_one_removed(self):
+        from app.services.agent_tools import tool_schemas_for
+
+        names = {s["name"] for s in tool_schemas_for("US")}
+        assert "explain_cpi" not in names
+        assert "explain_cpi" in {s["name"] for s in tool_schemas_for("IL")}
+
+    def test_dispatch_refuses_it_even_if_the_model_asks(self, db_session):
+        """The schemas are filtered before the model sees them, so this should be
+        unreachable — but the tool name arrives from model output, and a tool that runs the
+        index engine for an account with no index is not left resting on the prompt."""
+        from app.services.agent_tools import AgentTools
+
+        _owner(db_session, "US")
+        out = AgentTools(db_session).dispatch("explain_cpi", OWNER_A, {"renter_id": 1})
+        assert "error" in out

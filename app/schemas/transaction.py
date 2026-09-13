@@ -16,6 +16,9 @@ class PaymentMethod(str, Enum):
     cash = "cash"
     bank_transfer = "bank_transfer"
     check = "check"
+    card = "card"
+    mobile_payment = "mobile_payment"
+    other = "other"
 
 
 class TransactionCreateRevenue(BaseModel):

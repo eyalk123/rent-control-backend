@@ -10,8 +10,11 @@ class PropertyType(str, Enum):
     Apartment = "apartment"
     House = "house"
     Commercial = "commercial"
-    GardenApartment = "garden_apartment"
-    HousingUnit = "housing_unit"
+    GardenApartment = "garden_apartment"  # Israel only
+    HousingUnit = "housing_unit"  # Israel only
+    CondoTownhouse = "condo_townhouse"
+    Room = "room"
+    Other = "other"
 
 
 def _normalize_optional_str(v):
