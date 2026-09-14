@@ -20,7 +20,10 @@
   value labels. Series colour is keyed to the entity (mobile / web), never to array position,
   so a series disappearing cannot repaint the ones that remain.
 -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+<!-- Pin an exact version that actually exists on the CDN. 4.4.3 does NOT — cdnjs 404s it,
+     which left `Chart` undefined and broke the page's startup. Verify any change to this
+     line returns 200 before shipping it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <style>
@@ -322,17 +325,28 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /* ── auth ──────────────────────────────────────────────────────────── */
+let FIREBASE_READY = false;
+
 function initAuth() {
-  if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.apiKey) {
+  const fail = (text) => {
     $('#login-msg').hidden = false;
     $('#login-msg').className = 'msg error';
-    $('#login-msg').textContent =
-      'Firebase web config is not set on the server. Set FIREBASE_WEB_API_KEY and ' +
-      'FIREBASE_WEB_APP_ID, then reload.';
+    $('#login-msg').textContent = text;
+    // Disable BOTH buttons. Leaving Google enabled here is what turned a missing config
+    // into a confusing "No Firebase App has been created" on click.
     $('#login-btn').disabled = true;
-    return;
+    $('#google-btn').disabled = true;
+  };
+
+  if (typeof firebase === 'undefined') {
+    return fail('The Firebase SDK did not load. Check your connection and reload.');
+  }
+  if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.apiKey) {
+    return fail('Firebase web config is not set on the server. Set FIREBASE_WEB_API_KEY ' +
+                'and FIREBASE_WEB_APP_ID, then reload.');
   }
   firebase.initializeApp(FIREBASE_CONFIG);
+  FIREBASE_READY = true;
   firebase.auth().onAuthStateChanged(async (user) => {
     if (!user) return;
     state.token = await user.getIdToken();
@@ -365,6 +379,7 @@ function showLoginError(err) {
 }
 
 $('#google-btn').addEventListener('click', async () => {
+  if (!FIREBASE_READY) return;
   const msg = $('#login-msg');
   msg.hidden = false; msg.className = 'msg'; msg.textContent = 'Opening Google…';
   $('#google-btn').disabled = true;
@@ -383,6 +398,7 @@ $('#google-btn').addEventListener('click', async () => {
 
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!FIREBASE_READY) return;
   const email = $('#email').value.trim();
   const password = $('#password').value;
   const msg = $('#login-msg');
@@ -484,8 +500,15 @@ function destroy(id) { if (state.charts[id]) { state.charts[id].destroy(); delet
 
 /** Renders a chart, or an honest empty state — never a chart drawn from [] that reads as zero. */
 function chartOrEmpty(canvasId, rows, build, emptyText) {
-  const wrap = document.getElementById(canvasId).parentElement;
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  const wrap = el.parentElement;
   destroy(canvasId);
+  if (!CHARTS_AVAILABLE) {
+    wrap.innerHTML = '<div class="empty">Chart library unavailable — the numbers above and ' +
+      'the tables below are unaffected.</div>';
+    return;
+  }
   if (!rows || rows.length === 0) {
     wrap.innerHTML = '<div class="empty">' + esc(emptyText || 'No data yet') + '</div>';
     return;
@@ -537,7 +560,18 @@ const valueLabels = {
     ctx.restore();
   },
 };
-Chart.register(valueLabels);
+// Guarded. This used to be a bare `Chart.register(...)` at the top level, and when the CDN
+// 404'd it threw here — which stopped the rest of the script, including the Firebase
+// initialisation at the bottom. The visible symptom was "No Firebase App has been created"
+// on sign-in: an error about auth whose actual cause was a missing chart library.
+// Charting is a feature of this page; signing in is the page working at all. Never let the
+// first break the second.
+const CHARTS_AVAILABLE = typeof Chart !== 'undefined';
+if (CHARTS_AVAILABLE) {
+  Chart.register(valueLabels);
+} else {
+  console.error('Chart.js failed to load — tables and numbers will still render.');
+}
 
 /* ── render ────────────────────────────────────────────────────────── */
 function render(d) {
@@ -903,6 +937,10 @@ wireSegment('#gran-seg', 'granularity');
 $('#country').addEventListener('change', (e) => { state.country = e.target.value; load(); });
 $('#refresh').addEventListener('click', load);
 
+// Last statement on purpose: onAuthStateChanged can call load() -> render(), which uses the
+// const helpers defined above, and a const is not readable before its definition runs.
+// Nothing above may throw at top level or this never executes — that is what the missing
+// Chart.js did, and why Chart.register is now guarded.
 initAuth();
 </script>
 </body>
