@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.client_usage_middleware import ClientUsageMiddleware
 from app.api.dependencies import get_current_owner
 from app.api.routers import (
+    admin,
     agent,
     countries,
     device_tokens,
@@ -105,6 +106,9 @@ app.include_router(countries.router, prefix="/countries", tags=["countries"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 app.include_router(document_extraction.router, prefix="/extract", tags=["extract"], dependencies=_owner_refresh)
 app.include_router(agent.router, prefix="/agent", tags=["agent"], dependencies=_owner_refresh)
+# No _owner_refresh: admin.py does its own token check and answers 404 for every
+# failure, so the shared dependency would raise 401 first and leak the route.
+app.include_router(admin.router, prefix="/admin", tags=["admin"])
 
 
 @app.get("/health")

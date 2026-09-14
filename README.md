@@ -21,6 +21,7 @@ to this document.
 - [Environment variables](#environment-variables)
 - [Tests](#tests)
 - [Deployment](#deployment)
+- [Internal analytics dashboard](#internal-analytics-dashboard)
 
 ---
 
@@ -455,3 +456,112 @@ re-derives everything downstream of the provisional figure.
 
 The web app also deploys to Railway (Docker + Caddy); the mobile app ships through EAS to the App
 Store. See their respective repos.
+
+---
+
+## Internal analytics dashboard
+
+One page, served by this service, showing how the *product* is doing across all users:
+signups, activation, retention, the two AI features, and which client owners actually work
+in. It replaces a self-hosted Metabase that cost $15/month to sit idle.
+
+It adds **no new service and no new process**. The page is a single static HTML file served
+by a route here; the queries run on the connection this app already holds; the 60-second
+response cache is a dict in memory. Nothing to deploy, nothing billed per second.
+
+| Piece | Where |
+|---|---|
+| The SQL — every query, with its caveats | `app/analytics/queries.py` |
+| Assembly, caching, the funnel self-check | `app/analytics/service.py` |
+| Routes + the admin gate + rate limiting | `app/api/routers/admin.py` |
+| The page | `app/static/admin_dashboard.html` |
+| What is and isn't measurable, and why | `ANALYTICS_FEASIBILITY.md` |
+
+### Turning it on
+
+Two settings, both empty by default — **an unset `ADMIN_OWNER_IDS` means nobody gets in**,
+not "no restriction":
+
+```bash
+ADMIN_OWNER_IDS=<your-firebase-uid>          # comma-separated for more than one
+FIREBASE_WEB_API_KEY=<the web app's apiKey>  # public client config, not a secret
+FIREBASE_WEB_APP_ID=<the web app's appId>
+```
+
+The two Firebase values are the same ones `rent-control-web` already ships to every visitor
+(`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_APP_ID`). They let the page's login box sign you in
+with your existing account instead of inventing a second password. They are read from the
+environment rather than committed, because they are not in this repo today.
+
+To find your UID: it is the `owners.id` of your row (`SELECT id FROM owners WHERE email = …`),
+or your user's UID in the Firebase console.
+
+Then open `https://<backend>/admin/dashboard` and sign in.
+
+### How access control works
+
+Four layers, in this order:
+
+1. `GET /admin/dashboard` serves an HTML shell containing **no data at all** — an empty frame
+   and a login box, with `X-Robots-Tag: noindex`. Serving it to a stranger discloses nothing.
+2. `GET /admin/analytics` requires a valid Firebase ID token in an `Authorization: Bearer`
+   header. **Never a token in the query string** — query strings end up in access logs, proxy
+   logs, browser history and `Referer`, so a token in one leaks by default.
+3. The uid is checked against `ADMIN_OWNER_IDS`. Anyone not on the list gets **404, not 403**:
+   a 403 would confirm to the holder of any working account that the route exists and that
+   only authorisation stands in the way. Missing token, invalid token and valid-but-not-admin
+   are all the same 404.
+4. Both routes are rate-limited per IP (`ADMIN_RATE_LIMIT_PER_MINUTE`, default 30), *before*
+   authentication — otherwise the route is a free oracle for testing stolen tokens, and every
+   attempt costs a Firebase round-trip.
+
+### What the queries cost
+
+Every query is aggregate SQL over a bounded window. The expensive shapes, and what to do if
+they ever get slow:
+
+| Query | Shape | If it gets slow |
+|---|---|---|
+| Weekly active owners | `UNION ALL` over seven tables, grouped | Index `(owner_id, created_at)` on `transactions` |
+| Funnel | Four `min(created_at) GROUP BY owner_id` scans, left-joined | Index `owner_id` on `properties` and `renters` |
+| Corrected fields by name | Per-row `::jsonb` cast + `jsonb_array_elements` | Make `field_edits` a real `jsonb` column |
+| Everything else | Single grouped scan of one small table | — |
+
+**Indexes that do not exist today and that these queries would use:** `properties(owner_id)`,
+`renters(owner_id)`, `transactions(owner_id, created_at)`. None have been added — measure
+first. The Data Health panel on the dashboard reports the row counts that decide whether it
+is worth it.
+
+The whole payload is built in one request and cached for 60 seconds per distinct combination
+of range, granularity and country, so refreshing the page does not re-run anything.
+
+### Adding a metric
+
+1. Write the query in `app/analytics/queries.py`. Take `:since` / `:until`, join
+   `scoped_owners` so the country filter applies, and **select aggregates only** — no renter
+   names, phones, emails or addresses. `tests/test_admin_analytics.py` greps every query for
+   PII column names and will fail you if you slip.
+2. Add it to the payload in `service.py::build_payload`.
+3. Render it in `admin_dashboard.html`: add the card in the section's `*HTML()` function and
+   draw it in the matching `draw*()`. Use `chartOrEmpty()` — it renders "no data yet" rather
+   than an empty chart that reads as zero.
+4. If the number can mislead, add a caveat in `service.py::_caveats()`. It ships with the
+   data and renders at the bottom of the page, so a figure is never read without the reason
+   it might be wrong.
+
+### What it cannot tell you
+
+Read `ANALYTICS_FEASIBILITY.md` before drawing conclusions. The short version:
+
+- **Data starts 2026-07-06** for anything cohort-shaped. Migration 031 backfilled
+  `properties.created_at` and `renters.created_at` to 2026-07-02, and the `owners` table only
+  exists from 2026-07-01, so earlier activation figures are an artefact of the migration.
+- **Survivor bias everywhere.** Deleting an account erases its rows, so every historical
+  metric describes owners who stayed.
+- **Two numbers are estimates, and are labelled as such on the page:** assistant cap hits (a
+  429 deletes its own usage row, so refusals leave no trace) and lease-scan abandonment (the
+  outcome is reported by a client-driven PATCH, so a save whose callback failed reads as
+  abandoned).
+- **"Active" means an append-only write.** Owners whose week was purely edits are missed,
+  because `updated_at` is overwritten in place. Closing that gap is
+  `ACTIVITY_LOG_EDIT_LOGGING_PROMPT.md`.

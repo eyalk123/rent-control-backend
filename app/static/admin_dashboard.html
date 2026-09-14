@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Rent Control — Product Metrics</title>
+<!--
+  Internal analytics dashboard. Served by GET /admin/dashboard.
+
+  This file ships NO data. It is a login box and an empty frame; every number arrives from
+  GET /admin/analytics after the browser authenticates, so serving this page to a stranger
+  discloses nothing.
+
+  English-only LTR on purpose — the product is Hebrew-first and RTL, this admin page is not.
+
+  Series colours come from a categorical palette validated for colour-vision deficiency in
+  both light and dark. Slots 3 and 4 fall below 3:1 against a white surface, so the charts
+  use slots 1 and 2 — which clear it — and reserve the other two for marks that carry visible
+  value labels. Series colour is keyed to the entity (mobile / web), never to array position,
+  so a series disappearing cannot repaint the ones that remain.
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  /* Product palette — matches rent-control-web/src/index.css */
+  --navy:            #1A2D4A;
+  --primary:         #2563EB;
+  --accent:          #0D9488;
+  --bg:              #F1F5F9;
+  --surface:         #FFFFFF;
+  --text-primary:    #0F172A;
+  --text-secondary:  #475569;
+  --muted:           #64748B;
+  --outline:         #CBD5E1;
+  --grid:            #E7EDF3;
+  --success:         #059669;
+  --warning:         #D97706;
+  --warning-bg:      #FEF3E2;
+  --error:           #DC2626;
+  --error-bg:        #FEF2F2;
+  /* Validated categorical slots (light). Slots 1 and 2 clear 3:1 against this surface;
+     3 and 4 do not, so they are used only where marks carry visible value labels. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  /* "unknown"/other — deliberately neutral, and dark enough to clear 3:1 on white. */
+  --series-muted: #64748B;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-card: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --navy:           #0E1726;
+    --bg:             #12171F;
+    --surface:        #1A1A19;
+    --text-primary:   #F8FAFC;
+    --text-secondary: #C3C2B7;
+    --muted:          #8C8C85;
+    --outline:        #33383F;
+    --grid:           #2A2F36;
+    --warning-bg:     #2A2113;
+    --error-bg:       #2A1717;
+    /* Same eight hues, stepped for the dark surface — not an automatic flip */
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-muted: #94A3B8;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-primary);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+a { color: var(--primary); }
+
+/* ── shell ─────────────────────────────────────────────────────────── */
+header.topbar {
+  background: var(--navy); color: #fff;
+  padding: 14px 20px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+header.topbar h1 { font-size: 16px; }
+header.topbar .meta { color: #9FB3CC; font-size: 12px; margin-left: auto; }
+main { max-width: 1240px; margin: 0 auto; padding-block: 20px; padding-inline: 16px; }
+
+/* ── controls ──────────────────────────────────────────────────────── */
+.controls {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  background: var(--surface); border: 1px solid var(--outline);
+  border-radius: var(--radius); padding: 12px; margin-bottom: 18px;
+}
+.controls label { font-size: 12px; color: var(--text-secondary); margin-right: 4px; }
+.segmented { display: inline-flex; border: 1px solid var(--outline); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented button {
+  border: 0; background: var(--surface); color: var(--text-secondary);
+  padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.segmented button + button { border-left: 1px solid var(--outline); }
+.segmented button[aria-pressed="true"] { background: var(--primary); color: #fff; }
+select, input[type=email], input[type=password] {
+  font: inherit; padding: 7px 10px; border: 1px solid var(--outline);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary);
+}
+button.primary {
+  background: var(--primary); color: #fff; border: 0; border-radius: var(--radius-sm);
+  padding: 9px 16px; font: inherit; cursor: pointer;
+}
+button.ghost {
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--outline); border-radius: var(--radius-sm);
+  padding: 7px 12px; font: inherit; cursor: pointer;
+}
+
+/* ── cards & tiles ─────────────────────────────────────────────────── */
+section.block { margin-bottom: 26px; }
+section.block > h2 { font-size: 15px; margin-bottom: 4px; }
+section.block > .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+.grid { display: grid; gap: 14px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 14px; }
+.charts { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+.card {
+  background: var(--surface); border: 1px solid var(--outline);
+  border-radius: var(--radius-card); padding: 16px;
+}
+.card > h3 { font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 2px; }
+.card > .note { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; }
+.tile .value {
+  /* Proportional figures on a display-size number; tabular only where digits stack. */
+  font-size: 30px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15;
+  margin-top: 2px;
+}
+.tile .value.small { font-size: 21px; }
+.tile .caption { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+/* Charts must reserve room for the x-axis band, or the card grows a nested scrollbar. */
+.chart-wrap { position: relative; height: 240px; }
+.chart-wrap.tall { height: 300px; }
+
+/* ── funnel ────────────────────────────────────────────────────────── */
+.funnel { display: flex; flex-direction: column; gap: 8px; }
+.funnel-step { display: grid; grid-template-columns: 170px 1fr; gap: 12px; align-items: center; }
+.funnel-label { font-size: 12.5px; color: var(--text-secondary); text-align: right; }
+.funnel-track { background: var(--grid); border-radius: var(--radius-sm); overflow: hidden; height: 34px; position: relative; }
+.funnel-bar {
+  height: 100%; background: var(--series-1);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; padding-inline: 10px;
+  color: #fff; font-weight: 600; font-size: 13px;
+  min-width: 2px;
+  transition: width .25s ease;
+}
+.funnel-bar.zero { background: var(--grid); }
+/* Value sits outside when the bar is too narrow to hold it without clipping. */
+.funnel-outside { position: absolute; inset-block: 0; display: flex; align-items: center; padding-left: 8px; font-weight: 600; font-size: 13px; color: var(--text-primary); }
+.funnel-drop { font-size: 11.5px; color: var(--muted); margin-left: 182px; }
+.funnel-drop.bad { color: var(--warning); }
+
+/* ── misc ──────────────────────────────────────────────────────────── */
+table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+table.data th { color: var(--muted); font-weight: 600; }
+table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll-x { overflow-x: auto; }
+
+.empty {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; min-height: 120px;
+  color: var(--muted); font-size: 13px; text-align: center; padding: 16px;
+}
+.banner { border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px; font-size: 13px; }
+.banner.error { background: var(--error-bg); color: var(--error); border: 1px solid var(--error); }
+.banner.warn  { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+.banner strong { display: block; margin-bottom: 3px; }
+.caveats { font-size: 12px; color: var(--muted); }
+.caveats li { margin-bottom: 6px; }
+.pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--grid); color: var(--text-secondary); }
+.pill.ok { background: #DCFCE7; color: #166534; }
+.pill.bad { background: var(--error-bg); color: var(--error); }
+
+/* ── login ─────────────────────────────────────────────────────────── */
+.login-wrap { min-height: 72vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login { background: var(--surface); border: 1px solid var(--outline); border-radius: var(--radius-card); padding: 26px; width: 100%; max-width: 380px; }
+.login h2 { font-size: 17px; margin-bottom: 4px; }
+.login p { color: var(--muted); font-size: 12.5px; margin: 0 0 18px; }
+.login label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.login input { width: 100%; margin-bottom: 12px; }
+.login button { width: 100%; }
+.login .msg { margin-top: 12px; font-size: 12.5px; }
+.login .msg.error { color: var(--error); }
+@media (max-width: 560px) {
+  .funnel-step { grid-template-columns: 1fr; }
+  .funnel-label { text-align: left; }
+  .funnel-drop { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<div id="login-view" class="login-wrap">
+  <form class="login" id="login-form">
+    <h2>Rent Control metrics</h2>
+    <p>Internal dashboard. Sign in with your Rent Control account.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button class="primary" type="submit" id="login-btn">Sign in</button>
+    <div class="msg" id="login-msg" hidden></div>
+  </form>
+</div>
+
+<div id="app-view" hidden>
+  <header class="topbar">
+    <h1>Rent Control — Product Metrics</h1>
+    <span class="meta" id="meta"></span>
+    <button class="ghost" id="signout" style="color:#9FB3CC;border-color:#2E4468">Sign out</button>
+  </header>
+
+  <main>
+    <div class="controls">
+      <span><label>Range</label>
+        <span class="segmented" id="range-seg">
+          <button data-v="7d">7d</button><button data-v="30d">30d</button>
+          <button data-v="90d" aria-pressed="true">90d</button><button data-v="all">All</button>
+        </span>
+      </span>
+      <span><label>Granularity</label>
+        <span class="segmented" id="gran-seg">
+          <button data-v="day">Daily</button><button data-v="week" aria-pressed="true">Weekly</button>
+        </span>
+      </span>
+      <span><label for="country">Country</label>
+        <select id="country"><option value="">All countries</option></select>
+      </span>
+      <button class="ghost" id="refresh" style="margin-left:auto">Refresh</button>
+    </div>
+
+    <div id="banners"></div>
+    <div id="sections"></div>
+
+    <section class="block">
+      <h2>How to read this</h2>
+      <div class="card">
+        <ul class="caveats" id="caveats"></ul>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+/* ── Firebase config, injected server-side ─────────────────────────── */
+const FIREBASE_CONFIG = __FIREBASE_CONFIG__;
+
+const $ = (s) => document.querySelector(s);
+const state = { token: null, range: '90d', granularity: 'week', country: '', charts: {} };
+
+/* ── formatting ────────────────────────────────────────────────────── */
+const nf = new Intl.NumberFormat('en-US');
+const num = (v) => (v === null || v === undefined) ? '—' : nf.format(v);
+const pct = (v) => (v === null || v === undefined) ? '—' : v.toFixed(1) + '%';
+const money = (v) => (v === null || v === undefined) ? '—' : '$' + Number(v).toFixed(2);
+function hours(h) {
+  if (h === null || h === undefined) return '—';
+  if (h < 1) return Math.round(h * 60) + ' min';
+  if (h < 48) return h.toFixed(1) + ' h';
+  return (h / 24).toFixed(1) + ' d';
+}
+function bucketLabel(iso, granularity) {
+  if (!iso) return '';
+  // Timestamps arrive naive and are UTC (app.clock.utc_now_naive). Without the 'Z' the
+  // browser reads them as local time, which shifts a bucket label by a day for anyone west
+  // of UTC — the labels would disagree with the data by one row.
+  const s = String(iso);
+  const d = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
+  if (isNaN(d)) return s.slice(0, 10);
+  const opts = granularity === 'month'
+    ? { year: 'numeric', month: 'short', timeZone: 'UTC' }
+    : { month: 'short', day: 'numeric', timeZone: 'UTC' };
+  return d.toLocaleDateString('en-US', opts);
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── auth ──────────────────────────────────────────────────────────── */
+function initAuth() {
+  if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.apiKey) {
+    $('#login-msg').hidden = false;
+    $('#login-msg').className = 'msg error';
+    $('#login-msg').textContent =
+      'Firebase web config is not set on the server. Set FIREBASE_WEB_API_KEY and ' +
+      'FIREBASE_WEB_APP_ID, then reload.';
+    $('#login-btn').disabled = true;
+    return;
+  }
+  firebase.initializeApp(FIREBASE_CONFIG);
+  firebase.auth().onAuthStateChanged(async (user) => {
+    if (!user) return;
+    state.token = await user.getIdToken();
+    $('#login-view').hidden = true;
+    $('#app-view').hidden = false;
+    load();
+  });
+}
+
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = $('#login-msg');
+  msg.hidden = false; msg.className = 'msg'; msg.textContent = 'Signing in…';
+  $('#login-btn').disabled = true;
+  try {
+    await firebase.auth().signInWithEmailAndPassword($('#email').value, $('#password').value);
+  } catch (err) {
+    msg.className = 'msg error';
+    msg.textContent = err && err.message ? err.message : 'Sign-in failed.';
+    $('#login-btn').disabled = false;
+  }
+});
+
+$('#signout').addEventListener('click', async () => {
+  await firebase.auth().signOut();
+  location.reload();
+});
+
+/* ── fetch ─────────────────────────────────────────────────────────── */
+async function load() {
+  const banners = $('#banners');
+  banners.innerHTML = '';
+  $('#meta').textContent = 'Loading…';
+
+  const qs = new URLSearchParams({ range: state.range, granularity: state.granularity });
+  if (state.country) qs.set('country', state.country);
+
+  let res;
+  try {
+    // Bearer header only — never a token in the query string, which would land in access
+    // logs, proxy logs, browser history and Referer.
+    res = await fetch('./analytics?' + qs.toString(), {
+      headers: { Authorization: 'Bearer ' + state.token },
+    });
+  } catch (err) {
+    return fail('Network error', String(err));
+  }
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json()).detail || ''; } catch (_) { detail = await res.text().catch(() => ''); }
+    if (res.status === 404) {
+      return fail('HTTP 404 — not found',
+        'Either this route does not exist, or your account is not in ADMIN_OWNER_IDS. ' +
+        'The endpoint answers 404 for both so it cannot be used to probe for admin accounts.');
+    }
+    return fail('HTTP ' + res.status + ' ' + res.statusText, detail);
+  }
+
+  const data = await res.json();
+  $('#meta').textContent =
+    new Date(data.generated_at + 'Z').toLocaleString() +
+    (data.cached ? ' · cached' : ' · ' + data.query_ms + ' ms');
+  render(data);
+}
+
+function fail(title, detail) {
+  $('#meta').textContent = '';
+  $('#banners').innerHTML =
+    '<div class="banner error"><strong>' + esc(title) + '</strong>' + esc(detail) + '</div>';
+  $('#sections').innerHTML = '';
+}
+
+/* ── chart helpers ─────────────────────────────────────────────────── */
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function baseOptions(extra) {
+  const grid = css('--grid'), text = css('--text-secondary'), surface = css('--surface');
+  return Object.assign({
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        display: true, position: 'bottom',
+        labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'circle',
+                  color: text, font: { size: 11 }, padding: 14 },
+      },
+      tooltip: {
+        backgroundColor: css('--navy'), padding: 10, cornerRadius: 8,
+        titleFont: { size: 12 }, bodyFont: { size: 12 }, displayColors: true, boxWidth: 8,
+      },
+    },
+    scales: {
+      x: { grid: { display: false }, border: { color: grid },
+           ticks: { color: text, font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12 } },
+      y: { beginAtZero: true, grid: { color: grid, drawTicks: false },
+           border: { display: false },
+           ticks: { color: text, font: { size: 11 }, precision: 0, padding: 8 } },
+    },
+  }, extra || {});
+}
+
+function destroy(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
+
+/** Renders a chart, or an honest empty state — never a chart drawn from [] that reads as zero. */
+function chartOrEmpty(canvasId, rows, build, emptyText) {
+  const wrap = document.getElementById(canvasId).parentElement;
+  destroy(canvasId);
+  if (!rows || rows.length === 0) {
+    wrap.innerHTML = '<div class="empty">' + esc(emptyText || 'No data yet') + '</div>';
+    return;
+  }
+  if (!wrap.querySelector('canvas')) wrap.innerHTML = '<canvas id="' + canvasId + '"></canvas>';
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  state.charts[canvasId] = new Chart(ctx, build());
+}
+
+function lineSeries(label, data, colorVar) {
+  return {
+    label, data,
+    borderColor: css(colorVar), backgroundColor: css(colorVar),
+    borderWidth: 2, tension: 0.25,
+    pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 24,
+  };
+}
+function barSeries(label, data, colorVar) {
+  return {
+    label, data,
+    backgroundColor: css(colorVar),
+    borderRadius: 4, borderSkipped: false,
+    // A 2px surface gap between adjacent fills rather than a stroke around each bar.
+    borderColor: css('--surface'), borderWidth: { top: 0, right: 1, bottom: 0, left: 1 },
+    maxBarThickness: 34,
+  };
+}
+
+/* Direct value labels — the relief for the two palette slots that sit below 3:1 on white,
+   and the reason no value here is reachable only by hovering. */
+const valueLabels = {
+  id: 'valueLabels',
+  afterDatasetsDraw(chart, _args, opts) {
+    if (!opts || !opts.enabled) return;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = css('--text-secondary');
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    chart.data.datasets.forEach((ds, i) => {
+      const meta = chart.getDatasetMeta(i);
+      if (meta.hidden) return;
+      meta.data.forEach((el, j) => {
+        const v = ds.data[j];
+        if (v === null || v === undefined || v === 0) return;
+        ctx.fillText(nf.format(v), el.x, el.y - 4);
+      });
+    });
+    ctx.restore();
+  },
+};
+Chart.register(valueLabels);
+
+/* ── render ────────────────────────────────────────────────────────── */
+function render(d) {
+  const g = d.window.granularity;
+
+  if (d.warnings && d.warnings.length) {
+    $('#banners').innerHTML = d.warnings.map((w) =>
+      '<div class="banner warn"><strong>Data warning</strong>' + esc(w) + '</div>').join('');
+  }
+
+  populateCountries(d.platform.owner_country);
+
+  $('#sections').innerHTML = [
+    growthHTML(d), funnelHTML(d), engagementHTML(d), aiHTML(d), platformHTML(d), opsHTML(d),
+  ].join('');
+
+  drawGrowth(d, g); drawEngagement(d, g); drawAI(d, g); drawPlatform(d, g);
+
+  $('#caveats').innerHTML = (d.caveats || [])
+    .map((c) => '<li><strong>' + esc(c.scope) + ':</strong> ' + esc(c.text) + '</li>').join('');
+}
+
+function populateCountries(rows) {
+  const sel = $('#country');
+  if (sel.dataset.filled) return;
+  (rows || []).forEach((r) => {
+    const o = document.createElement('option');
+    o.value = r.country; o.textContent = r.country + ' (' + r.owners + ')';
+    sel.appendChild(o);
+  });
+  sel.dataset.filled = '1';
+}
+
+function tile(label, value, caption, small) {
+  return '<div class="card tile"><h3>' + esc(label) + '</h3>' +
+    '<div class="value' + (small ? ' small' : '') + '">' + esc(value) + '</div>' +
+    (caption ? '<div class="caption">' + esc(caption) + '</div>' : '') + '</div>';
+}
+function card(title, note, body) {
+  return '<div class="card"><h3>' + esc(title) + '</h3>' +
+    (note ? '<div class="note">' + esc(note) + '</div>' : '') + body + '</div>';
+}
+const canvasCard = (title, note, id, tall) =>
+  card(title, note, '<div class="chart-wrap' + (tall ? ' tall' : '') + '"><canvas id="' + id + '"></canvas></div>');
+
+/* ── growth ────────────────────────────────────────────────────────── */
+function growthHTML(d) {
+  const t = d.growth.totals || {};
+  return '<section class="block"><h2>Growth</h2>' +
+    '<div class="sub">Live accounts. Deleting an account removes its row, so these are signups that still exist.</div>' +
+    '<div class="grid tiles">' +
+      tile('Live owners', num(t.live_owners), 'accounts that exist right now') +
+      tile('New this window', num(t.new_in_window), 'signups in the selected range') +
+      tile('Deleted this window', num(t.deleted_in_window), 'accounts erased') +
+      tile('Deleted all time', num(t.deleted_all_time), 'since 2026-07-31') +
+    '</div><div class="grid charts">' +
+      canvasCard('Signups over time', 'From owners.created_at', 'c-signups') +
+      canvasCard('Account deletions', 'Monthly. Not filtered by country — the tombstone stores none.', 'c-deletions') +
+    '</div></section>';
+}
+function drawGrowth(d, g) {
+  const s = d.growth.signups;
+  chartOrEmpty('c-signups', s, () => ({
+    type: 'line',
+    data: { labels: s.map((r) => bucketLabel(r.bucket, g)),
+            datasets: [lineSeries('Signups', s.map((r) => r.signups), '--series-1')] },
+    options: baseOptions({ plugins: { legend: { display: false },
+      tooltip: baseOptions().plugins.tooltip } }),
+  }), 'No signups in this range yet');
+
+  const del = d.growth.deletions;
+  chartOrEmpty('c-deletions', del, () => ({
+    type: 'bar',
+    data: { labels: del.map((r) => bucketLabel(r.bucket, 'month')),
+            datasets: [barSeries('Deletions', del.map((r) => r.deletions), '--series-2')] },
+    options: baseOptions({ plugins: { legend: { display: false },
+      valueLabels: { enabled: true },
+      tooltip: baseOptions().plugins.tooltip } }),
+  }), 'No account deletions yet');
+}
+
+/* ── funnel ────────────────────────────────────────────────────────── */
+function funnelHTML(d) {
+  const f = d.funnel || {}, ttf = d.time_to_first || {};
+  const steps = [
+    ['Signed up', f.step_signed_up],
+    ['Added a property', f.step_property],
+    ['Added a renter', f.step_renter],
+    ['Recorded a transaction', f.step_transaction],
+    ['Exported a report', f.step_export],
+  ];
+  const top = steps[0][1] || 0;
+
+  let body;
+  if (!top) {
+    body = '<div class="empty">No owners signed up in this range yet, so there is no funnel to draw.</div>';
+  } else {
+    body = '<div class="funnel">' + steps.map(([label, v], i) => {
+      const value = v || 0;
+      const w = top ? (value / top) * 100 : 0;
+      // Below ~14% the value would be clipped by its own bar, so it sits outside instead.
+      const inside = w >= 14;
+      const bar = '<div class="funnel-bar' + (value === 0 ? ' zero' : '') + '" style="width:' + w.toFixed(1) + '%">' +
+        (inside ? num(value) : '') + '</div>' +
+        (inside ? '' : '<div class="funnel-outside" style="left:' + w.toFixed(1) + '%">' + num(value) + '</div>');
+      const prev = i > 0 ? (steps[i - 1][1] || 0) : null;
+      const drop = (prev && prev > 0) ? (100 * (prev - value) / prev) : null;
+      const dropLine = drop === null ? '' :
+        '<div class="funnel-drop' + (drop >= 50 ? ' bad' : '') + '">↓ ' + drop.toFixed(0) +
+        '% drop-off (' + num(prev - value) + ' owners)</div>';
+      return '<div class="funnel-step"><div class="funnel-label">' + esc(label) +
+        '</div><div class="funnel-track">' + bar + '</div></div>' + dropLine;
+    }).join('') + '</div>';
+  }
+
+  // "Ever did X" ignores order; the funnel above requires it. A gap means owners are taking
+  // the product out of sequence, which is worth seeing rather than smoothing away.
+  const outOfOrder = (f.ever_renter || 0) > (f.step_renter || 0) ||
+                     (f.ever_transaction || 0) > (f.step_transaction || 0);
+  const raw = outOfOrder ? card('Out of order',
+    'These owners did the thing without doing the previous step first, so the funnel above excludes them.',
+    '<table class="data"><tbody>' +
+      '<tr><td>Ever added a renter</td><td class="num">' + num(f.ever_renter) + '</td></tr>' +
+      '<tr><td>Ever recorded a transaction</td><td class="num">' + num(f.ever_transaction) + '</td></tr>' +
+      '<tr><td>Ever exported a report</td><td class="num">' + num(f.ever_export) + '</td></tr>' +
+    '</tbody></table>') : '';
+
+  return '<section class="block"><h2>Activation funnel</h2>' +
+    '<div class="sub">Cohort starts ' + esc(d.window.cohort_floor) +
+    '. Each step requires every step before it, so the funnel can only go down.</div>' +
+    '<div class="grid tiles">' +
+      tile('Median time to first property', hours(ttf.median_hours_to_property),
+           'n = ' + num(ttf.sample_property), true) +
+      tile('Median time to first renter', hours(ttf.median_hours_to_renter),
+           'n = ' + num(ttf.sample_renter), true) +
+      tile('Reached the last step', top ? pct(100 * (f.step_export || 0) / top) : '—',
+           'signup → exported a report', true) +
+    '</div>' +
+    '<div class="grid charts" style="grid-template-columns:' + (raw ? '2fr 1fr' : '1fr') + '">' +
+      card('Signup → first report export', '', body) + raw +
+    '</div></section>';
+}
+
+/* ── engagement ────────────────────────────────────────────────────── */
+function engagementHTML(d) {
+  const r = d.engagement.retention || [];
+  const rows = r.length ? r.map((x) =>
+    '<tr><td>' + esc(bucketLabel(x.cohort_week, 'week')) + '</td>' +
+    '<td class="num">' + num(x.cohort_size) + '</td>' +
+    '<td class="num">' + (x.cohort_size ? pct(100 * x.retained_week_1 / x.cohort_size) : '—') + '</td>' +
+    '<td class="num">' + (x.cohort_size ? pct(100 * x.retained_week_4 / x.cohort_size) : '—') + '</td></tr>'
+  ).join('') : '';
+
+  const retention = rows
+    ? '<div class="scroll-x"><table class="data"><thead><tr><th>Cohort week</th>' +
+      '<th class="num">Size</th><th class="num">Week 1</th><th class="num">Week 4</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>'
+    : '<div class="empty">No cohorts with activity yet</div>';
+
+  return '<section class="block"><h2>Engagement</h2>' +
+    '<div class="sub">Active = at least one append-only write. Pure edits are not yet counted.</div>' +
+    '<div class="grid charts">' +
+      canvasCard('Active owners', 'Distinct owners who wrote something', 'c-active') +
+      canvasCard('Portfolio size', 'Owners by number of properties / renters', 'c-dist') +
+      card('Retention by signup cohort',
+           'Cohort size shown so a small cohort is never read as a trend.', retention) +
+    '</div></section>';
+}
+function drawEngagement(d, g) {
+  const a = d.engagement.active_owners;
+  chartOrEmpty('c-active', a, () => ({
+    type: 'line',
+    data: { labels: a.map((r) => bucketLabel(r.bucket, g)),
+            datasets: [lineSeries('Active owners', a.map((r) => r.active_owners), '--series-1')] },
+    options: baseOptions({ plugins: { legend: { display: false },
+      tooltip: baseOptions().plugins.tooltip } }),
+  }), 'No write activity in this range yet');
+
+  const dist = d.engagement.distribution;
+  const any = dist && (dist.properties.some(Boolean) || dist.renters.some(Boolean));
+  chartOrEmpty('c-dist', any ? dist.buckets : [], () => ({
+    type: 'bar',
+    data: { labels: dist.buckets, datasets: [
+      barSeries('Properties', dist.properties, '--series-1'),
+      barSeries('Renters', dist.renters, '--series-2'),
+    ] },
+    options: baseOptions({ plugins: { valueLabels: { enabled: true },
+      legend: baseOptions().plugins.legend, tooltip: baseOptions().plugins.tooltip } }),
+  }), 'No owners yet');
+}
+
+/* ── AI ────────────────────────────────────────────────────────────── */
+function aiHTML(d) {
+  const acc = d.ai.accuracy || {}, cap = d.ai.cap_hits || {}, lim = d.ai.limits || {};
+  const scans = d.ai.scans || [];
+  const totalScans = scans.reduce((s, r) => s + (r.scans || 0), 0);
+  const saved = scans.reduce((s, r) => s + (r.saved || 0), 0);
+
+  const cf = d.ai.corrected_fields || [];
+  const fields = cf.length
+    ? '<div class="scroll-x"><table class="data"><thead><tr><th>Section</th><th>Field</th>' +
+      '<th class="num">Corrections</th><th class="num">Scans</th></tr></thead><tbody>' +
+      cf.slice(0, 15).map((r) => '<tr><td>' + esc(r.section) + '</td><td>' + esc(r.field) +
+        '</td><td class="num">' + num(r.corrections) + '</td><td class="num">' +
+        num(r.scans_affected) + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty">No corrections recorded yet</div>';
+
+  return '<section class="block"><h2>AI features</h2>' +
+    '<div class="sub">Lease scanning and the assistant.</div>' +
+    '<div class="grid tiles">' +
+      tile('Lease scans', num(totalScans), 'in this range') +
+      tile('Saved', totalScans ? pct(100 * saved / totalScans) : '—',
+           'rest abandoned (upper bound)') +
+      tile('Corrected fields / scan', num(acc.avg_changed_per_scan),
+           acc.pct_fields_corrected != null ? pct(acc.pct_fields_corrected) + ' of prefilled' : '') +
+      tile('Owners at daily cap', num(cap.owners_at_cap),
+           'reached ' + num(lim.daily_message_limit) + ' msgs — estimate') +
+    '</div><div class="grid charts">' +
+      canvasCard('Lease scans — saved vs abandoned', 'Abandonment is an upper bound', 'c-scans') +
+      canvasCard('Assistant messages', 'One row per user message', 'c-agent') +
+      card('Most-corrected fields',
+           'Field names only — the corrected values are lease content and are never queried.',
+           fields) +
+    '</div></section>';
+}
+function drawAI(d, g) {
+  const s = d.ai.scans;
+  chartOrEmpty('c-scans', s, () => ({
+    type: 'bar',
+    data: { labels: s.map((r) => bucketLabel(r.bucket, g)), datasets: [
+      barSeries('Saved', s.map((r) => r.saved), '--series-1'),
+      barSeries('Abandoned', s.map((r) => (r.scans || 0) - (r.saved || 0)), '--series-2'),
+    ] },
+    options: baseOptions({
+      scales: Object.assign(baseOptions().scales, {
+        x: Object.assign({}, baseOptions().scales.x, { stacked: true }),
+        y: Object.assign({}, baseOptions().scales.y, { stacked: true }),
+      }),
+      plugins: { legend: baseOptions().plugins.legend, tooltip: baseOptions().plugins.tooltip },
+    }),
+  }), 'No lease scans in this range yet');
+
+  const a = d.ai.assistant;
+  chartOrEmpty('c-agent', a, () => ({
+    type: 'line',
+    data: { labels: a.map((r) => bucketLabel(r.bucket, g)), datasets: [
+      lineSeries('Messages', a.map((r) => r.messages), '--series-1'),
+      lineSeries('Owners', a.map((r) => r.owners), '--series-2'),
+    ] },
+    options: baseOptions(),
+  }), 'No assistant usage in this range yet');
+}
+
+/* ── platform ──────────────────────────────────────────────────────── */
+function platformHTML(d) {
+  const p = d.platform;
+  const rowsOf = (arr, k, v) => (arr || []).map((r) =>
+    '<tr><td>' + esc(r[k]) + '</td><td class="num">' + num(r[v]) + '</td></tr>').join('');
+
+  const table = (arr, k, v, kh, vh, empty) => (arr && arr.length)
+    ? '<table class="data"><thead><tr><th>' + kh + '</th><th class="num">' + vh +
+      '</th></tr></thead><tbody>' + rowsOf(arr, k, v) + '</tbody></table>'
+    : '<div class="empty">' + esc(empty) + '</div>';
+
+  const overlap = (p.client_overlap || []).filter((r) => r.segment !== 'unknown');
+  const overlapBody = overlap.length
+    ? '<table class="data"><thead><tr><th>Segment</th><th class="num">Owners</th>' +
+      '<th class="num">Writes</th></tr></thead><tbody>' + overlap.map((r) =>
+        '<tr><td>' + esc(r.segment) + '</td><td class="num">' + num(r.owners) +
+        '</td><td class="num">' + num(r.writes) + '</td></tr>').join('') + '</tbody></table>'
+    : '<div class="empty">No client usage recorded yet — this fills once the apps ship the X-Client headers.</div>';
+
+  return '<section class="block"><h2>Platform</h2>' +
+    '<div class="sub">Where owners work, measured in writes rather than sessions.</div>' +
+    '<div class="grid charts">' +
+      canvasCard('Where the work happens', 'Writes by client — a glance and an evening of work are not the same', 'c-client') +
+      card('Mobile / web / both', 'Owners can appear in both, so shares exceed 100%.', overlapBody) +
+      card('Signup platform', 'From the mandatory consent gate, so it covers every owner.',
+           table(p.signup_platform, 'platform', 'owners', 'Platform', 'Owners', 'No acceptances recorded yet')) +
+      card('Language', 'Which of the two legal texts they read — covers everyone, unlike push locale.',
+           table(p.language, 'locale', 'owners', 'Locale', 'Owners', 'No acceptances recorded yet')) +
+      card('Owner country', "Where the account holder signed up. 'unknown' = pre-2026-09-13 backfill.",
+           table(p.owner_country, 'country', 'owners', 'Country', 'Owners', 'No owners yet')) +
+      card('Property country', 'Where the buildings are — what decides which rules you must build.',
+           table(p.property_country, 'country', 'properties', 'Country', 'Properties', 'No properties yet')) +
+      card('Push devices', 'Registered push tokens. Counts devices, not owners.',
+           table(p.devices, 'platform', 'owners', 'Platform', 'Owners', 'No device tokens yet')) +
+    '</div></section>';
+}
+function drawPlatform(d, g) {
+  const rows = d.platform.client_over_time || [];
+  const apps = [...new Set(rows.map((r) => r.app))];
+  const buckets = [...new Set(rows.map((r) => r.bucket))];
+  // Colour follows the entity, not its position in the array. If 'unknown' stops appearing,
+  // mobile and web must keep the colours they had — a series that changes colour when the
+  // data changes is unreadable across two screenshots.
+  const appColor = { mobile: '--series-1', web: '--series-2' };
+  chartOrEmpty('c-client', rows, () => ({
+    type: 'bar',
+    data: {
+      labels: buckets.map((b) => bucketLabel(b, g)),
+      datasets: apps.map((app) => barSeries(app,
+        buckets.map((b) => {
+          const hit = rows.find((r) => r.bucket === b && r.app === app);
+          return hit ? (hit.writes || 0) : 0;
+        }), appColor[app] || '--series-muted')),
+    },
+    options: baseOptions({ plugins: { legend: baseOptions().plugins.legend,
+      tooltip: baseOptions().plugins.tooltip } }),
+  }), 'No client usage recorded yet — this fills once the apps ship the X-Client headers.');
+}
+
+/* ── operations ────────────────────────────────────────────────────── */
+function opsHTML(d) {
+  const jobs = d.operations.jobs || [];
+  const now = Date.now();
+  const jobRows = jobs.length ? jobs.map((j) => {
+    const lastOk = j.last_ok ? new Date(j.last_ok + 'Z') : null;
+    const stale = !lastOk || (now - lastOk.getTime()) > 36 * 3600 * 1000;
+    return '<tr><td>' + esc(j.job_name) + '</td>' +
+      '<td class="num">' + num(j.runs) + '</td>' +
+      '<td class="num">' + num(j.bad_runs) + '</td>' +
+      '<td>' + (lastOk ? lastOk.toLocaleString() : 'never') + '</td>' +
+      '<td><span class="pill ' + (stale ? 'bad' : 'ok') + '">' +
+        (stale ? 'stale' : 'healthy') + '</span></td></tr>';
+  }).join('') : '';
+
+  const jobsBody = jobRows
+    ? '<div class="scroll-x"><table class="data"><thead><tr><th>Job</th><th class="num">Runs</th>' +
+      '<th class="num">Failed</th><th>Last success</th><th>State</th></tr></thead><tbody>' +
+      jobRows + '</tbody></table></div>'
+    : '<div class="empty">No job runs recorded in this range</div>';
+
+  const dh = d.operations.data_health || [];
+  const dhBody = dh.length
+    ? '<div class="scroll-x"><table class="data"><thead><tr><th>Table</th><th class="num">Rows</th>' +
+      '<th>Earliest</th><th>Latest</th></tr></thead><tbody>' + dh.map((r) =>
+        '<tr><td>' + esc(r.table_name) + '</td><td class="num">' + num(r.rows) + '</td><td>' +
+        (r.earliest ? String(r.earliest).slice(0, 10) : '—') + '</td><td>' +
+        (r.latest ? String(r.latest).slice(0, 10) : '—') + '</td></tr>').join('') +
+      '</tbody></table></div>'
+    : '<div class="empty">No tables reported</div>';
+
+  return '<section class="block"><h2>Operations</h2>' +
+    '<div class="sub">A cron that dies quietly stops your users’ reminders and says nothing.</div>' +
+    '<div class="grid charts">' +
+      card('Background jobs', 'Stale = no success in 36 hours.', jobsBody) +
+      card('Data health', 'Row counts and the real date range behind every metric above.', dhBody) +
+    '</div></section>';
+}
+
+/* ── controls ──────────────────────────────────────────────────────── */
+function wireSegment(sel, key) {
+  document.querySelector(sel).addEventListener('click', (e) => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    [...e.currentTarget.children].forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+    state[key] = btn.dataset.v;
+    load();
+  });
+}
+wireSegment('#range-seg', 'range');
+wireSegment('#gran-seg', 'granularity');
+$('#country').addEventListener('change', (e) => { state.country = e.target.value; load(); });
+$('#refresh').addEventListener('click', load);
+
+initAuth();
+</script>
+</body>
+</html>

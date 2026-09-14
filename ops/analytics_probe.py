@@ -45,6 +45,7 @@ ANALYTICS_TABLES: list[tuple[str, str | None]] = [
     ("activity_log", "created_at"),
     ("deleted_accounts", "deleted_at"),
     ("job_runs", "started_at"),
+    ("owner_client_days", "first_seen_at"),
     ("suppliers", "created_at"),
     ("expense_categories", "created_at"),
     ("notifications", None),
@@ -90,13 +91,43 @@ def main() -> int:
     if not url:
         print(
             "DATABASE_URL is not set.\n"
-            "Run this through Railway so it injects the real value:\n"
-            "    railway run python ops/analytics_probe.py",
+            "\n"
+            "`railway run` injects the variables of the *linked service*, and the linked one\n"
+            "does not have DATABASE_URL. Name the backend explicitly:\n"
+            "\n"
+            "    railway run --service rent-control-backend python ops/analytics_probe.py\n"
+            "\n"
+            "`railway status` shows what is currently linked.",
             file=sys.stderr,
         )
         return 1
 
-    print(f"host: {re.sub(r'://[^@]*@', '://<redacted>@', url)}")
+    safe = re.sub(r"://[^@]*@", "://<redacted>@", url)
+    print(f"host: {safe}")
+
+    # Railway's internal hostname only resolves inside their network. `railway run` injects
+    # variables into a local process but does not tunnel, so this cannot work from a laptop.
+    if ".railway.internal" in url:
+        print(
+            "\n"
+            "This is Railway's INTERNAL hostname. It resolves only inside Railway's network,\n"
+            "so this script cannot reach it from your machine — `railway run` passes variables\n"
+            "through, it does not open a tunnel.\n"
+            "\n"
+            "To get a probe run, pick one:\n"
+            "\n"
+            "  a) Temporarily expose Postgres: Railway -> Postgres -> Settings -> Public\n"
+            "     Networking -> add a TCP proxy. Re-run with the public URL:\n"
+            "         DATABASE_URL='<public url>' python ops/analytics_probe.py\n"
+            "     Then REMOVE the proxy again. Exposure lasts only as long as the probe.\n"
+            "\n"
+            "  b) Skip the probe. The dashboard runs inside the backend and uses this same\n"
+            "     internal URL, so it never needs public access — only this one-off does.\n"
+            "     Say so and the build proceeds on the schema read from the repo, with the\n"
+            "     numbers verified later through the dashboard itself.",
+            file=sys.stderr,
+        )
+        return 2
 
     conn = psycopg2.connect(url, connect_timeout=10)
     conn.set_session(readonly=True, autocommit=True)
@@ -215,6 +246,46 @@ def main() -> int:
     print("\ndevice_tokens by locale:")
     for row in q(cur, "SELECT coalesce(locale,'(null)'), count(*) FROM device_tokens GROUP BY 1 ORDER BY 2 DESC"):
         print(f"  {row[0]:<14}{row[1]:>6}")
+
+    # owner_client_days — where owners actually work. `writes` is the column that matters:
+    # a five-second app open and an evening of real work both produce one row, and only the
+    # counters tell them apart.
+    if "owner_client_days" in tables:
+        print("client usage — rows, and how much work happened in each client:")
+        for row in q(
+            cur,
+            "SELECT app, platform, count(*), count(DISTINCT owner_id), "
+            "       sum(requests), sum(writes) "
+            "FROM owner_client_days GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST",
+        ):
+            print(
+                f"  {row[0]:<9}{row[1]:<9}{row[2]:>5} rows  {row[3]:>4} owners  "
+                f"{row[4] or 0:>7} requests  {row[5] or 0:>6} writes"
+            )
+
+        print("\n  mobile-only / web-only / both, by owner (all time):")
+        for row in q(
+            cur,
+            "SELECT segment, count(*) FROM ("
+            "  SELECT owner_id, CASE"
+            "    WHEN bool_or(app='mobile') AND bool_or(app='web') THEN 'both'"
+            "    WHEN bool_or(app='mobile') THEN 'mobile only'"
+            "    WHEN bool_or(app='web') THEN 'web only'"
+            "    ELSE 'unknown' END AS segment"
+            "  FROM owner_client_days GROUP BY owner_id) s GROUP BY 1 ORDER BY 2 DESC",
+        ):
+            print(f"    {row[0]:<14}{row[1]:>6} owners")
+
+        print("\n  app versions seen:")
+        for row in q(
+            cur,
+            "SELECT app, coalesce(app_version,'(none)'), count(DISTINCT owner_id) "
+            "FROM owner_client_days GROUP BY 1,2 ORDER BY 3 DESC",
+        ):
+            print(f"    {row[0]:<9}{row[1]:<14}{row[2]:>5} owners")
+
+        print("\n  sanity: rows where writes > requests (should be 0 — the allowlist is a subset):")
+        print(f"    {q(cur, 'SELECT count(*) FROM owner_client_days WHERE writes > requests')[0][0]}")
 
     # legal_acceptances is the only place signup platform and an unbiased language choice
     # are recorded — device_tokens.locale only covers owners who enabled push.

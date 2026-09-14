@@ -113,11 +113,32 @@ class Settings(BaseSettings):
     CURRENT_TERMS_VERSION: str = "2026-06-09"
     CURRENT_PRIVACY_VERSION: str = "2026-06-09"
 
+    # --- Internal analytics dashboard ---
+    # Comma-separated Firebase UIDs allowed to reach /admin/*. Empty (the default) disables
+    # the dashboard entirely: with no one on the list, every request 404s, which is the safe
+    # direction for a route that reports on the whole user base. Anyone not on the list gets
+    # 404 rather than 403 — a 403 would confirm the route exists.
+    ADMIN_OWNER_IDS: str = ""
+    # Requests per minute per client IP for /admin/*, across both routes.
+    ADMIN_RATE_LIMIT_PER_MINUTE: int = 30
+    # Firebase *web* client config, injected into the dashboard page so its login box can
+    # sign in with the admin's existing account rather than inventing a second credential.
+    # These are public identifiers — the web app already ships them to every visitor — but
+    # they are not in this repo today, so they come from the environment rather than being
+    # committed. Empty means the page renders a "not configured" notice instead of a login
+    # box. `authDomain` is derived from FIREBASE_PROJECT_ID.
+    FIREBASE_WEB_API_KEY: str = ""
+    FIREBASE_WEB_APP_ID: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def admin_owner_ids(self) -> set[str]:
+        return {uid.strip() for uid in self.ADMIN_OWNER_IDS.split(",") if uid.strip()}
 
 
 settings = Settings()
