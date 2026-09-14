@@ -41,6 +41,7 @@ class CountryRead(BaseModel):
     area_unit: str
     revenue_basis_default: str
     default_comms_channel: str
+    dial_code: str
     has_postal_codes: bool
 
     registry_key_1: str | None

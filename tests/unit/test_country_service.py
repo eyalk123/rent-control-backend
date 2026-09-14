@@ -123,3 +123,29 @@ class TestResolution:
         names = [c.name for c in cs.all_countries()]
         assert names == sorted(names)
         assert len(names) == len(COUNTRIES)
+
+
+class TestDialCodes:
+    def test_every_country_has_one(self):
+        """A missing code makes the client leave the number exactly as typed, which is the
+        old broken behaviour. There is no country where that is the right answer."""
+        missing = [c for c, cfg in COUNTRIES.items() if not cfg.dial_code]
+        assert missing == []
+
+    def test_they_are_bare_digits(self):
+        """No '+', no spaces — wa.me takes the digits only, and a stray character would be
+        silently stripped into a different number."""
+        for code, cfg in COUNTRIES.items():
+            assert cfg.dial_code.isdigit(), f"{code}: {cfg.dial_code!r}"
+
+    @pytest.mark.parametrize(
+        "code,expected",
+        [("IL", "972"), ("US", "1"), ("CA", "1"), ("GB", "44"), ("FR", "33"), ("IN", "91")],
+    )
+    def test_known_codes(self, code, expected):
+        assert COUNTRIES[code].dial_code == expected
+
+    def test_israel_is_unchanged(self):
+        """The mobile client hardcoded 972 before this existed; it must still resolve to it."""
+        assert cs.config_for("IL").dial_code == "972"
+        assert cs.config_for(None).dial_code == "972"
