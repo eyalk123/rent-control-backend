@@ -29,6 +29,7 @@ from dateutil.relativedelta import relativedelta
 from app.services.lease_periods import period_start
 
 from app.config import settings
+from app.services import country_service
 from app.models.notification import NotificationTypeEnum
 from app.models.notification_settings import (
     DEFAULT_CPI_MIN_CHANGE_AMOUNT,
@@ -491,7 +492,13 @@ class CpiIndexingService:
         #    CPI year — the latter still need the index even though their other years
         #    are percent/fixed/manual.
         lookup = self._lookup()
-        for renter in self.renter_repository.get_by_escalation_modes(["cpi", "custom"]):
+        # Countries that actually have an index source behind them. Derived from the
+        # capability flags, never a hardcoded list — the day a second country gets an
+        # adapter, flipping its flag is the whole change.
+        index_countries = country_service.countries_with_index_linkage()
+        for renter in self.renter_repository.get_by_escalation_modes(
+            ["cpi", "custom"], countries=index_countries
+        ):
             if not renter.lease_start:
                 continue
             # A closed lease is not repriced at the next period boundary — and the CPI

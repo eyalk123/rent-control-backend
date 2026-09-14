@@ -9,6 +9,15 @@ from fpdf import FPDF
 from sqlalchemy import and_, extract, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.countries.config import CountryConfig
+
+# Revenue recognition. A report says which one it used, because two reports for the same
+# year that differ by a month's rent, with nothing explaining why, is worse than not
+# offering the choice at all.
+ACCRUAL = "accrual"
+CASH = "cash"
+SUPPORTED_BASES = (ACCRUAL, CASH)
+from app.services import country_service
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.report import (
     ExpenseLogReportResponse,
@@ -71,6 +80,8 @@ UI_TEXT = {
         "amount": "Amount",
         "notes": "Notes",
         "summary_title": "Summary by Category & Property",
+        "basis_accrual": "Revenue recognised when due (accrual)",
+        "basis_cash": "Revenue recognised when received (cash)",
         "multi_note": (
             "An expense with several categories is counted under the first; the list above "
             "shows all of them."
@@ -99,6 +110,8 @@ UI_TEXT = {
         "amount": "סכום",
         "notes": "הערות",
         "summary_title": "סיכום לפי קטגוריה ונכס",
+        "basis_accrual": "הכנסה נרשמת לפי מועד החיוב (מצטבר)",
+        "basis_cash": "הכנסה נרשמת לפי מועד התקבול (מזומן)",
         "multi_note": "הוצאה עם כמה קטגוריות נספרת תחת הראשונה; הרשימה שלמעלה מציגה את כולן.",
         "currency": "₪",
     },
@@ -120,6 +133,9 @@ CATEGORY_LABELS = {
         "gardening": "Gardening",
         "air_conditioning": "Air conditioning",
         "management_fee": "Management fee",
+        "mortgage_interest": "Mortgage interest",
+        "building_fees": "Building / HOA fees",
+        "legal_professional": "Legal & professional fees",
         "other": "Other",
     },
     "he": {
@@ -134,6 +150,9 @@ CATEGORY_LABELS = {
         "gardening": "גינון",
         "air_conditioning": "מיזוג אוויר",
         "management_fee": "דמי ניהול",
+        "mortgage_interest": "ריבית משכנתא",
+        "building_fees": "דמי ועד בית",
+        "legal_professional": "שכר טרחה מקצועי",
         "other": "אחר",
     },
 }
@@ -202,8 +221,38 @@ FONT = "NotoSans"
 FONT_FALLBACK = "NotoSansHebrew"
 
 
-def _fmt(amount: Decimal, lang: str = DEFAULT_LANG) -> str:
-    return f"{_t(lang, 'currency')}{amount:,.0f}"
+# How a currency is written on a report.
+#
+# Keyed by ISO 4217, **not** by country — nothing here branches on where the owner is. An
+# entry overrides the country config's symbol and position; anything absent falls through
+# to the config, which is what every currency but one does.
+#
+# ILS has an entry because the Israeli report has always printed a *language-dependent*
+# label in the prefix position: "ILS 5,000" in English, "₪5,000" in Hebrew. That is the
+# artifact users hand to an accountant, and the config's suffix form would silently change
+# every report they have ever filed. Preserved deliberately.
+CURRENCY_LABELS: dict[str, dict[str, str]] = {
+    "ILS": {"en": "ILS ", "he": "₪"},
+}
+
+
+def _fmt(
+    amount: Decimal,
+    lang: str = DEFAULT_LANG,
+    currency: CountryConfig | None = None,
+) -> str:
+    """An amount with its currency, as the report prints it.
+
+    ``currency`` is the owner's country config. ``None`` means "unknown", which resolves to
+    Israel — every report that predates this parameter was Israeli.
+    """
+    config = currency or country_service.config_for(None)
+    legacy = CURRENCY_LABELS.get(config.currency)
+    if legacy is not None:
+        return f"{legacy[normalise_lang(lang)]}{amount:,.0f}"
+    if config.currency_symbol_position == "suffix":
+        return f"{amount:,.0f}{config.currency_symbol}"
+    return f"{config.currency_symbol}{amount:,.0f}"
 
 
 # Table shading. The faint grid is what makes a property block read as one unit; the strong
@@ -251,13 +300,35 @@ def _bidi_kwargs(kwargs: dict) -> dict:
 # Data assembly
 # ---------------------------------------------------------------------------
 
-def get_income_expense_data(db: Session, owner_id: str, year: int) -> IncomeExpenseReportResponse:
+def get_income_expense_data(
+    db: Session, owner_id: str, year: int, basis: str = ACCRUAL
+) -> IncomeExpenseReportResponse:
+    """The income-and-expense figures for one year, on one revenue recognition basis.
+
+    **Accrual** (the default, and what this report has always done) counts revenue toward
+    the month it was *for*: December's rent is December's income even if it arrived in
+    January. **Cash** counts it when it actually arrived, which is how an individual
+    landlord files in the US — and how an Israeli individual who keeps no double-entry
+    books reports too.
+
+    Mid-year the two agree. At the year boundary they are the whole difference, which is
+    exactly where an annual report lands.
+
+    Only *revenue* moves. Expenses already count on the date they were paid under both
+    bases, so the expense half of this report and the whole expense log are untouched.
+
+    Nothing about the data changes — both dates are already on every transaction, so this
+    is a choice of which one to group by.
+    """
     from app.models.transaction import TransactionTypeEnum
 
-    # Revenue belongs to the month it is *for*, expenses to the date they were paid. Filtering
-    # in SQL rather than in Python: this used to load the owner's entire transaction history on
-    # every run and throw away all but one year of it.
-    revenue_date = func.coalesce(Transaction.month_for, Transaction.date_of_payment)
+    # Filtering in SQL rather than in Python: this used to load the owner's entire
+    # transaction history on every run and throw away all but one year of it.
+    revenue_date = (
+        Transaction.date_of_payment
+        if basis == CASH
+        else func.coalesce(Transaction.month_for, Transaction.date_of_payment)
+    )
     stmt = (
         select(Transaction)
         .where(
@@ -292,7 +363,11 @@ def get_income_expense_data(db: Session, owner_id: str, year: int) -> IncomeExpe
             prop_addr = f"{t.property.address}, {t.property.city}" if t.property.city else t.property.address
 
         if t.type == TransactionTypeEnum.REVENUE:
-            ref_date = t.month_for or t.date_of_payment
+            # Must mirror `revenue_date` above, or a transaction selected by one rule would
+            # be bucketed by the other — and the totals would not add up to the rows.
+            ref_date = (
+                t.date_of_payment if basis == CASH else (t.month_for or t.date_of_payment)
+            )
             month = ref_date.month
             tree[prop_owner][prop_addr][month]["revenue"] += Decimal(str(t.amount))
         else:
@@ -347,6 +422,7 @@ def get_income_expense_data(db: Session, owner_id: str, year: int) -> IncomeExpe
         year=year,
         owners=owners_out,
         grand_total=MonthCell(revenue=grand_revenue, expenses=grand_expenses, net=grand_revenue - grand_expenses),
+        revenue_basis=basis,
     )
 
 
@@ -474,9 +550,24 @@ def get_expense_log_data(
 # ---------------------------------------------------------------------------
 
 class _PDF(FPDF):
-    def __init__(self, title_key: str, year: int, lang: str = DEFAULT_LANG, **kwargs):
+    def __init__(
+        self,
+        title_key: str,
+        year: int,
+        lang: str = DEFAULT_LANG,
+        currency: CountryConfig | None = None,
+        revenue_basis: str | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
+        # None for the expense log, which has no revenue to recognise and so prints no
+        # basis line at all.
+        self.revenue_basis = revenue_basis
         self.lang = normalise_lang(lang)
+        # Carried alongside the language, but resolved from the *data* rather than from the
+        # reader's locale: a report is about a portfolio, and the portfolio's currency does
+        # not change because someone switched the app to English.
+        self.currency = currency or country_service.config_for(None)
         self.rtl = self.lang == "he"
         self._title = _t(self.lang, title_key)
         self._year = year
@@ -598,6 +689,13 @@ class _PDF(FPDF):
     def header(self):
         self.set_font(FONT, "B", 12)
         self.cell(0, 8, f"{self._title} - {self._year}", align="C", new_x="LMARGIN", new_y="NEXT")
+        # Printed on every page, under the title. Two reports for the same year that differ
+        # by a month's rent, with nothing saying why, is worse than not offering the choice
+        # — and the accountant reading this is the person who needs to know.
+        if self.revenue_basis:
+            key = "basis_cash" if self.revenue_basis == CASH else "basis_accrual"
+            self.set_font(FONT, "", 8)
+            self.cell(0, 5, _t(self.lang, key), align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def footer(self):
@@ -607,7 +705,9 @@ class _PDF(FPDF):
 
 
 def generate_income_expense_pdf(
-    data: IncomeExpenseReportResponse, lang: str = DEFAULT_LANG
+    data: IncomeExpenseReportResponse,
+    lang: str = DEFAULT_LANG,
+    currency: CountryConfig | None = None,
 ) -> bytes:
     """One block per property — Revenue, Expenses and Net on adjacent rows, months as columns.
 
@@ -619,7 +719,11 @@ def generate_income_expense_pdf(
     bands) is what makes the report readable: you can compare a month's income against its
     costs without looking in two places, and the Total column gives that property's net.
     """
-    pdf = _PDF("income_title", data.year, lang=lang, orientation="L", unit="mm", format="A4")
+    pdf = _PDF(
+        "income_title", data.year, lang=lang, currency=currency,
+        revenue_basis=data.revenue_basis,
+        orientation="L", unit="mm", format="A4",
+    )
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -797,9 +901,9 @@ def generate_income_expense_pdf(
     pdf.set_fill_color(200, 220, 200)
     summary = [
         (t("grand_total"), None),
-        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang)}', None),
-        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang)}', None),
-        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang)}',
+        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang, pdf.currency)}', None),
+        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang, pdf.currency)}', None),
+        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang, pdf.currency)}',
          _sign_colour(data.grand_total.net, strong=True)),
     ]
     cells = [(pdf.get_string_width(text) + 6, text,
@@ -837,8 +941,15 @@ def _draw_coloured_row(pdf: "_PDF", cells: list[tuple], height: float,
         pdf.set_text_color(0, 0, 0)
 
 
-def generate_expense_log_pdf(data: ExpenseLogReportResponse, lang: str = DEFAULT_LANG) -> bytes:
-    pdf = _PDF("expense_title", data.year, lang=lang, orientation="L", unit="mm", format="A4")
+def generate_expense_log_pdf(
+    data: ExpenseLogReportResponse,
+    lang: str = DEFAULT_LANG,
+    currency: CountryConfig | None = None,
+) -> bytes:
+    pdf = _PDF(
+        "expense_title", data.year, lang=lang, currency=currency,
+        orientation="L", unit="mm", format="A4",
+    )
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 

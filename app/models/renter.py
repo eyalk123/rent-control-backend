@@ -1,6 +1,18 @@
 from datetime import date
 
-from sqlalchemy import JSON, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import relationship
 
 from app.clock import utc_now_naive
@@ -41,6 +53,16 @@ class Renter(Base):
     # edit. It records the lease ending *alongside* the signed terms rather than
     # rewriting them: lease_years, cpi_base_index and the renter's transactions are
     # deliberately untouched, so past reports still reconstruct. NULL == running.
+    # "Don't warn me when this lease expires." The expiring alert counts down to
+    # `contract_end`, which for an open-ended tenancy is a date the landlord invented —
+    # so the countdown is noise. Also useful for an Israeli month-to-month holdover, which
+    # is why it is offered everywhere rather than gated on a country.
+    #
+    # Suppresses at the query (`renter_repository.get_expiring_leases`), so one condition
+    # covers the notification, the push and Home's needs-attention card at once.
+    suppress_expiry_alerts = Column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     terminated_on = Column(Date, nullable=True)
     termination_reason = Column(String, nullable=True)
     number_of_payments = Column(Integer, nullable=True)

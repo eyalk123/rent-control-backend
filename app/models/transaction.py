@@ -21,10 +21,16 @@ class TransactionTypeEnum(str, enum.Enum):
 
 
 class PaymentMethodEnum(str, enum.Enum):
-    BIT = "bit"
+    """Every method the column can hold. ``bit`` is Israel-only and stays in the type —
+    see the note on ``PropertyTypeEnum`` for why nothing is removed per country."""
+
+    BIT = "bit"  # Israel only
     CASH = "cash"
     BANK_TRANSFER = "bank_transfer"
     CHECK = "check"
+    CARD = "card"
+    MOBILE_PAYMENT = "mobile_payment"
+    OTHER = "other"
 
 
 class Transaction(Base):

@@ -186,8 +186,11 @@ def get_property_service(
     activity_log_repository: Annotated[
         ActivityLogRepository, Depends(get_activity_log_repository)
     ],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
 ) -> PropertyService:
-    return PropertyService(property_repository, renter_repository, activity_log_repository)
+    return PropertyService(
+        property_repository, renter_repository, activity_log_repository, owner_repository
+    )
 
 
 def get_renter_service(
@@ -197,9 +200,14 @@ def get_renter_service(
     activity_log_repository: Annotated[
         ActivityLogRepository, Depends(get_activity_log_repository)
     ],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
 ) -> RenterService:
     return RenterService(
-        renter_repository, property_repository, cpi_index_repository, activity_log_repository
+        renter_repository,
+        property_repository,
+        cpi_index_repository,
+        activity_log_repository,
+        owner_repository,
     )
 
 

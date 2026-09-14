@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_report_export_repository
 from app.database import get_db
+from app.services import country_service
 from app.models.report_export import ReportExport
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.report_export_repository import ReportExportRepository
 from app.schemas.report import ReportExportRead
 from app.services.report_service import (
@@ -21,6 +23,17 @@ from app.services.report_service import (
 router = APIRouter()
 
 
+def _owner_currency(db: Session, owner_id: str):
+    """The country config a report should print its amounts in.
+
+    Read from the owner rather than the reader's `?lang=`: a report is about a portfolio,
+    and its currency does not change because someone switched the app to English. A missing
+    owner row resolves to Israel, which is what every report did before this existed.
+    """
+    owner = OwnerRepository(db).get(owner_id)
+    return country_service.config_for(owner.country if owner else None)
+
+
 @router.get("/income-expense")
 def income_expense_report(
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -29,20 +42,24 @@ def income_expense_report(
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
     lang: str = Query("en", pattern="^(en|he)$"),
+    # Chosen per report, next to the language, rather than stored on the account — a stored
+    # preference would silently re-interpret history. Defaults to accrual, so a caller that
+    # does not pass it gets exactly what this endpoint always returned.
+    basis: str = Query("accrual", pattern="^(accrual|cash)$"),
 ):
-    data = get_income_expense_data(db, current_user["user_id"], year)
+    data = get_income_expense_data(db, current_user["user_id"], year, basis)
 
     if format == "csv":
         content = generate_income_expense_csv(data, lang).encode("utf-8-sig")
-        repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="csv"))
+        repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="csv", revenue_basis=basis))
         return Response(
             content=content,
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="income-expense-{year}.csv"'},
         )
 
-    content = generate_income_expense_pdf(data, lang)
-    repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf"))
+    content = generate_income_expense_pdf(data, lang, _owner_currency(db, current_user["user_id"]))
+    repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf", revenue_basis=basis))
     return Response(
         content=content,
         media_type="application/pdf",
@@ -70,7 +87,7 @@ def expense_log_report(
             headers={"Content-Disposition": f'attachment; filename="expense-log-{year}.csv"'},
         )
 
-    content = generate_expense_log_pdf(data, lang)
+    content = generate_expense_log_pdf(data, lang, _owner_currency(db, current_user["user_id"]))
     repo.create(ReportExport(owner_id=current_user["user_id"], report_type="expense_log", year=year, format="pdf"))
     return Response(
         content=content,

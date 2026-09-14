@@ -10,8 +10,11 @@ class PropertyType(str, Enum):
     Apartment = "apartment"
     House = "house"
     Commercial = "commercial"
-    GardenApartment = "garden_apartment"
-    HousingUnit = "housing_unit"
+    GardenApartment = "garden_apartment"  # Israel only
+    HousingUnit = "housing_unit"  # Israel only
+    CondoTownhouse = "condo_townhouse"
+    Room = "room"
+    Other = "other"
 
 
 def _normalize_optional_str(v):
@@ -40,10 +43,10 @@ class PropertyBriefRead(BaseModel):
 class PropertyCreate(BaseModel):
     address: str
     city: str
-    zip_code: str
+    zip_code: Optional[str] = None
     type: PropertyType
-    sq_ft: int
-    purchase_price: float = 0.0
+    sq_ft: Optional[int] = None
+    purchase_price: Optional[float] = None
     image_url: Optional[str] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
@@ -127,10 +130,12 @@ class PropertyRead(BaseModel):
     owner_id: str
     address: str
     city: str
-    zip_code: str
+    # Optional on the way out as well as in. A property saved without them is now a valid
+    # row, and a Read model that still required them would raise a 500 when serialising it.
+    zip_code: Optional[str] = None
     type: PropertyType
-    sq_ft: int
-    purchase_price: float
+    sq_ft: Optional[int] = None
+    purchase_price: Optional[float] = None
     image_url: Optional[str] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None

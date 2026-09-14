@@ -8,6 +8,7 @@ from app.config import settings
 from app.models.renter import Renter
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.renter import (
@@ -17,6 +18,7 @@ from app.schemas.renter import (
     RenterTerminate,
     RenterUpdate,
 )
+from app.services import country_service
 from app.services.cpi_indexing_service import (
     IndexReading,
     materialize_cpi_amounts,
@@ -104,11 +106,16 @@ class RenterService:
         property_repository: PropertyRepository,
         cpi_index_repository: CpiIndexRepository | None = None,
         activity_log_repository: ActivityLogRepository | None = None,
+        owner_repository: OwnerRepository | None = None,
     ):
         self.renter_repository = renter_repository
         self.property_repository = property_repository
         self.cpi_index_repository = cpi_index_repository
         self.activity_log_repository = activity_log_repository
+        # Only used to resolve the country for a lease with no property attached. Optional
+        # so existing call sites keep working; without it such a lease falls back to
+        # Israel, which is what every lease did before countries existed.
+        self.owner_repository = owner_repository
 
     def _index_lookup(self):
         """Same reading-aware lookup the indexing job uses, so an amount computed on
@@ -182,6 +189,47 @@ class RenterService:
         if renter.owner_id is not None and renter.owner_id != owner_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
+    def _guard_index_linkage(
+        self, mode: str | None, lease_years: list[dict], property_id: int | None, owner_id: str
+    ) -> None:
+        """Reject index-linked rent where the country has no index behind it.
+
+        **This is the enforcement point, not the UI.** Hiding the CPI option in both clients
+        while the API still accepts ``escalation: 'cpi'`` leaves a live path into a
+        subsystem that has no data source for the account — the lease would be written, and
+        then priced against Israeli index readings that have nothing to do with it.
+
+        The country is read from the **property**, because a lease attaches to a building.
+        A lease with no property yet falls back to the account, and an unknown country
+        resolves to the skimmed defaults, so the failure direction is "refuse" rather than
+        "silently use Israel's index".
+
+        Existing Israeli leases are untouched: Israel has the capability, so this never
+        fires for them.
+        """
+        country = None
+        if property_id is not None:
+            prop = self.property_repository.get_by_id(property_id, owner_id)
+            country = prop.country if prop else None
+        if country is None and self.owner_repository is not None:
+            owner = self.owner_repository.get(owner_id)
+            country = owner.country if owner else None
+
+        if country_service.capabilities_for(country).cpi_linkage:
+            return
+
+        config = country_service.config_for(country)
+        detail = (
+            f"Index-linked rent is not available in {config.name}. "
+            "Use a fixed amount, a percentage, or a custom schedule."
+        )
+        if mode == "cpi":
+            raise HTTPException(status_code=422, detail=detail)
+        for year in lease_years:
+            rule = year.get("rule")
+            if isinstance(rule, dict) and rule.get("mode") == "cpi":
+                raise HTTPException(status_code=422, detail=detail)
+
     def create_renter(self, data: RenterCreate, owner_id: str):
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
@@ -189,6 +237,7 @@ class RenterService:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
         mode = data.rent_escalation_mode.value if data.rent_escalation_mode else None
         lease_years_payload = _lease_years_to_dicts(data.lease_years)
+        self._guard_index_linkage(mode, lease_years_payload, data.property_id, owner_id)
         lease_years_payload, cpi_base_index = self._resolve_lease_year_amounts(
             mode,
             lease_years_payload,
@@ -218,6 +267,7 @@ class RenterService:
             number_of_payments=data.number_of_payments,
             payment_type=data.payment_type,
             payment_day_of_month=data.payment_day_of_month,
+            suppress_expiry_alerts=bool(data.suppress_expiry_alerts),
             insurance_type=data.insurance_type,
             insurance_amount=data.insurance_amount,
             contact_id=data.contact_id,
@@ -251,6 +301,23 @@ class RenterService:
             mode = renter.rent_escalation_mode
 
         lease_start = update_dict.get("lease_start", renter.lease_start)
+
+        # Guard only what this request is *asking for*, not what the row already holds.
+        #
+        # Blocking every edit to a lease that already stores `cpi` would lock the owner out
+        # of their own record — they could not fix a phone number — and would not repair the
+        # data either. After the IL backfill such a row can only come from a bug or a
+        # country correction, and refusing the edit helps nobody. Refusing to *introduce*
+        # index linkage is the part that matters, and that is what this does.
+        incoming_mode = mode if "rent_escalation_mode" in update_dict else None
+        incoming_years = _lease_years_to_dicts(data.lease_years) if "lease_years" in update_dict else []
+        if incoming_mode == "cpi" or incoming_years:
+            self._guard_index_linkage(
+                incoming_mode,
+                incoming_years,
+                update_dict.get("property_id", renter.property_id),
+                owner_id,
+            )
 
         if mode in ("cpi", "custom"):
             # The server owns derived amounts in both modes — the fixed-base index linkage

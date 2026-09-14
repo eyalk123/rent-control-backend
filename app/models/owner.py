@@ -23,6 +23,10 @@ class Owner(Base):
     # `seeds_shown` records that a feature was *named* somewhere, `tours_seen` that it was
     # *explained*. Seeing the seed must never consume the destination tour.
     tour_state = Column(Text, nullable=False, server_default="{}", default="{}")
+    # ISO 3166-1 alpha-2, chosen once at signup. Drives currency, formats and the default
+    # for new properties. NULL means "not chosen yet", which is what the signup country
+    # gate keys off — so it must stay nullable. Rules read `Property.country`, not this.
+    country = Column(String(2), nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
     last_seen_at = Column(DateTime, nullable=True)

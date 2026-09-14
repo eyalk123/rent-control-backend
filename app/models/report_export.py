@@ -12,4 +12,8 @@ class ReportExport(Base):
     report_type = Column(Enum("income_expense", "expense_log", name="reporttype"), nullable=False)
     year = Column(Integer, nullable=False)
     format = Column(Enum("pdf", "csv", name="reportformat"), nullable=False)
+    # Which revenue recognition basis produced it. NULL means accrual — every export that
+    # predates the choice was generated on the only basis that existed. Recorded so the
+    # history list can tell two otherwise-identical reports apart.
+    revenue_basis = Column(String(16), nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)

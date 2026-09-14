@@ -3,6 +3,8 @@ from datetime import date, timedelta
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.countries.config import DEFAULT_COUNTRY
+from app.models.owner import Owner
 from app.models.property import Property
 from app.models.renter import Renter
 from app.models.transaction import Transaction
@@ -52,12 +54,34 @@ class RenterRepository:
         """Every renter using a given rent-escalation mode, across all owners."""
         return self.get_by_escalation_modes([mode])
 
-    def get_by_escalation_modes(self, modes: list[str]) -> list[Renter]:
+    def get_by_escalation_modes(
+        self, modes: list[str], countries: list[str] | None = None
+    ) -> list[Renter]:
         """Every renter on any of the given rent-escalation modes, across all owners —
         the candidate set the CPI indexing job recomputes. `custom` renters are included
         wholesale here and narrowed to the CPI-linked ones by the caller, since whether a
-        lease has a CPI *year* is only visible inside the `lease_years` JSON blob."""
+        lease has a CPI *year* is only visible inside the `lease_years` JSON blob.
+
+        ``countries`` restricts the set to leases in countries that actually have an index
+        behind them. The filter belongs **here**, not in the caller's loop: the job must not
+        run for an account whose country has no index source, and skipping rows after
+        loading them is not the same thing as never selecting them.
+
+        The country is the **property's**, since a lease attaches to a building, falling
+        back to the account's and then to the default — the same NULL-means-legacy rule
+        ``country_service.config_for`` applies, expressed in SQL.
+        """
         stmt = select(Renter).where(Renter.rent_escalation_mode.in_(modes))
+        if countries is not None:
+            stmt = (
+                stmt.outerjoin(Property, Renter.property_id == Property.id)
+                .outerjoin(Owner, Renter.owner_id == Owner.id)
+                .where(
+                    func.coalesce(Property.country, Owner.country, DEFAULT_COUNTRY).in_(
+                        countries
+                    )
+                )
+            )
         return list(self.session.scalars(stmt).all())
 
     def get_all(self, owner_id: str | None = None) -> list[Renter]:
@@ -191,6 +215,11 @@ class RenterRepository:
                 # exercised, so the decision point is when the contract periods run out.
                 Renter.contract_end > today,
                 Renter.contract_end <= cutoff,
+                # Muted per renter. Filtered here rather than in each caller because this
+                # one query feeds the lease-expiring notification, its push, and Home's
+                # needs-attention card — so one condition covers all three, and a new
+                # caller cannot forget it.
+                Renter.suppress_expiry_alerts.is_(False),
                 *_scope_conditions(property_ids, property_owners, renter_ids),
             )
             .order_by(Renter.contract_end.asc())

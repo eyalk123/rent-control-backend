@@ -3,10 +3,12 @@ from datetime import date
 
 from app.models.property import Property, PropertyTypeEnum
 from app.repositories.activity_log_repository import ActivityLogRepository
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyUpdate
 from app.schemas.renter import PropertyRenterSummary
+from app.services import country_service
 
 
 class PropertyService:
@@ -15,10 +17,15 @@ class PropertyService:
         property_repository: PropertyRepository,
         renter_repository: RenterRepository,
         activity_log_repository: ActivityLogRepository | None = None,
+        owner_repository: OwnerRepository | None = None,
     ):
         self.property_repository = property_repository
         self.renter_repository = renter_repository
         self.activity_log_repository = activity_log_repository
+        # Optional so existing call sites (the test suite included) keep working; without
+        # it a new property simply inherits no country, which `config_for` resolves to
+        # Israel — today's behaviour exactly.
+        self.owner_repository = owner_repository
 
     def list_properties(self, owner_id: str):
         return self.property_repository.get_all_by_owner(owner_id)
@@ -26,8 +33,22 @@ class PropertyService:
     def get_property(self, property_id: int, owner_id: str):
         return self.property_repository.get_by_id(property_id, owner_id)
 
+    def _owner_country(self, owner_id: str) -> str | None:
+        """The account's country, or None if unknown — never raises.
+
+        The owners row is written best-effort (see ``get_current_owner``), so it can be
+        missing for a perfectly valid request. A property with no country resolves to
+        Israel in ``country_service.config_for``, which is what every row did before this
+        column existed, so a miss degrades to today's behaviour rather than to an error.
+        """
+        if self.owner_repository is None:
+            return None
+        owner = self.owner_repository.get(owner_id)
+        return owner.country if owner else None
+
     def create_property(self, data: PropertyCreate, owner_id: str):
         property_type = PropertyTypeEnum(data.type.value)
+        country = self._owner_country(owner_id)
         parking_numbers_str = (
             json.dumps(data.parking_numbers) if data.parking_numbers is not None else None
         )
@@ -55,6 +76,17 @@ class PropertyService:
             apartment=data.apartment,
             block=data.block,
             plot=data.plot,
+            # Copied from the account, silently — the form has no country picker and the
+            # user is asked nothing extra. It is copied rather than read through a join
+            # because it must not move if the account's country is ever corrected: a lease
+            # already priced under one country's rules cannot be re-based by an edit
+            # somewhere else.
+            country=country,
+            # Frozen at creation from the country, not read through a join, for the same
+            # reason `country` is: a transaction already recorded in one currency cannot be
+            # re-denominated by an edit somewhere else. `transaction_service` snapshots this
+            # onto every row it writes.
+            currency_code=country_service.config_for(country).currency,
         )
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)
