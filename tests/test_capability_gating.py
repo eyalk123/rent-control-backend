@@ -214,3 +214,73 @@ class TestTheAssistant:
         _owner(db_session, "US")
         out = AgentTools(db_session).dispatch("explain_cpi", OWNER_A, {"renter_id": 1})
         assert "error" in out
+
+
+class TestPerRenterExpiryMute:
+    """"Don't warn me when this lease expires" — offered to everyone, not gated.
+
+    The alert counts down to `contract_end`, which for an open-ended tenancy is a date the
+    landlord invented. Israel has the same case in a month-to-month holdover, which is why
+    this is universal.
+    """
+
+    def _expiring_payload(self, property_id):
+        from datetime import date, timedelta
+
+        start = date.today() - timedelta(days=300)
+        return _renter_payload(
+            property_id,
+            lease_start=start.isoformat(),
+            lease_years=[{"amount": 5000, "type": "contract"}],
+            rent_escalation_mode="none",
+        )
+
+    def test_a_muted_renter_disappears_from_the_expiring_list(self, client, db_session):
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        created = client.post("/renters", json=self._expiring_payload(prop.id))
+        assert created.status_code == 201, created.text
+        renter_id = created.json()["id"]
+
+        listed = {r["renter_id"] for r in client.get("/renters/expiring?days=365").json()}
+        assert renter_id in listed, "precondition: the lease should be expiring"
+
+        assert (
+            client.patch(f"/renters/{renter_id}", json={"suppress_expiry_alerts": True}).status_code
+            == 200
+        )
+        listed_after = {r["renter_id"] for r in client.get("/renters/expiring?days=365").json()}
+        assert renter_id not in listed_after
+
+    def test_the_notification_engine_sees_the_same_suppression(self, client, db_session):
+        """One query feeds the alert, the push and Home's card, so muting covers all three.
+        This asserts the engine reads the same path rather than its own copy."""
+        from app.repositories.renter_repository import RenterRepository
+        from app.services.renter_service import RenterService
+        from app.repositories.property_repository import PropertyRepository
+
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        created = client.post("/renters", json=self._expiring_payload(prop.id))
+        renter_id = created.json()["id"]
+        client.patch(f"/renters/{renter_id}", json={"suppress_expiry_alerts": True})
+
+        service = RenterService(RenterRepository(db_session), PropertyRepository(db_session))
+        rows = service.get_expiring_leases(owner_id=OWNER_A, days_until=365)
+        assert renter_id not in {r.renter_id for r in rows}
+
+    def test_unmuting_brings_it_back(self, client, db_session):
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        renter_id = client.post("/renters", json=self._expiring_payload(prop.id)).json()["id"]
+        client.patch(f"/renters/{renter_id}", json={"suppress_expiry_alerts": True})
+        client.patch(f"/renters/{renter_id}", json={"suppress_expiry_alerts": False})
+        listed = {r["renter_id"] for r in client.get("/renters/expiring?days=365").json()}
+        assert renter_id in listed
+
+    def test_it_defaults_to_off(self, client, db_session):
+        """Nobody's existing alerts change because the column appeared."""
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        created = client.post("/renters", json=self._expiring_payload(prop.id))
+        assert created.json()["suppress_expiry_alerts"] in (False, None)

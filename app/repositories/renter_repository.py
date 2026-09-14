@@ -215,6 +215,11 @@ class RenterRepository:
                 # exercised, so the decision point is when the contract periods run out.
                 Renter.contract_end > today,
                 Renter.contract_end <= cutoff,
+                # Muted per renter. Filtered here rather than in each caller because this
+                # one query feeds the lease-expiring notification, its push, and Home's
+                # needs-attention card — so one condition covers all three, and a new
+                # caller cannot forget it.
+                Renter.suppress_expiry_alerts.is_(False),
                 *_scope_conditions(property_ids, property_owners, renter_ids),
             )
             .order_by(Renter.contract_end.asc())

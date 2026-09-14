@@ -267,6 +267,7 @@ class RenterService:
             number_of_payments=data.number_of_payments,
             payment_type=data.payment_type,
             payment_day_of_month=data.payment_day_of_month,
+            suppress_expiry_alerts=bool(data.suppress_expiry_alerts),
             insurance_type=data.insurance_type,
             insurance_amount=data.insurance_amount,
             contact_id=data.contact_id,

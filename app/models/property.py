@@ -33,13 +33,19 @@ class Property(Base):
     owner_id = Column(String, nullable=False)
     address = Column(String, nullable=False)
     city = Column(String, nullable=False)
-    zip_code = Column(String, nullable=False)
+    # Optional everywhere: postal codes do not exist in parts of Ireland, the Gulf,
+    # Africa and the Caribbean, and there is nothing to type.
+    zip_code = Column(String, nullable=True)
     type = Column(
         Enum(PropertyTypeEnum, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
     )
-    sq_ft = Column(Integer, nullable=False)
-    purchase_price = Column(Float, nullable=False)
+    # Square *metres*, despite the name. Converted for display where the country uses
+    # square feet; the column name predates that and is not worth a migration.
+    sq_ft = Column(Integer, nullable=True)
+    # Optional: an inherited or managed property may have no price the owner knows or
+    # wants to record, and demanding one at signup loses the account.
+    purchase_price = Column(Float, nullable=True)
     image_url = Column(String, nullable=True)
     property_owner = Column(String, nullable=True)
     number_of_rooms = Column(Float, nullable=True)
