@@ -9,6 +9,7 @@ from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyUpdate
 from app.schemas.renter import PropertyRenterSummary
 from app.services import country_service
+from app.services.activity_diff import changed_fields
 
 
 class PropertyService:
@@ -104,6 +105,20 @@ class PropertyService:
                 if update_dict["parking_numbers"] is not None
                 else None
             )
+        # After the normalisation above, and before the update is applied: `type` has to be
+        # compared enum-to-enum and `parking_numbers` string-to-string, or an untouched
+        # field reads as an edit on every save.
+        if self.activity_log_repository is not None:
+            changed = changed_fields(property, update_dict)
+            if changed:
+                self.activity_log_repository.record_action(
+                    owner_id=owner_id,
+                    action="update",
+                    entity_type="property",
+                    entity_id=property.id,
+                    label=", ".join(p for p in (property.address, property.city) if p),
+                    details={"fields": changed},
+                )
         self.property_repository.update(property, update_dict)
         return self.property_repository.get_by_id(property_id, owner_id)
 

@@ -25,7 +25,13 @@ from app.schemas.transaction import (
     TransactionUpdateExpense,
     TransactionUpdateRevenue,
 )
+from app.services.activity_diff import changed_fields
 from app.services.lease_periods import rent_for_month
+
+# Snapshots the service maintains itself — the address and the renter's name follow their
+# foreign key, and the expected amount is re-quoted from the lease. None of the three is
+# something the owner edited, so none belongs in an `update` log row.
+_DERIVED_TRANSACTION_FIELDS = {"property_address", "renter_name", "expected_amount"}
 
 
 def _expected_rent(renter: Renter | None, month_for: date | None) -> Decimal | None:
@@ -240,6 +246,7 @@ class TransactionService:
         return items
 
     def update_revenue(self, transaction_id: int, data: TransactionUpdateRevenue, owner_id: str) -> TransactionRead | None:
+        existing = self.transaction_repository.get_by_id(transaction_id, owner_id)
         fields: dict = {}
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
@@ -274,23 +281,23 @@ class TransactionService:
         # snapshot a quote for something else, so it is re-taken against wherever the row
         # now points. A changed *amount* deliberately does not re-snapshot: that is the
         # payment disagreeing with the lease, which is exactly what the flag is for.
-        if "month_for" in fields or "renter_id" in fields:
-            existing = self.transaction_repository.get_by_id(transaction_id, owner_id)
-            if existing is not None:
-                renter_id = fields.get("renter_id", existing.renter_id)
-                month_for = fields.get("month_for", existing.month_for)
-                quoted_for = (
-                    self.renter_repository.get_by_id(renter_id)
-                    if renter_id is not None
-                    else None
-                )
-                fields["expected_amount"] = _expected_rent(quoted_for, month_for)
+        if ("month_for" in fields or "renter_id" in fields) and existing is not None:
+            renter_id = fields.get("renter_id", existing.renter_id)
+            month_for = fields.get("month_for", existing.month_for)
+            quoted_for = (
+                self.renter_repository.get_by_id(renter_id)
+                if renter_id is not None
+                else None
+            )
+            fields["expected_amount"] = _expected_rent(quoted_for, month_for)
+        self._log_update(existing, fields, owner_id)
         updated = self.transaction_repository.update(transaction_id, owner_id, fields)
         if updated is None:
             return None
         return self._transaction_to_read(updated)
 
     def update_expense(self, transaction_id: int, data: TransactionUpdateExpense, owner_id: str) -> TransactionRead | None:
+        existing = self.transaction_repository.get_by_id(transaction_id, owner_id)
         fields: dict = {}
         new_categories = None
         if data.property_id is not None:
@@ -338,10 +345,64 @@ class TransactionService:
             fields["notes"] = data.notes
         if "receipt_image_url" in data.model_fields_set:
             fields["receipt_image_url"] = data.receipt_image_url
+        # `category_id` is just `category_ids[0]`, and the set itself lives on a
+        # relationship rather than in `fields` — so the column diff would miss an edit
+        # that only touched the secondary categories. Report the one name the client
+        # actually sent, covering both.
+        categories_changed = set()
+        if new_categories is not None and existing is not None:
+            existing_ids = sorted(c.id for c in existing.categories)
+            if (
+                sorted(c.id for c in new_categories) != existing_ids
+                or new_categories[0].id != existing.category_id
+            ):
+                categories_changed.add("category_ids")
+        self._log_update(
+            existing,
+            fields,
+            owner_id,
+            ignore=_DERIVED_TRANSACTION_FIELDS | {"category_id"},
+            also_changed=categories_changed,
+        )
         updated = self.transaction_repository.update(transaction_id, owner_id, fields, new_categories=new_categories)
         if updated is None:
             return None
         return self._transaction_to_read(updated)
+
+    def _log_update(
+        self,
+        transaction: Transaction | None,
+        fields: dict,
+        owner_id: str,
+        ignore: set[str] | None = None,
+        also_changed: set[str] | None = None,
+    ) -> None:
+        """Record that an edit changed something. Called before the repository applies
+        `fields`, so `transaction` still holds the old values to compare against, and
+        before its commit, so the row lands in the same transaction as the change.
+
+        `also_changed` names what the column diff cannot see — an expense's categories
+        live on a relationship, not on `fields`.
+
+        Field names only — `notes` and `renter_name` are tenant data and this table is
+        read by analytics queries.
+        """
+        if transaction is None or self.activity_log_repository is None:
+            return
+        changed = changed_fields(
+            transaction, fields, ignore=ignore or _DERIVED_TRANSACTION_FIELDS
+        )
+        changed = sorted(set(changed) | (also_changed or set()))
+        if not changed:
+            return
+        self.activity_log_repository.record_action(
+            owner_id=owner_id,
+            action="update",
+            entity_type="transaction",
+            entity_id=transaction.id,
+            label=transaction.property_address,
+            details={"fields": changed},
+        )
 
     def delete_transaction(self, transaction_id: int, owner_id: str) -> bool:
         if self.activity_log_repository is not None:
