@@ -2,7 +2,10 @@
 get_current_owner dependency, and the /users/me profile endpoint + deletion cascade."""
 from datetime import timedelta
 
+from starlette.requests import Request
+
 from app.clock import utc_now_naive
+from app.api.client_usage_middleware import OWNER_ID_STATE_KEY
 from app.api.dependencies import get_current_owner
 from app.models.owner import Owner
 from app.repositories.owner_repository import LAST_SEEN_THROTTLE, OwnerRepository
@@ -57,6 +60,12 @@ def test_upsert_refreshes_last_seen_when_stale(db_session):
 
 # --- Dependency resilience ----------------------------------------------------
 
+def _request():
+    """A bare ASGI scope is enough: `request.state` is backed by `scope["state"]`, which
+    is also where ClientUsageMiddleware reads the uid back out from."""
+    return Request({"type": "http", "headers": [], "method": "GET", "path": "/", "state": {}})
+
+
 def test_get_current_owner_is_resilient_to_upsert_failure():
     class BoomRepo:
         def upsert(self, **kwargs):
@@ -64,7 +73,32 @@ def test_get_current_owner_is_resilient_to_upsert_failure():
 
     current_user = {"user_id": OWNER_A, "role": "owner", "email": None, "name": None, "picture": None}
     # Must not raise — the profile write is best-effort telemetry.
-    assert get_current_owner(current_user, BoomRepo()) is current_user
+    assert get_current_owner(_request(), current_user, BoomRepo()) is current_user
+
+
+def test_get_current_owner_publishes_the_uid_for_the_usage_middleware():
+    """The middleware runs outside the app and cannot resolve an owner itself; this
+    handoff is the only thing that tells it whose request this was."""
+    class NoopRepo:
+        def upsert(self, **kwargs):
+            return None
+
+    request = _request()
+    get_current_owner(request, {"user_id": OWNER_A, "role": "owner"}, NoopRepo())
+
+    assert request.state.owner_id == OWNER_A
+    assert request.scope["state"][OWNER_ID_STATE_KEY] == OWNER_A
+
+
+def test_a_request_without_a_uid_publishes_nothing():
+    class NoopRepo:
+        def upsert(self, **kwargs):
+            return None
+
+    request = _request()
+    get_current_owner(request, {"role": "owner"}, NoopRepo())
+
+    assert OWNER_ID_STATE_KEY not in request.scope["state"]
 
 
 # --- Endpoint -----------------------------------------------------------------

@@ -22,9 +22,10 @@ Multi-tenant: all data is scoped to an authenticated owner via a verified Fireba
 | `app/config.py` | Pydantic `Settings` — reads all env vars from `.env` |
 | `app/database.py` | SQLAlchemy engine, `SessionLocal`, `get_db()` dependency |
 | `app/clock.py` | The only source of "now". `utc_now_naive()` for anything written to or compared against a timestamp column, `utc_today()` for "which UTC day is it", `utc_now()` for aware values that stay in Python. Never `datetime.utcnow()` (naive and deprecated) and never `date.today()` against a stored timestamp — that is the local calendar, and it disagrees with UTC for as many hours as the host is offset. Business dates (lease start, payment date, report ranges) are the *user's* calendar and keep using `date.today()` |
-| `app/api/dependencies.py` | All DI factories: auth, repos, services |
+| `app/api/dependencies.py` | All DI factories: auth, repos, services. `get_current_owner` also stashes the uid on `request.state` for `ClientUsageMiddleware`, which runs outside the app and must not verify a token a second time |
+| `app/api/client_usage_middleware.py` | Raw-ASGI middleware feeding the client-usage counters. Raw rather than `BaseHTTPMiddleware` because `/agent/chat` streams SSE |
 | `app/api/routers/` | One file per domain (properties, renters, transactions, suppliers, expense_categories, users, reports, notifications, notification_preferences, device_tokens, document_extraction, agent, countries — the last is unauthenticated static reference data, since the signup country gate runs before there is an account) plus `internal.py` (`/internal/run-reminders`, `/internal/run-cpi-indexing`, `/internal/run-retention`, `/internal/run-nightly-rollup` — cron-only; the guard is declared on the router, so every route in the file is covered) |
-| `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion; `job_runs` records every `/internal/*` invocation (status + summary, no tenant data) so a stalled external scheduler is discoverable — never swept by retention, and it is what `run-nightly-rollup` reads to decide whether a job has gone stale |
+| `app/models/` | SQLAlchemy declarative models. `activity_log` records deletions (a trace, not a copy — no soft delete anywhere, so reads never need a `deleted_at` filter); `deleted_accounts` is the anonymous tombstone left by account deletion; `job_runs` records every `/internal/*` invocation (status + summary, no tenant data) so a stalled external scheduler is discoverable — never swept by retention, and it is what `run-nightly-rollup` reads to decide whether a job has gone stale; `owner_client_days` is one row per owner per client per day with a `requests` and a `writes` counter, fed from the `X-Client-*` headers (see README, *Which client owners use*) |
 | `app/repositories/` | Data access layer — all DB queries live here |
 | `app/services/` | Business logic — validation, FK checks, transformations. `export_service.py` builds the `GET /users/me/export` archive: an openpyxl workbook (a sheet per record type) plus the owner's Storage files, degrading to workbook-only if Storage is unavailable |
 | `app/schemas/` | Pydantic schemas: `Create`, `Update`, `Read` variants per domain |
@@ -54,7 +55,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `FIREBASE_PROJECT_ID` | Yes | Audience for ID-token verification |
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON as a string |
-| `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected) |
+| `CORS_ORIGINS` | No | Comma-separated allowed browser origins; default `http://localhost:5173` (mobile is unaffected). The allowed *headers* list must keep covering `X-Client-App`/`-Platform`/`-Version` or every web request dies at the preflight — `allow_headers=["*"]` covers them, and `tests/test_client_usage.py` checks it |
 | `SENTRY_DSN` | No | Sentry errors + backend tracing + the single `nightly-jobs` cron monitor (see README, *The nightly rollup*); empty disables it entirely (no init, no network calls) |
 | `LOG_LEVEL` | No | Root log level; default `INFO`. See `app/logging_config.py` |
 | `ENVIRONMENT` | No | Tags Sentry events. Normally leave unset — Railway's injected environment name is used automatically. Set it only to override |
@@ -88,7 +89,7 @@ is what makes the caps burst-safe under concurrency.
 | `AGENT_GLOBAL_DAILY_COST_LIMIT_USD` | `20.0` | App-wide kill switch; `0` disables it |
 | `AGENT_RESERVE_COST_USD` | `0.25` | Provisional charge per turn, reconciled when it finishes |
 | `AGENT_HISTORY_MAX_MESSAGES` | `40` | Recent messages replayed to the model |
-| `AGENT_RETENTION_DAYS` | `90` | Age-out for conversations. One of three windows swept by `POST /internal/run-retention` (with `ACTIVITY_LOG_RETENTION_DAYS` and `NOTIFICATION_RETENTION_DAYS`, both `365`). `0` disables a class; a window without a scheduled job deletes nothing. `?dry_run=true` counts without deleting |
+| `AGENT_RETENTION_DAYS` | `90` | Age-out for conversations. One of four windows swept by `POST /internal/run-retention` (with `ACTIVITY_LOG_RETENTION_DAYS`, `NOTIFICATION_RETENTION_DAYS` and `CLIENT_USAGE_RETENTION_DAYS`, all `365`). `0` disables a class; a window without a scheduled job deletes nothing. `?dry_run=true` counts without deleting |
 
 Tables: `agent_conversations`, `agent_messages`, `agent_usage_logs` (`app/models/agent.py`). All
 ten tools in `app/services/agent_tools.py` are **read-only** — the agent answers and cites, it

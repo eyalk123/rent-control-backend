@@ -246,6 +246,7 @@ has its own window and `0` disables that class; the response names the disabled 
 | `AGENT_RETENTION_DAYS` | `90` | Chat conversations, by last-updated, with their messages. The shortest window because `agent_messages` holds tenant PII verbatim. Usage logs are detached, not deleted — cost history has no PII |
 | `ACTIVITY_LOG_RETENTION_DAYS` | `365` | The deletion trace. Its `label` holds names and addresses, but its job is answering "what happened months ago?", so it outlives the chats |
 | `NOTIFICATION_RETENTION_DAYS` | `365` | Sent-notification history. **`cpi_rent_change` is the one exception**: it is kept past the window while the renter's lease is still running (`terminated_on` or `lease_end` in the future), and ages out normally once the lease has ended. It is the only point-in-time record of the amount the owner was shown, and the calculation behind it is not reproducible — leases routinely run longer than a year |
+| `CLIENT_USAGE_RETENTION_DAYS` | `365` | `owner_client_days` — which client each owner worked in, per day (see [Which client owners use](#which-client-owners-use)). Counts only, no PII, but owner-scoped behavioural data, and a year answers every question it exists for |
 
 Not swept: `document_extraction_logs` (scanner-quality telemetry, holds no lease content) and
 `agent_usage_logs` (cost only). Both are kept indefinitely on purpose.
@@ -350,6 +351,57 @@ lets them turn it off again — but if that matters, use
 'tours_disabled'))::text;` instead, which keeps the opt-out and drops both progress maps. Either
 statement is safe to read back: `OwnerRepository._decode_tour_state` fills in missing maps and
 coerces a null `tours_disabled` to `False`, so a partial blob degrades to "seen nothing".
+
+### Which client owners use
+
+Two clients, one backend. Both used to send only `Content-Type` and `Authorization`, so every
+request looked identical to the server and nothing said where owners actually work — which meant
+no evidence on which to split effort between mobile and web. `legal_acceptances.platform` records
+where someone *signed up* and `device_tokens.platform` where push was registered; neither answers
+this.
+
+Both clients now send three headers on every authenticated request:
+
+| Header | Values | Answers |
+|---|---|---|
+| `X-Client-App` | `mobile` \| `web` | Which product |
+| `X-Client-Platform` | `ios` \| `android` \| `web` | Which OS |
+| `X-Client-Version` | e.g. `1.4.2`, or a short commit SHA on web | Which build |
+
+`app` and `platform` are separate because the **mobile app can run in a browser** (the Expo web
+preview, where `Platform.OS === 'web'`). It still reports `app: mobile`. A single header would
+merge that with the real web app and destroy the distinction the whole measurement exists for.
+
+`ClientUsageMiddleware` accumulates them in memory — keyed by `(owner, UTC day, app, platform)` —
+and a background task flushes into **`owner_client_days`** once a minute and again on shutdown. No
+database write is on the request path. See `app/services/client_usage_service.py` for why the
+upsert must *add* rather than set (more than one Railway worker), and why the day is resolved when
+the request arrives rather than at flush time (midnight).
+
+Each row carries two counters, and the difference between them is the point: `requests` is
+attention, `writes` is work. A five-second app open is `requests: 3, writes: 0`; an evening of
+recording payments is `requests: 140, writes: 22`. **Any "where does the work happen" chart is
+built on `writes`** — never on row counts or `requests`, both of which score a glance the same as
+an evening. Note that an owner active on both clients in a period counts in both, so client shares
+of *owners* sum to more than 100%; shares of `writes` do not.
+
+What counts as a write is an explicit allowlist of `(method, path)` pairs, not the HTTP method.
+Method alone fails in both directions here: `POST /device-tokens`, `POST /users/me/legal` and
+`PATCH /users/me/tour-state` fire automatically on app open and are not work, while the two report
+exports are `GET` and are. A new endpoint is ignored until someone opts it in — the safe direction.
+
+```sql
+-- Share of real work by client, last 30 days.
+select app, sum(writes) as writes, sum(requests) as requests, count(distinct owner_id) as owners
+from owner_client_days
+where day >= current_date - 30
+group by app order by writes desc;
+```
+
+The headers are also the reason `CORS_ORIGINS` needs no change but the allowed-header list does:
+the browser preflights them, and a CORS config that rejects them fails every web request outright
+with nothing in the server log. `allow_headers=["*"]` in `app/main.py` covers them today, and
+`tests/test_client_usage.py` preflights them to keep it that way.
 
 ### Knowing whether the jobs ran
 

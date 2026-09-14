@@ -19,6 +19,7 @@ from app.clock import utc_now_naive
 from app.config import settings
 from app.models.activity_log import ActivityLog
 from app.models.notification import Notification, NotificationTypeEnum
+from app.models.owner_client_day import OwnerClientDay
 from app.models.renter import Renter
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.renter_repository import effective_lease_end
@@ -80,6 +81,7 @@ class RetentionService:
         self._sweep_agent_conversations(result, dry_run)
         self._sweep_activity_log(result, dry_run)
         self._sweep_notifications(result, dry_run)
+        self._sweep_client_usage(result, dry_run)
 
         if dry_run:
             self.db.rollback()
@@ -137,6 +139,20 @@ class RetentionService:
             column=Notification.sent_at,
             days=settings.NOTIFICATION_RETENTION_DAYS,
             extra_where=~_cpi_notification_for_an_active_renter(),
+        )
+
+    def _sweep_client_usage(self, result: RetentionResult, dry_run: bool) -> None:
+        """Swept on `last_seen_at`, not on `day`: the two agree for every row, and this
+        keeps the sweep identical in shape to every other one here (a DateTime column
+        against a datetime cutoff) rather than introducing a second comparison style for
+        one table."""
+        self._sweep_by_column(
+            result,
+            dry_run,
+            name="owner_client_days",
+            model=OwnerClientDay,
+            column=OwnerClientDay.last_seen_at,
+            days=settings.CLIENT_USAGE_RETENTION_DAYS,
         )
 
     def _sweep_by_column(

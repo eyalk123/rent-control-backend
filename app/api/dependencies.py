@@ -3,7 +3,7 @@ from typing import Annotated
 
 import requests as http_requests
 import sentry_sdk
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.exceptions import TransportError
 from google.auth.transport import requests as google_requests
@@ -93,6 +93,7 @@ def get_owner_repository(db: Annotated[Session, Depends(get_db)]) -> OwnerReposi
 
 
 def get_current_owner(
+    request: Request,
     current_user: Annotated[dict, Depends(get_current_user)],
     owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
 ) -> dict:
@@ -106,6 +107,12 @@ def get_current_owner(
     uid = current_user.get("user_id")
     if uid:
         sentry_sdk.set_user({"id": uid})
+        # The only place an owner id and the raw request meet. ClientUsageMiddleware runs
+        # outside the app and so cannot resolve a uid itself; rather than verify the token
+        # a second time out there, it reads what this line leaves behind. Every
+        # authenticated router carries this dependency, so every authenticated request is
+        # covered — and only those.
+        request.state.owner_id = uid
 
     try:
         owner_repository.upsert(

@@ -137,7 +137,15 @@ class TestAccountDeletionIsComplete:
         from app.services.user_service import UserService
 
         source = inspect.getsource(UserService.delete_account)
-        for table in ("CountryNotifyRequest", "Property", "Renter", "Transaction"):
+        for table in (
+            "CountryNotifyRequest",
+            "Property",
+            "Renter",
+            "Transaction",
+            # Holds no PII — only counts — but it is owner-scoped behavioural data and is
+            # covered by the same promise as the rest.
+            "OwnerClientDay",
+        ):
             assert table in source, f"delete_account no longer sweeps {table}"
 
 

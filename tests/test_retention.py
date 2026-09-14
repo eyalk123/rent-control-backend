@@ -13,6 +13,7 @@ from app.config import settings
 from app.models.activity_log import ActivityLog
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 from app.models.notification import Notification, NotificationTypeEnum
+from app.models.owner_client_day import OwnerClientDay
 from tests.conftest import OWNER_A
 from tests.factories import make_renter
 
@@ -41,15 +42,20 @@ def _seed(db_session, *, age_days: int) -> None:
             owner_id=OWNER_A, type=NotificationTypeEnum.OVERDUE, entity_id=1,
             period_key="2025-03", sent_at=when,
         ),
+        OwnerClientDay(
+            owner_id=OWNER_A, day=when.date(), app="web", platform="web",
+            requests=12, writes=3, first_seen_at=when, last_seen_at=when,
+        ),
     ])
     db_session.commit()
 
 
-def _enable(monkeypatch, agent=90, activity=365, notifications=365):
+def _enable(monkeypatch, agent=90, activity=365, notifications=365, client_usage=365):
     monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", SECRET)
     monkeypatch.setattr(settings, "AGENT_RETENTION_DAYS", agent)
     monkeypatch.setattr(settings, "ACTIVITY_LOG_RETENTION_DAYS", activity)
     monkeypatch.setattr(settings, "NOTIFICATION_RETENTION_DAYS", notifications)
+    monkeypatch.setattr(settings, "CLIENT_USAGE_RETENTION_DAYS", client_usage)
 
 
 def test_requires_the_cron_secret(client, monkeypatch):
@@ -63,13 +69,19 @@ def test_sweeps_every_class_past_its_window(client, db_session, monkeypatch):
 
     body = client.post("/internal/run-retention", headers=_headers()).json()
 
-    assert body["swept"] == {"agent_conversations": 1, "activity_log": 1, "notifications": 1}
+    assert body["swept"] == {
+        "agent_conversations": 1,
+        "activity_log": 1,
+        "notifications": 1,
+        "owner_client_days": 1,
+    }
     assert body["disabled"] == []
     db_session.expire_all()
     assert db_session.scalars(select(AgentConversation)).all() == []
     assert db_session.scalars(select(AgentMessage)).all() == []
     assert db_session.scalars(select(ActivityLog)).all() == []
     assert db_session.scalars(select(Notification)).all() == []
+    assert db_session.scalars(select(OwnerClientDay)).all() == []
 
 
 def test_leaves_data_inside_its_window_alone(client, db_session, monkeypatch):
@@ -78,7 +90,12 @@ def test_leaves_data_inside_its_window_alone(client, db_session, monkeypatch):
 
     body = client.post("/internal/run-retention", headers=_headers()).json()
 
-    assert body["swept"] == {"agent_conversations": 0, "activity_log": 0, "notifications": 0}
+    assert body["swept"] == {
+        "agent_conversations": 0,
+        "activity_log": 0,
+        "notifications": 0,
+        "owner_client_days": 0,
+    }
     db_session.expire_all()
     assert len(db_session.scalars(select(AgentConversation)).all()) == 1
     assert len(db_session.scalars(select(ActivityLog)).all()) == 1
@@ -91,7 +108,12 @@ def test_windows_are_independent(client, db_session, monkeypatch):
 
     body = client.post("/internal/run-retention", headers=_headers()).json()
 
-    assert body["swept"] == {"agent_conversations": 1, "activity_log": 0, "notifications": 0}
+    assert body["swept"] == {
+        "agent_conversations": 1,
+        "activity_log": 0,
+        "notifications": 0,
+        "owner_client_days": 0,
+    }
     db_session.expire_all()
     assert db_session.scalars(select(AgentConversation)).all() == []
     assert len(db_session.scalars(select(ActivityLog)).all()) == 1
@@ -104,7 +126,12 @@ def test_dry_run_counts_without_deleting(client, db_session, monkeypatch):
     body = client.post("/internal/run-retention?dry_run=true", headers=_headers()).json()
 
     assert body["dry_run"] is True
-    assert body["swept"] == {"agent_conversations": 1, "activity_log": 1, "notifications": 1}
+    assert body["swept"] == {
+        "agent_conversations": 1,
+        "activity_log": 1,
+        "notifications": 1,
+        "owner_client_days": 1,
+    }
     db_session.expire_all()
     assert len(db_session.scalars(select(AgentConversation)).all()) == 1
     assert len(db_session.scalars(select(AgentMessage)).all()) == 1
@@ -127,11 +154,11 @@ def test_usage_logs_survive_and_are_detached(client, db_session, monkeypatch):
 
 def test_disabled_classes_are_named_not_silently_skipped(client, db_session, monkeypatch):
     _seed(db_session, age_days=400)
-    _enable(monkeypatch, agent=0, activity=0, notifications=365)
+    _enable(monkeypatch, agent=0, activity=0, notifications=365, client_usage=0)
 
     body = client.post("/internal/run-retention", headers=_headers()).json()
 
-    assert sorted(body["disabled"]) == ["activity_log", "agent_conversations"]
+    assert sorted(body["disabled"]) == ["activity_log", "agent_conversations", "owner_client_days"]
     assert body["swept"] == {"notifications": 1}
     db_session.expire_all()
     assert len(db_session.scalars(select(AgentConversation)).all()) == 1

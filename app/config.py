@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # window while the renter's lease is still running, because it is the only
     # point-in-time record of the figure the owner was shown and leases outlast a year.
     NOTIFICATION_RETENTION_DAYS: int = 365
+    # Which client each owner worked in, per day (owner_client_days). Counts only — no
+    # PII at all — but it is owner-scoped behavioural data and a year of it answers every
+    # question the table exists for, so it ages out on the same window as the activity log.
+    CLIENT_USAGE_RETENTION_DAYS: int = 365
     # Deliberately NOT swept: document_extraction_logs (scanner-quality telemetry, holds no
     # lease content) and agent_usage_logs (cost only, no PII — retention detaches them from
     # deleted conversations rather than removing them).

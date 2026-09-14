@@ -1,6 +1,12 @@
+import asyncio
+import contextlib
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.client_usage_middleware import ClientUsageMiddleware
 from app.api.dependencies import get_current_owner
 from app.api.routers import (
     agent,
@@ -21,6 +27,7 @@ from app.api.routers import (
 from app.config import settings
 from app.logging_config import configure_logging
 from app.monitoring import init_sentry
+from app.services.client_usage_service import recorder
 
 # First, so that anything the rest of this module logs is actually formatted and
 # emitted. Uvicorn leaves the root logger without handlers; see app/logging_config.py.
@@ -31,15 +38,50 @@ configure_logging()
 # nothing — silently.
 init_sentry()
 
-app = FastAPI(title="Property Management API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Own the client-usage flusher for the life of the process.
+
+    The counters live in memory (see `app/services/client_usage_service.py`), so they need
+    both a periodic drain and a final one: Railway sends SIGTERM with a drain period, which
+    is long enough for the shutdown flush below to finish. A hard kill loses at most one
+    flush interval of telemetry, which is an acceptable trade for keeping a database write
+    off the hot path of every request.
+    """
+    flusher = asyncio.create_task(recorder.run_flush_loop())
+    try:
+        yield
+    finally:
+        flusher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await flusher
+        # Sync DB work, so off the loop. Swallowed inside flush() — a failure here would
+        # otherwise be raised during shutdown, where nothing can act on it.
+        await run_in_threadpool(recorder.flush)
+
+
+app = FastAPI(title="Property Management API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
+    # Covers the three X-Client-* telemetry headers the web app now sends: on a preflight
+    # Starlette echoes the browser's `Access-Control-Request-Headers` back rather than
+    # replying with a literal "*", so the wildcard really does allow them. Narrowing this
+    # to an explicit list without including `CLIENT_HEADERS` would kill every web request
+    # at the preflight, with nothing in the server log to say why — which is why
+    # `test_client_usage.py` preflights them against the configured origin.
     allow_headers=["*"],
 )
+
+# Outermost, so it sees the final status of every response — including one produced by an
+# exception handler. It records nothing unless a route has already resolved an owner id
+# onto the request scope, so unauthenticated traffic, CORS preflights, /health and the
+# /internal cron jobs all pass straight through.
+app.add_middleware(ClientUsageMiddleware)
 
 # Every authenticated router refreshes the owner's profile (throttled) via this dependency.
 # `internal` is excluded because it has no Firebase user to refresh — it carries its own

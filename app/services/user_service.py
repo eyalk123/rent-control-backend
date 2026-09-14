@@ -16,6 +16,7 @@ from app.models.notification import Notification
 from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings
 from app.models.owner import Owner
+from app.models.owner_client_day import OwnerClientDay
 from app.models.property import Property
 from app.models.renter import Renter
 from app.models.report_export import ReportExport
@@ -73,6 +74,12 @@ class UserService:
         self.db.execute(delete(LegalAcceptance).where(LegalAcceptance.owner_id == owner_id))
         self.db.execute(
             delete(CountryNotifyRequest).where(CountryNotifyRequest.owner_id == owner_id)
+        )
+
+        # Which client they worked in, per day. Counts only, no PII — but it is
+        # owner-scoped and must not outlive the account any more than the rest of this does.
+        self.db.execute(
+            delete(OwnerClientDay).where(OwnerClientDay.owner_id == owner_id)
         )
 
         # Chat-agent data: conversations, messages, usage logs. Portfolio PII is stored
