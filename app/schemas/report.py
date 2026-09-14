@@ -26,6 +26,9 @@ class IncomeExpenseReportResponse(BaseModel):
     year: int
     owners: list[OwnerIncomeData]
     grand_total: MonthCell
+    # Which recognition basis produced these figures. Carried on the response so the PDF,
+    # the CSV and the on-screen preview all print the same answer without being told again.
+    revenue_basis: str = "accrual"
 
 
 class ExpenseLogRow(BaseModel):
@@ -73,6 +76,9 @@ class ReportExportRead(BaseModel):
     report_type: str
     year: int
     format: str
+    # None for an expense log (no revenue to recognise) and for anything exported before
+    # the choice existed, which was accrual by definition.
+    revenue_basis: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

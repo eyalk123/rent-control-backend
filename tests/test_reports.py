@@ -448,3 +448,97 @@ def test_delete_history_other_owner(client_factory, db_session):
 
     client_a = client_factory(OWNER_A)
     assert client_a.delete(f"/reports/history/{export_id}").status_code == 404
+
+
+class TestRevenueRecognitionBasis:
+    """Which year a late or early rent payment lands in.
+
+    Accrual counts December's rent as December income even if it arrived in January; cash
+    counts it when it arrived. Mid-year the two agree — at the year boundary they are the
+    whole difference, which is exactly where an annual report lands.
+    """
+
+    def _boundary_payment(self, db_session):
+        """December 2025 rent, paid 4 January 2026 — the case the two bases disagree on."""
+        prop = make_property(db_session, owner_id=OWNER_A, property_owner="Alice")
+        make_transaction(
+            db_session,
+            owner_id=OWNER_A,
+            type=TransactionTypeEnum.REVENUE,
+            property_id=prop.id,
+            amount=5000,
+            date_of_payment=date(2026, 1, 4),
+            month_for=date(2025, 12, 1),
+        )
+        return prop
+
+    def test_accrual_puts_it_in_the_year_it_was_for(self, db_session):
+        self._boundary_payment(db_session)
+        data = get_income_expense_data(db_session, OWNER_A, 2025, "accrual")
+        assert data.grand_total.revenue == Decimal("5000")
+        assert get_income_expense_data(
+            db_session, OWNER_A, 2026, "accrual"
+        ).grand_total.revenue == Decimal("0")
+
+    def test_cash_puts_it_in_the_year_it_arrived(self, db_session):
+        self._boundary_payment(db_session)
+        assert get_income_expense_data(
+            db_session, OWNER_A, 2025, "cash"
+        ).grand_total.revenue == Decimal("0")
+        assert get_income_expense_data(
+            db_session, OWNER_A, 2026, "cash"
+        ).grand_total.revenue == Decimal("5000")
+
+    def test_the_default_is_accrual(self, db_session):
+        """A caller that does not pass a basis gets exactly what this always returned —
+        which is what keeps every existing client unchanged."""
+        self._boundary_payment(db_session)
+        assert (
+            get_income_expense_data(db_session, OWNER_A, 2025).grand_total.revenue
+            == get_income_expense_data(db_session, OWNER_A, 2025, "accrual").grand_total.revenue
+        )
+
+    def test_the_response_says_which_basis_it_used(self, db_session):
+        self._boundary_payment(db_session)
+        assert get_income_expense_data(db_session, OWNER_A, 2025).revenue_basis == "accrual"
+        assert (
+            get_income_expense_data(db_session, OWNER_A, 2025, "cash").revenue_basis == "cash"
+        )
+
+    def test_rows_and_totals_agree_under_cash(self, db_session):
+        """The SQL filter and the Python bucketing must use the same date, or a row would
+        be selected by one rule and counted by the other."""
+        self._boundary_payment(db_session)
+        data = get_income_expense_data(db_session, OWNER_A, 2026, "cash")
+        from_rows = sum(
+            cell.revenue
+            for owner in data.owners
+            for prop in owner.properties
+            for cell in prop.months.values()
+        )
+        assert from_rows == data.grand_total.revenue == Decimal("5000")
+
+    def test_expenses_do_not_move(self, db_session):
+        """Expenses already count on the date they were paid under both bases."""
+        prop = make_property(db_session, owner_id=OWNER_A, property_owner="Alice")
+        make_transaction(
+            db_session,
+            owner_id=OWNER_A,
+            type=TransactionTypeEnum.EXPENSE,
+            property_id=prop.id,
+            amount=300,
+            date_of_payment=date(2026, 1, 4),
+        )
+        accrual = get_income_expense_data(db_session, OWNER_A, 2026, "accrual")
+        cash = get_income_expense_data(db_session, OWNER_A, 2026, "cash")
+        assert accrual.grand_total.expenses == cash.grand_total.expenses == Decimal("300")
+
+    def test_an_unknown_basis_is_rejected_by_the_endpoint(self, client):
+        assert client.get("/reports/income-expense?year=2025&basis=nonsense").status_code == 422
+
+    def test_the_history_records_which_basis_was_used(self, client, db_session):
+        self._boundary_payment(db_session)
+        assert client.get("/reports/income-expense?year=2025&format=pdf&basis=cash").status_code == 200
+        rows = client.get("/reports/history").json()
+        assert rows, "expected a history row"
+        assert rows[0]["revenue_basis"] == "cash"

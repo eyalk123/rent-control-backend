@@ -42,12 +42,16 @@ def income_expense_report(
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
     lang: str = Query("en", pattern="^(en|he)$"),
+    # Chosen per report, next to the language, rather than stored on the account — a stored
+    # preference would silently re-interpret history. Defaults to accrual, so a caller that
+    # does not pass it gets exactly what this endpoint always returned.
+    basis: str = Query("accrual", pattern="^(accrual|cash)$"),
 ):
-    data = get_income_expense_data(db, current_user["user_id"], year)
+    data = get_income_expense_data(db, current_user["user_id"], year, basis)
 
     if format == "csv":
         content = generate_income_expense_csv(data, lang).encode("utf-8-sig")
-        repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="csv"))
+        repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="csv", revenue_basis=basis))
         return Response(
             content=content,
             media_type="text/csv",
@@ -55,7 +59,7 @@ def income_expense_report(
         )
 
     content = generate_income_expense_pdf(data, lang, _owner_currency(db, current_user["user_id"]))
-    repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf"))
+    repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf", revenue_basis=basis))
     return Response(
         content=content,
         media_type="application/pdf",

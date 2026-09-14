@@ -10,6 +10,13 @@ from sqlalchemy import and_, extract, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.countries.config import CountryConfig
+
+# Revenue recognition. A report says which one it used, because two reports for the same
+# year that differ by a month's rent, with nothing explaining why, is worse than not
+# offering the choice at all.
+ACCRUAL = "accrual"
+CASH = "cash"
+SUPPORTED_BASES = (ACCRUAL, CASH)
 from app.services import country_service
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.report import (
@@ -73,6 +80,8 @@ UI_TEXT = {
         "amount": "Amount",
         "notes": "Notes",
         "summary_title": "Summary by Category & Property",
+        "basis_accrual": "Revenue recognised when due (accrual)",
+        "basis_cash": "Revenue recognised when received (cash)",
         "multi_note": (
             "An expense with several categories is counted under the first; the list above "
             "shows all of them."
@@ -101,6 +110,8 @@ UI_TEXT = {
         "amount": "סכום",
         "notes": "הערות",
         "summary_title": "סיכום לפי קטגוריה ונכס",
+        "basis_accrual": "הכנסה נרשמת לפי מועד החיוב (מצטבר)",
+        "basis_cash": "הכנסה נרשמת לפי מועד התקבול (מזומן)",
         "multi_note": "הוצאה עם כמה קטגוריות נספרת תחת הראשונה; הרשימה שלמעלה מציגה את כולן.",
         "currency": "₪",
     },
@@ -289,13 +300,35 @@ def _bidi_kwargs(kwargs: dict) -> dict:
 # Data assembly
 # ---------------------------------------------------------------------------
 
-def get_income_expense_data(db: Session, owner_id: str, year: int) -> IncomeExpenseReportResponse:
+def get_income_expense_data(
+    db: Session, owner_id: str, year: int, basis: str = ACCRUAL
+) -> IncomeExpenseReportResponse:
+    """The income-and-expense figures for one year, on one revenue recognition basis.
+
+    **Accrual** (the default, and what this report has always done) counts revenue toward
+    the month it was *for*: December's rent is December's income even if it arrived in
+    January. **Cash** counts it when it actually arrived, which is how an individual
+    landlord files in the US — and how an Israeli individual who keeps no double-entry
+    books reports too.
+
+    Mid-year the two agree. At the year boundary they are the whole difference, which is
+    exactly where an annual report lands.
+
+    Only *revenue* moves. Expenses already count on the date they were paid under both
+    bases, so the expense half of this report and the whole expense log are untouched.
+
+    Nothing about the data changes — both dates are already on every transaction, so this
+    is a choice of which one to group by.
+    """
     from app.models.transaction import TransactionTypeEnum
 
-    # Revenue belongs to the month it is *for*, expenses to the date they were paid. Filtering
-    # in SQL rather than in Python: this used to load the owner's entire transaction history on
-    # every run and throw away all but one year of it.
-    revenue_date = func.coalesce(Transaction.month_for, Transaction.date_of_payment)
+    # Filtering in SQL rather than in Python: this used to load the owner's entire
+    # transaction history on every run and throw away all but one year of it.
+    revenue_date = (
+        Transaction.date_of_payment
+        if basis == CASH
+        else func.coalesce(Transaction.month_for, Transaction.date_of_payment)
+    )
     stmt = (
         select(Transaction)
         .where(
@@ -330,7 +363,11 @@ def get_income_expense_data(db: Session, owner_id: str, year: int) -> IncomeExpe
             prop_addr = f"{t.property.address}, {t.property.city}" if t.property.city else t.property.address
 
         if t.type == TransactionTypeEnum.REVENUE:
-            ref_date = t.month_for or t.date_of_payment
+            # Must mirror `revenue_date` above, or a transaction selected by one rule would
+            # be bucketed by the other — and the totals would not add up to the rows.
+            ref_date = (
+                t.date_of_payment if basis == CASH else (t.month_for or t.date_of_payment)
+            )
             month = ref_date.month
             tree[prop_owner][prop_addr][month]["revenue"] += Decimal(str(t.amount))
         else:
@@ -385,6 +422,7 @@ def get_income_expense_data(db: Session, owner_id: str, year: int) -> IncomeExpe
         year=year,
         owners=owners_out,
         grand_total=MonthCell(revenue=grand_revenue, expenses=grand_expenses, net=grand_revenue - grand_expenses),
+        revenue_basis=basis,
     )
 
 
@@ -518,9 +556,13 @@ class _PDF(FPDF):
         year: int,
         lang: str = DEFAULT_LANG,
         currency: CountryConfig | None = None,
+        revenue_basis: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        # None for the expense log, which has no revenue to recognise and so prints no
+        # basis line at all.
+        self.revenue_basis = revenue_basis
         self.lang = normalise_lang(lang)
         # Carried alongside the language, but resolved from the *data* rather than from the
         # reader's locale: a report is about a portfolio, and the portfolio's currency does
@@ -647,6 +689,13 @@ class _PDF(FPDF):
     def header(self):
         self.set_font(FONT, "B", 12)
         self.cell(0, 8, f"{self._title} - {self._year}", align="C", new_x="LMARGIN", new_y="NEXT")
+        # Printed on every page, under the title. Two reports for the same year that differ
+        # by a month's rent, with nothing saying why, is worse than not offering the choice
+        # — and the accountant reading this is the person who needs to know.
+        if self.revenue_basis:
+            key = "basis_cash" if self.revenue_basis == CASH else "basis_accrual"
+            self.set_font(FONT, "", 8)
+            self.cell(0, 5, _t(self.lang, key), align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def footer(self):
@@ -672,6 +721,7 @@ def generate_income_expense_pdf(
     """
     pdf = _PDF(
         "income_title", data.year, lang=lang, currency=currency,
+        revenue_basis=data.revenue_basis,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)
