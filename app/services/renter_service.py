@@ -19,6 +19,7 @@ from app.schemas.renter import (
     RenterUpdate,
 )
 from app.services import country_service
+from app.services.activity_diff import changed_fields
 from app.services.cpi_indexing_service import (
     IndexReading,
     materialize_cpi_amounts,
@@ -283,6 +284,7 @@ class RenterService:
             return None
         self._check_renter_access(renter, owner_id)
         update_dict = data.model_dump(exclude_unset=True)
+        sent = set(update_dict)
         if "property_id" in update_dict and update_dict["property_id"] is not None:
             property = self.property_repository.get_by_id(
                 update_dict["property_id"], owner_id
@@ -359,6 +361,28 @@ class RenterService:
             lease_years_raw = update_dict.get("lease_years")
             stored = lease_years_raw if lease_years_raw is not None else renter.lease_years
             update_dict.update(_lease_end_dates(lease_start, json.loads(stored)))
+
+        # Last, so the comparison sees the fully normalised values, and still before the
+        # repository applies them, so `renter` holds the old ones. The server-owned fields
+        # are excluded: they move on their own (both end dates are recomputed from the
+        # schedule, the base index and the amounts inside `lease_years` are re-materialized
+        # from CPI readings whenever the mode calls for it) and are not evidence of anyone
+        # having edited anything.
+        if self.activity_log_repository is not None:
+            derived = {"lease_end", "contract_end", "cpi_base_index"}
+            if "lease_years" not in sent:
+                derived.add("lease_years")
+            changed = changed_fields(renter, update_dict, ignore=derived)
+            if changed:
+                self.activity_log_repository.record_action(
+                    owner_id=owner_id,
+                    action="update",
+                    entity_type="renter",
+                    entity_id=renter.id,
+                    label=f"{renter.first_name} {renter.last_name}".strip(),
+                    details={"fields": changed},
+                )
+
         return self.renter_repository.update(renter, update_dict)
 
     def terminate_lease(self, renter_id: int, data: RenterTerminate, owner_id: str):
