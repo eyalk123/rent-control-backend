@@ -148,6 +148,8 @@ def test_dashboard_shell_is_public_but_carries_no_data(anon_client):
     assert res.headers["cache-control"] == "no-store"
     body = res.text
     assert "login-form" in body
+    # Google is the sign-in the admin actually uses; email/password is the fallback.
+    assert "google-btn" in body
     # The shell must ship an empty frame, never numbers.
     assert "__FIREBASE_CONFIG__" not in body, "config placeholder was not substituted"
     for marker in ("live_owners", "step_signed_up", "owner_client_days"):

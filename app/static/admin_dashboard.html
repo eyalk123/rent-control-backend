@@ -199,6 +199,20 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .login button { width: 100%; }
 .login .msg { margin-top: 12px; font-size: 12.5px; }
 .login .msg.error { color: var(--error); }
+.login button.google {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--surface); color: var(--text-primary);
+  border: 1px solid var(--outline); border-radius: var(--radius-sm);
+  padding: 10px 16px; font: inherit; font-weight: 550; cursor: pointer;
+}
+.login button.google:hover { background: var(--bg); }
+.login .divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 16px 0 14px; color: var(--muted); font-size: 12px;
+}
+.login .divider::before, .login .divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--outline);
+}
 @media (max-width: 560px) {
   .funnel-step { grid-template-columns: 1fr; }
   .funnel-label { text-align: left; }
@@ -212,10 +226,24 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
   <form class="login" id="login-form">
     <h2>Rent Control metrics</h2>
     <p>Internal dashboard. Sign in with your Rent Control account.</p>
+
+    <button class="google" type="button" id="google-btn">
+      <!-- Inline so the button needs no external image request. -->
+      <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+        <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/>
+        <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/>
+        <path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"/>
+        <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/>
+      </svg>
+      Continue with Google
+    </button>
+
+    <div class="divider"><span>or</span></div>
+
     <label for="email">Email</label>
-    <input id="email" type="email" autocomplete="username" required>
+    <input id="email" type="email" autocomplete="username">
     <label for="password">Password</label>
-    <input id="password" type="password" autocomplete="current-password" required>
+    <input id="password" type="password" autocomplete="current-password">
     <button class="primary" type="submit" id="login-btn">Sign in</button>
     <div class="msg" id="login-msg" hidden></div>
   </form>
@@ -314,16 +342,61 @@ function initAuth() {
   });
 }
 
+function showLoginError(err) {
+  const msg = $('#login-msg');
+  msg.hidden = false;
+  msg.className = 'msg error';
+  const code = err && err.code;
+  if (code === 'auth/unauthorized-domain') {
+    // The most likely failure on a fresh deployment: Firebase only runs the OAuth flow on
+    // domains it has been told about, and this page is on the backend's domain, which is
+    // not the one the web app uses.
+    msg.textContent =
+      'Firebase has not authorised this domain for sign-in. Add ' + location.hostname +
+      ' in the Firebase console under Authentication → Settings → Authorized domains, ' +
+      'then reload.';
+  } else if (code === 'auth/popup-blocked') {
+    msg.textContent = 'Your browser blocked the sign-in popup. Allow popups for this site and try again.';
+  } else if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    msg.textContent = 'Sign-in was cancelled.';
+  } else {
+    msg.textContent = (err && err.message) ? err.message : 'Sign-in failed.';
+  }
+}
+
+$('#google-btn').addEventListener('click', async () => {
+  const msg = $('#login-msg');
+  msg.hidden = false; msg.className = 'msg'; msg.textContent = 'Opening Google…';
+  $('#google-btn').disabled = true;
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    // Always ask which account, rather than silently reusing whichever Google session the
+    // browser happens to hold — the admin account may not be the default one.
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await firebase.auth().signInWithPopup(provider);
+  } catch (err) {
+    showLoginError(err);
+  } finally {
+    $('#google-btn').disabled = false;
+  }
+});
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const email = $('#email').value.trim();
+  const password = $('#password').value;
   const msg = $('#login-msg');
+  if (!email || !password) {
+    msg.hidden = false; msg.className = 'msg error';
+    msg.textContent = 'Enter an email and password, or use Continue with Google.';
+    return;
+  }
   msg.hidden = false; msg.className = 'msg'; msg.textContent = 'Signing in…';
   $('#login-btn').disabled = true;
   try {
-    await firebase.auth().signInWithEmailAndPassword($('#email').value, $('#password').value);
+    await firebase.auth().signInWithEmailAndPassword(email, password);
   } catch (err) {
-    msg.className = 'msg error';
-    msg.textContent = err && err.message ? err.message : 'Sign-in failed.';
+    showLoginError(err);
     $('#login-btn').disabled = false;
   }
 });
