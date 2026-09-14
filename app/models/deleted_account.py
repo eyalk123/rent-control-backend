@@ -9,10 +9,10 @@ reversible to a Firebase uid, and counts describe volume, not people. Nothing he
 data, which is the whole point — if a field would identify anyone, it does not belong in this
 table.
 """
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -21,7 +21,7 @@ class DeletedAccount(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_id_hash = Column(String, nullable=False, index=True)
-    deleted_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    deleted_at = Column(DateTime, nullable=False, default=utc_now_naive, index=True)
     properties_count = Column(Integer, nullable=False, default=0)
     renters_count = Column(Integer, nullable=False, default=0)
     transactions_count = Column(Integer, nullable=False, default=0)

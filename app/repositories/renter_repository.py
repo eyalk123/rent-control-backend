@@ -8,7 +8,7 @@ from app.models.renter import Renter
 from app.models.transaction import Transaction
 
 
-def _effective_lease_end():
+def effective_lease_end():
     """The date a lease actually stops, as a SQL expression.
 
     An early termination ends the tenancy before the signed schedule does, and the
@@ -157,7 +157,7 @@ class RenterRepository:
             .where(
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
-                _effective_lease_end() >= today,
+                effective_lease_end() >= today,
                 # A missing payment day falls back to the 1st (backend-only; the
                 # column itself stays null and is never shown to the user).
                 func.coalesce(Renter.payment_day_of_month, 1) <= today.day,
@@ -214,7 +214,7 @@ class RenterRepository:
             .where(
                 Renter.owner_id == owner_id,
                 Renter.lease_start <= today,
-                _effective_lease_end() >= today,
+                effective_lease_end() >= today,
                 *_scope_conditions(property_ids, property_owners, renter_ids),
             )
         )
@@ -238,7 +238,7 @@ class RenterRepository:
         if active_only:
             stmt = stmt.where(
                 Renter.lease_start <= today,
-                _effective_lease_end() >= today,
+                effective_lease_end() >= today,
             )
         stmt = stmt.order_by(Renter.lease_start.desc())
         return list(self.session.scalars(stmt).all())

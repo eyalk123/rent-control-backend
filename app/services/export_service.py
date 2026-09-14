@@ -45,6 +45,20 @@ def _cell(value: Any) -> Any:
     return str(value)
 
 
+def _payment_frequency_label(number_of_payments: Any) -> str | None:
+    """The cadence in words, next to the raw number.
+
+    The export is read by people, and a spreadsheet column of bare 4s and 1s told them
+    nothing. A value outside the supported three is named for what it is rather than being
+    rounded into one of them.
+    """
+    if number_of_payments is None:
+        return None
+    return {12: "monthly", 4: "quarterly", 1: "yearly"}.get(
+        number_of_payments, f"{number_of_payments} per year"
+    )
+
+
 def _names(items) -> str:
     return ", ".join(sorted(c.name for c in items if getattr(c, "name", None)))
 
@@ -104,6 +118,7 @@ _RENTER_COLUMNS: list[tuple[str, Callable]] = [
     ("cpi_base_index", lambda r: r.cpi_base_index),
     ("lease_years", lambda r: r.lease_years),
     ("number_of_payments", lambda r: r.number_of_payments),
+    ("payment_frequency", lambda r: _payment_frequency_label(r.number_of_payments)),
     ("payment_type", lambda r: r.payment_type),
     ("payment_day_of_month", lambda r: r.payment_day_of_month),
     ("insurance_type", lambda r: r.insurance_type),

@@ -8,7 +8,15 @@ from freezegun import freeze_time
 
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.schemas.renter import ExtraContact, LeaseYear, RenterCreate, RenterUpdate
+from pydantic import ValidationError
+
+from app.schemas.renter import (
+    ExtraContact,
+    LeaseYear,
+    RenterCreate,
+    RenterRead,
+    RenterUpdate,
+)
 from app.services.renter_service import (
     RenterService,
     _lease_end_dates,
@@ -336,3 +344,56 @@ def test_expiry_warns_off_the_contract_term_not_the_options(db_session):
     )
     [row] = svc.get_expiring_leases(OWNER_A, days_until=90)
     assert row.lease_end_date == date(2026, 8, 1)
+
+
+# ── Payment cadence: only the three the product offers ───────────────────────
+#
+# The interval maths divides 12 by this number, so anything that is not a divisor of 12
+# describes a cadence the app cannot actually honour — 5 would silently become "every two
+# months", i.e. the stored value and the behaviour would disagree. The product offers
+# monthly / quarterly / yearly, so the API accepts exactly those and says why otherwise.
+
+
+@pytest.mark.parametrize("value", [12, 4, 1, None])
+def test_supported_payment_cadences_accepted(value):
+    assert RenterCreate(
+        first_name="A",
+        last_name="B",
+        phone="1",
+        lease_years=[LeaseYear(amount=1000, type="contract")],
+        number_of_payments=value,
+    ).number_of_payments == value
+    assert RenterUpdate(number_of_payments=value).number_of_payments == value
+
+
+@pytest.mark.parametrize("value", [0, 2, 3, 5, 6, 24, 365, -5])
+def test_unsupported_payment_cadence_rejected_with_a_reason(value):
+    """Rejected rather than rounded — and the message names the three that work, because a
+    bare 422 leaves the user with no idea what to put instead."""
+    for schema in (RenterUpdate, RenterCreate):
+        with pytest.raises(ValidationError) as exc:
+            if schema is RenterCreate:
+                schema(
+                    first_name="A",
+                    last_name="B",
+                    phone="1",
+                    lease_years=[LeaseYear(amount=1000, type="contract")],
+                    number_of_payments=value,
+                )
+            else:
+                schema(number_of_payments=value)
+        assert "12 (monthly), 4 (quarterly) or 1 (yearly)" in str(exc.value)
+
+
+def test_read_schema_still_serialises_a_legacy_unsupported_cadence(db_session):
+    """A row written before the rule existed must still be readable. Constraining the read
+    side too would turn one bad row into a 500 on every list that touches it."""
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=date(2026, 1, 5),
+        number_of_payments=6,  # not offered by the forms; predates the constraint
+        lease_years=[{"amount": 5000, "type": "contract"}],
+    )
+    assert RenterRead.model_validate(renter).number_of_payments == 6

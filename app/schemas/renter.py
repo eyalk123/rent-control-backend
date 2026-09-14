@@ -97,6 +97,25 @@ def _parse_lease_years(v):
     return []
 
 
+#: Instalments per year the product offers: monthly, quarterly, yearly. The interval maths
+#: (``renter_service._payment_interval_months``) divides 12 by this, so only divisors of 12
+#: describe a cadence it can actually honour — 5 would silently become "every 2 months".
+#: Rather than accept a number and then behave as if it were a different one, the API says
+#: no and the clients only ever offer these three.
+SUPPORTED_PAYMENTS_PER_YEAR = (1, 4, 12)
+
+
+def _validate_number_of_payments(value: Optional[int]) -> Optional[int]:
+    if value is None:
+        return None
+    if value not in SUPPORTED_PAYMENTS_PER_YEAR:
+        raise ValueError(
+            "number_of_payments must be 12 (monthly), 4 (quarterly) or 1 (yearly); "
+            f"got {value}"
+        )
+    return value
+
+
 class RenterCreate(BaseModel):
     property_id: Optional[int] = None
     first_name: str
@@ -128,6 +147,11 @@ class RenterCreate(BaseModel):
         if v is not None and (v < 1 or v > 31):
             raise ValueError("payment_day_of_month must be between 1 and 31")
         return v
+
+    @field_validator("number_of_payments")
+    @classmethod
+    def payments_per_year_supported(cls, v: Optional[int]) -> Optional[int]:
+        return _validate_number_of_payments(v)
 
 
 class RenterUpdate(BaseModel):
@@ -161,6 +185,11 @@ class RenterUpdate(BaseModel):
         if v is not None and (v < 1 or v > 31):
             raise ValueError("payment_day_of_month must be between 1 and 31")
         return v
+
+    @field_validator("number_of_payments")
+    @classmethod
+    def payments_per_year_supported(cls, v: Optional[int]) -> Optional[int]:
+        return _validate_number_of_payments(v)
 
 
 class RenterTerminate(BaseModel):

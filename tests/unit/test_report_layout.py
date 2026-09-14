@@ -5,7 +5,7 @@ border, and columns drawn past the right edge of the page — without pinning PD
 """
 import pytest
 
-from app.services.report_service import FONT, FONT_FALLBACK, _PDF, _chunks
+from app.services.report_service import FONT, _PDF, _chunks
 
 
 @pytest.fixture
@@ -46,16 +46,19 @@ class TestFontFallback:
     def test_hebrew_does_not_leave_the_fallback_font_selected(self, pdf):
         """Regression: every amount after a Hebrew label used to render as nothing.
 
-        Drawing Hebrew switches `current_font` to the fallback family and leaves it there.
-        Noto Sans Hebrew has no digits and no Latin, so unless the intended font is restored,
-        the next cell's text is silently dropped — one Hebrew category name in the pivot's
-        first column blanked every figure in its row.
+        Through fpdf2 2.8.7, drawing Hebrew switched `current_font` to the fallback family
+        and left it there. Noto Sans Hebrew has no digits and no Latin, so unless the intended
+        font is restored, the next cell's text is silently dropped — one Hebrew category name
+        in the pivot's first column blanked every figure in its row.
+
+        2.8.8 restores the font itself, so assert the outcome — the next cell draws in Noto
+        Sans — and not which layer got us there. Pinning the intermediate state instead made
+        this test fail on 2.8.8 for having been *fixed* upstream.
         """
         pdf.cell(40, 5, "תיקונים")
-        assert pdf.current_font.name == FONT_FALLBACK  # fpdf2 switched, as expected
-
         pdf.cell(20, 5, "123,456")
-        assert pdf.current_font.name == FONT  # ...and we switched back before drawing
+
+        assert pdf.current_font.name == FONT
 
     def test_a_same_size_set_font_still_restores(self, pdf):
         """`set_font` with the family/style/size already recorded is a no-op in fpdf2, which

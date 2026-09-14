@@ -1,9 +1,10 @@
 import enum
-from datetime import date, datetime
+from datetime import date
 
 from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Table, Text
 from sqlalchemy.orm import relationship
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 transaction_categories = Table(
@@ -43,6 +44,14 @@ class Transaction(Base):
     date_of_payment = Column(Date, nullable=False)
     month_for = Column(Date, nullable=True)
     amount = Column(Numeric(precision=12, scale=2), nullable=False)
+    # What the lease schedule said was owed for `month_for`, frozen when the payment was
+    # recorded. Revenue only, and NULL for anything recorded before this existed — the
+    # clients fall back to the live schedule then, which is what they always did.
+    #
+    # It exists because the schedule is mutable and carries no history: editing a renter's
+    # base rent or escalation value re-derives every period, elapsed ones included, so
+    # without this a paid month starts reading as underpaid the moment the rent is raised.
+    expected_amount = Column(Numeric(precision=12, scale=2), nullable=True)
     currency_code = Column(String, nullable=False)
     category_id = Column(
         Integer,
@@ -59,8 +68,8 @@ class Transaction(Base):
     owner_id = Column(String, nullable=False)
     property_address = Column(Text, nullable=True)
     renter_name = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
     property = relationship("Property", back_populates="transactions")
     renter = relationship("Renter", back_populates="transactions")

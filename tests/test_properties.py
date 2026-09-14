@@ -51,6 +51,61 @@ def test_get_property_has_renters_flag(client, db_session):
     assert len(body["renters"]) == 1
 
 
+def test_has_renters_ignores_past_tenants(client, db_session):
+    """Occupied means a tenancy that has not finished.
+
+    Past tenants stay on `renters` — the apps list them under "previous tenants" — so the
+    flag has to look at the dates rather than the length, or a flat that was let once in
+    2020 reads as occupied for ever.
+    """
+    prop = make_property(db_session)
+    make_renter(
+        db_session, property_id=prop.id, lease_start=date(2020, 1, 1), lease_end=date(2021, 1, 1)
+    )
+
+    body = client.get(f"/properties/{prop.id}").json()
+    assert body["hasRenters"] is False
+    assert len(body["renters"]) == 1  # still returned, for the "previous tenants" list
+
+    today = date.today()
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=today - timedelta(days=30),
+        lease_end=today + timedelta(days=335),
+    )
+    assert client.get(f"/properties/{prop.id}").json()["hasRenters"] is True
+
+
+def test_has_renters_ignores_terminated_lease(client, db_session):
+    """An early termination ends the tenancy before the signed schedule does."""
+    prop = make_property(db_session)
+    today = date.today()
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=today - timedelta(days=200),
+        lease_end=today + timedelta(days=165),
+        terminated_on=today - timedelta(days=1),
+    )
+
+    assert client.get(f"/properties/{prop.id}").json()["hasRenters"] is False
+
+
+def test_has_renters_counts_an_upcoming_lease(client, db_session):
+    """A lease signed to start next month already holds the property."""
+    prop = make_property(db_session)
+    today = date.today()
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_start=today + timedelta(days=30),
+        lease_end=today + timedelta(days=395),
+    )
+
+    assert client.get(f"/properties/{prop.id}").json()["hasRenters"] is True
+
+
 def test_get_property_not_found(client):
     assert client.get("/properties/999").status_code == 404
 

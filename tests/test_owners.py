@@ -1,7 +1,8 @@
 """Tests for the owner-profile mirror: throttled upsert repository, the resilient
 get_current_owner dependency, and the /users/me profile endpoint + deletion cascade."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+from app.clock import utc_now_naive
 from app.api.dependencies import get_current_owner
 from app.models.owner import Owner
 from app.repositories.owner_repository import LAST_SEEN_THROTTLE, OwnerRepository
@@ -45,7 +46,7 @@ def test_upsert_refreshes_last_seen_when_stale(db_session):
     repo = OwnerRepository(db_session)
     repo.upsert("uid-1", "a@example.com", "Alice", None)
 
-    stale = datetime.utcnow() - LAST_SEEN_THROTTLE - timedelta(minutes=1)
+    stale = utc_now_naive() - LAST_SEEN_THROTTLE - timedelta(minutes=1)
     owner = db_session.get(Owner, "uid-1")
     owner.last_seen_at = stale
     db_session.commit()

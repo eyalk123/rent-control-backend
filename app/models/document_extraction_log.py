@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -14,8 +13,8 @@ class DocumentExtractionLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_id = Column(String, nullable=False, index=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
     # Uploaded file — metadata only (the file itself is processed in-memory and discarded).
     filename = Column(String, nullable=True)

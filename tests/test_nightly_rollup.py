@@ -5,11 +5,12 @@ themselves — they leave rows in ``job_runs`` and this endpoint reads them. Wha
 is that a job which stopped running is named in an error-level message and closes the
 check-in as ERROR rather than crashing, because a crash sends no message at all.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 import sentry_sdk
 
+from app.clock import utc_now_naive
 from app.api.routers.internal import (
     JOB_CPI_INDEXING,
     JOB_REMINDERS,
@@ -50,7 +51,7 @@ def sentry_calls(monkeypatch):
 
 
 def _seed(db_session, job_name: str, *, hours_ago: float, status: str = "ok"):
-    at = datetime.utcnow() - timedelta(hours=hours_ago)
+    at = utc_now_naive() - timedelta(hours=hours_ago)
     db_session.add(
         JobRun(job_name=job_name, started_at=at, finished_at=at, status=status)
     )

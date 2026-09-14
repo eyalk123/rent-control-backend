@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive
 from app.models.owner import Owner
 from app.schemas.tour_state import MAX_ENTRIES
 
@@ -30,7 +31,7 @@ class OwnerRepository:
         Throttled: writes only when the row is missing, a claim changed, or last_seen_at
         is stale (older than LAST_SEEN_THROTTLE). Otherwise returns the row untouched.
         """
-        now = datetime.utcnow()
+        now = utc_now_naive()
         owner = self.session.get(Owner, uid)
 
         if owner is None:

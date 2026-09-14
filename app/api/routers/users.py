@@ -9,11 +9,20 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import (
     get_current_owner,
     get_current_user,
+    get_legal_acceptance_repository,
     get_owner_repository,
     get_user_service,
 )
+from app.config import settings
 from app.database import get_db
+from app.models.legal_acceptance import LegalDocumentEnum
+from app.repositories.legal_acceptance_repository import LegalAcceptanceRepository
 from app.repositories.owner_repository import OwnerRepository
+from app.schemas.legal_acceptance import (
+    LegalAcceptanceRead,
+    LegalAcceptanceRecord,
+    LegalStatusRead,
+)
 from app.schemas.owner import OwnerRead
 from app.schemas.tour_state import TourStateRead, TourStateUpdate
 from app.services.export_service import build_export_zip
@@ -62,6 +71,65 @@ def update_my_tour_state(
         reset=payload.reset,
     )
     return TourStateRead(**state)
+
+
+def _legal_status(repository: LegalAcceptanceRepository, owner_id: str) -> LegalStatusRead:
+    latest = repository.latest_per_document(owner_id)
+    return LegalStatusRead(
+        terms=_read_or_none(latest.get(LegalDocumentEnum.TERMS)),
+        privacy=_read_or_none(latest.get(LegalDocumentEnum.PRIVACY)),
+        required_terms_version=settings.CURRENT_TERMS_VERSION,
+        required_privacy_version=settings.CURRENT_PRIVACY_VERSION,
+    )
+
+
+def _read_or_none(acceptance) -> LegalAcceptanceRead | None:
+    return LegalAcceptanceRead.model_validate(acceptance) if acceptance is not None else None
+
+
+@router.get("/me/legal", response_model=LegalStatusRead)
+def get_my_legal_status(
+    current_user: Annotated[dict, Depends(get_current_owner)],
+    legal_repository: Annotated[
+        LegalAcceptanceRepository, Depends(get_legal_acceptance_repository)
+    ],
+):
+    """Which version of each legal document this owner last accepted, and which this
+    server considers current.
+
+    Authenticated like every other /me route, and it must stay that way even though its
+    job is to be asked *before* the client will show the app: the answer is one owner's
+    acceptance history, which is theirs alone to read.
+
+    Never 404s. Every account created before this table existed has accepted nothing, and
+    "nothing" is a real answer the clients must be able to act on rather than an error.
+    """
+    return _legal_status(legal_repository, current_user["user_id"])
+
+
+@router.post("/me/legal", response_model=LegalStatusRead, status_code=status.HTTP_201_CREATED)
+def record_my_legal_acceptance(
+    payload: LegalAcceptanceRecord,
+    current_user: Annotated[dict, Depends(get_current_owner)],
+    legal_repository: Annotated[
+        LegalAcceptanceRepository, Depends(get_legal_acceptance_repository)
+    ],
+):
+    """Records that this owner accepted the given documents at the given versions.
+
+    The versions come from the client because the client is what displayed them — see
+    `LegalAcceptance.version`. One request carries both documents, since the UI asks for
+    them with a single tick.
+    """
+    for item in payload.acceptances:
+        legal_repository.record(
+            owner_id=current_user["user_id"],
+            document=item.document,
+            version=item.version,
+            locale=item.locale,
+            platform=payload.platform,
+        )
+    return _legal_status(legal_repository, current_user["user_id"])
 
 
 @router.get("/me/export")

@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, String, Text
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 from app.models.notification import NotificationTypeEnum
 
@@ -31,5 +30,5 @@ class NotificationRule(Base):
     scope_property_ids = Column(Text, nullable=False, default="[]")  # JSON array of ints
     scope_property_owners = Column(Text, nullable=False, default="[]")  # JSON array of strings
     scope_renter_ids = Column(Text, nullable=False, default="[]")  # JSON array of ints
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)

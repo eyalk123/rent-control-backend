@@ -1,5 +1,4 @@
 import enum
-from datetime import datetime
 
 from sqlalchemy import (
     Column,
@@ -11,6 +10,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -50,9 +50,10 @@ class Notification(Base):
     period_key = Column(String, nullable=False)
     offset = Column(Integer, nullable=False, default=0)
     data = Column(Text, nullable=True)  # JSON: days_overdue / days_until_expiry, amount, offset
-    # Call-time lambda (not a bare ``datetime.utcnow`` reference) so the default is
-    # re-evaluated on each insert — this lets freezegun-based tests control ``sent_at``.
-    sent_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    # ``utc_now_naive`` is passed, not called, so the default is evaluated per insert —
+    # which is what lets freezegun-based tests control ``sent_at``. UTC, like every
+    # timestamp in this codebase; see ``app/clock.py``.
+    sent_at = Column(DateTime, nullable=False, default=utc_now_naive)
     pushed_at = Column(DateTime, nullable=True)
     read_at = Column(DateTime, nullable=True)
     dismissed_at = Column(DateTime, nullable=True)

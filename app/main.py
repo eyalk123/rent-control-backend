@@ -41,7 +41,9 @@ app.add_middleware(
 )
 
 # Every authenticated router refreshes the owner's profile (throttled) via this dependency.
-# `internal` is excluded — its endpoints are unauthenticated.
+# `internal` is excluded because it has no Firebase user to refresh — it carries its own
+# guard (`verify_cron_secret`, declared on the router itself), so the missing entry here
+# means "different auth", not "no auth".
 _owner_refresh = [Depends(get_current_owner)]
 
 app.include_router(properties.router, prefix="/properties", tags=["properties"], dependencies=_owner_refresh)

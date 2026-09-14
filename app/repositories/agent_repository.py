@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from app.clock import utc_now_naive, utc_today
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 
 
@@ -38,7 +39,7 @@ class AgentRepository:
         return list(self.session.scalars(stmt).all())
 
     def touch_conversation(self, convo: AgentConversation) -> None:
-        convo.updated_at = datetime.utcnow()
+        convo.updated_at = utc_now_naive()
         self.session.commit()
 
     # -- messages -------------------------------------------------------------------
@@ -207,14 +208,14 @@ class AgentRepository:
 
     @staticmethod
     def _day_start(today: date | None) -> datetime:
-        return datetime.combine(today or datetime.utcnow().date(), datetime.min.time())
+        return datetime.combine(today or utc_today(), datetime.min.time())
 
     def count_messages_today(self, owner_id: str, today: date | None = None) -> int:
         """How many user messages the owner has sent since midnight UTC (one usage-log
         row per message, including in-flight ``pending`` reservations). Backs the per-owner
-        daily message limit. The window is UTC because ``created_at`` is stored as
-        ``datetime.utcnow()`` — mixing it with a local ``date.today()`` would reset the
-        limit hours early near the date boundary."""
+        daily message limit. The window is UTC because ``created_at`` is stored in UTC
+        (``app.clock.utc_now_naive``) — mixing it with a local ``date.today()`` would
+        reset the limit hours early near the date boundary."""
         stmt = select(func.count(AgentUsageLog.id)).where(
             AgentUsageLog.owner_id == owner_id,
             AgentUsageLog.created_at >= self._day_start(today),

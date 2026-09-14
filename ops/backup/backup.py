@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,6 +41,13 @@ from google.oauth2 import service_account
 
 PREFIX = os.getenv("BACKUP_PREFIX", "rent-control")
 DUMP_TIMEOUT = int(os.getenv("PGDUMP_TIMEOUT", "1800"))
+
+# The database is not always reachable the instant this container starts - see
+# wait_for_database. Five attempts three seconds apart, i.e. up to ~12 seconds
+# of waiting plus whatever each probe itself spends.
+READY_ATTEMPTS = 5
+READY_INTERVAL_SECONDS = 3
+READY_PROBE_TIMEOUT = 5
 
 # SENTRY_CRON_URL is the older name for the same thing; both are accepted.
 HEARTBEAT_URL = (os.getenv("HEARTBEAT_URL") or os.getenv("SENTRY_CRON_URL") or "").rstrip("/")
@@ -87,6 +95,48 @@ def require(name: str) -> str:
     if not value:
         raise ConfigError(f"missing required environment variable: {name}")
     return value
+
+
+def wait_for_database(database_url: str) -> None:
+    """Block until Postgres accepts connections, or give up and fail the run.
+
+    pg_dump is the first thing this container does against the database, and
+    the first connection of a fresh container is the fragile one: on Railway
+    the private network needs a moment to become resolvable, and a database
+    that is mid-restart refuses connections for a few seconds. Without this
+    wait, a blip that lasts two seconds costs a whole day of backups - the
+    restart policy is `Never` on purpose (a cron job that restarts on failure
+    hammers the database), so nothing retries the run for us.
+
+    pg_isready is used rather than a real connection because it is exactly this
+    probe and nothing more: it does not authenticate, does not touch a table,
+    and reports host:port only, so nothing from DATABASE_URL reaches the log.
+
+    Exhausting the attempts raises, which is the point: a database that is
+    genuinely down must still fail the run loudly enough for the dead-man's
+    switch to catch it.
+    """
+    detail = ""
+    for attempt in range(1, READY_ATTEMPTS + 1):
+        proc = subprocess.run(
+            ["pg_isready", "--dbname", database_url,
+             "--timeout", str(READY_PROBE_TIMEOUT)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=READY_PROBE_TIMEOUT + 10,
+        )
+        if proc.returncode == 0:
+            log(f"database is accepting connections (attempt {attempt})")
+            return
+        detail = (proc.stdout.decode(errors="replace").strip()
+                  or f"pg_isready exit {proc.returncode}")
+        log(f"database not ready (attempt {attempt}/{READY_ATTEMPTS}): {detail}")
+        if attempt < READY_ATTEMPTS:
+            time.sleep(READY_INTERVAL_SECONDS)
+    raise RuntimeError(
+        f"database did not accept connections after {READY_ATTEMPTS} attempts "
+        f"{READY_INTERVAL_SECONDS}s apart: {detail}"
+    )
 
 
 def run_pg_dump(database_url: str, target: Path) -> None:
@@ -169,6 +219,8 @@ def main() -> int:
 
     client = storage.Client(credentials=credentials, project=credentials.project_id)
     now = datetime.now(timezone.utc)
+
+    wait_for_database(database_url)
 
     with tempfile.TemporaryDirectory() as tmp:
         dump_path = Path(tmp) / "dump"

@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     # Deletion trace (activity_log). `label` holds names and addresses; the log's job is
     # answering "what happened months ago?", so it outlives the chats.
     ACTIVITY_LOG_RETENTION_DAYS: int = 365
-    # Sent-notification history.
+    # Sent-notification history. One exception: a `cpi_rent_change` row is held past this
+    # window while the renter's lease is still running, because it is the only
+    # point-in-time record of the figure the owner was shown and leases outlast a year.
     NOTIFICATION_RETENTION_DAYS: int = 365
     # Deliberately NOT swept: document_extraction_logs (scanner-quality telemetry, holds no
     # lease content) and agent_usage_logs (cost only, no PII — retention detaches them from
@@ -92,6 +94,20 @@ class Settings(BaseSettings):
     # How far behind the newest *published* month the cache may fall before the job
     # reports failure (503). Absorbs a late publication; catches a dead feed.
     CPI_MAX_STALE_MONTHS: int = 2
+
+    # --- Legal documents ---
+    # The versions this server considers current. Reported by GET /users/me/legal; NOT
+    # enforced there. Each client bundles its own copy of the document text and gates on
+    # its own `TERMS_VERSION` / `PRIVACY_VERSION` in `features/legal/legalContent.ts`, so
+    # that nobody is ever asked to accept wording their build cannot display — a mobile
+    # build waiting on app-store review would otherwise be locked out of the product for
+    # a document it does not have. These two exist so the gap is measurable: compare them
+    # against `legal_acceptances.version` to see who is still on the previous text.
+    #
+    # Revising a document means bumping it in THREE places, in this order: both copies of
+    # `legalContent.ts` (web and mobile — they are manually-synced duplicates), then here.
+    CURRENT_TERMS_VERSION: str = "2026-06-09"
+    CURRENT_PRIVACY_VERSION: str = "2026-06-09"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

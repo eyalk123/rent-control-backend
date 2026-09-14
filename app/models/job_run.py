@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -37,7 +36,7 @@ class JobRun(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_name = Column(String, nullable=False)  # reminders | cpi_indexing | retention
-    started_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    started_at = Column(DateTime, nullable=False, default=utc_now_naive)
     finished_at = Column(DateTime, nullable=True)  # NULL while in flight, or if the process died
     status = Column(String, nullable=False)  # ok | degraded | stale | failed
     summary = Column(Text, nullable=True)  # JSON: the endpoint's own response body

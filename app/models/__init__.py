@@ -6,6 +6,7 @@ from app.models.device_token import DevicePlatformEnum, DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory
 from app.models.job_run import JobRun
+from app.models.legal_acceptance import LegalAcceptance, LegalDocumentEnum
 from app.models.notification import Notification, NotificationTypeEnum
 from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings
@@ -31,6 +32,8 @@ __all__ = [
     "DocumentExtractionLog",
     "ExpenseCategory",
     "JobRun",
+    "LegalAcceptance",
+    "LegalDocumentEnum",
     "Notification",
     "NotificationTypeEnum",
     "NotificationRule",

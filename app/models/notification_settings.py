@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, Float, String, Text
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 # A CPI change smaller than *both* of these is index noise, not news. Two floors
@@ -43,5 +42,5 @@ class NotificationSettings(Base):
     whatsapp_templates = Column(
         Text, nullable=False, server_default="{}", default="{}"
     )
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)

@@ -20,6 +20,7 @@ from app.models.deleted_account import DeletedAccount
 from app.models.device_token import DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
 from app.models.expense_category import ExpenseCategory
+from app.models.legal_acceptance import LegalAcceptance
 from app.models.notification import Notification, NotificationTypeEnum
 from app.models.notification_rule import NotificationRule
 from app.models.property import Property
@@ -67,20 +68,27 @@ def _seed_peripheral_data(db_session, owner_id: str) -> None:
             entity_id=1,
             label="שרה כהן",
         ),
+        LegalAcceptance(
+            owner_id=owner_id,
+            document="terms",
+            version="2026-06-09",
+            locale="en",
+            platform="web",
+        ),
     ])
     db_session.commit()
 
 
 def test_delete_account_removes_peripheral_records(client, db_session):
-    """Regression: notifications, rules, device tokens, report exports, extraction logs and
-    the activity log all used to outlive the account."""
+    """Regression: notifications, rules, device tokens, report exports, extraction logs,
+    the activity log and recorded legal acceptances all used to outlive the account."""
     _seed_peripheral_data(db_session, OWNER_A)
 
     assert client.delete("/users/me").status_code == 200
 
     db_session.expire_all()
     for model in (Notification, NotificationRule, DeviceToken, ReportExport,
-                  DocumentExtractionLog, ActivityLog):
+                  DocumentExtractionLog, ActivityLog, LegalAcceptance):
         remaining = db_session.scalars(
             select(model).where(model.owner_id == OWNER_A)
         ).all()

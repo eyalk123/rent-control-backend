@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import Column, DateTime, String, Text
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -24,6 +23,6 @@ class Owner(Base):
     # `seeds_shown` records that a feature was *named* somewhere, `tours_seen` that it was
     # *explained*. Seeing the seed must never consume the destination tour.
     tour_state = Column(Text, nullable=False, server_default="{}", default="{}")
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
     last_seen_at = Column(DateTime, nullable=True)

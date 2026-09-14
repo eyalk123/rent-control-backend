@@ -1,9 +1,11 @@
+import json
 from datetime import date
 from decimal import Decimal
 
 from fastapi import HTTPException
 
 from app.config import settings
+from app.models.renter import Renter
 from app.models.transaction import PaymentMethodEnum, Transaction, TransactionTypeEnum
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
@@ -23,6 +25,26 @@ from app.schemas.transaction import (
     TransactionUpdateExpense,
     TransactionUpdateRevenue,
 )
+from app.services.lease_periods import rent_for_month
+
+
+def _expected_rent(renter: Renter | None, month_for: date | None) -> Decimal | None:
+    """What the lease quoted for ``month_for``, to be frozen onto the payment.
+
+    None whenever there is nothing to quote — no renter, no month, or a lease with no
+    schedule. The clients read that as "fall back to the live schedule", so an
+    un-snapshotted row behaves exactly as every row did before the column existed.
+    """
+    if renter is None or month_for is None or not renter.lease_years:
+        return None
+    try:
+        lease_years = json.loads(renter.lease_years) if isinstance(renter.lease_years, str) else renter.lease_years
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(lease_years, list) or not lease_years:
+        return None
+    amount = rent_for_month(lease_years, renter.lease_start, month_for)
+    return Decimal(str(amount)) if amount else None
 
 
 class TransactionService:
@@ -66,6 +88,7 @@ class TransactionService:
             date_of_payment=t.date_of_payment,
             month_for=t.month_for,
             amount=t.amount,
+            expected_amount=t.expected_amount,
             currency_code=t.currency_code,
             category_id=category_id,
             category_ids=category_ids,
@@ -144,6 +167,7 @@ class TransactionService:
             date_of_payment=date_of_payment,
             month_for=data.month_for,
             amount=Decimal(str(data.amount)),
+            expected_amount=_expected_rent(renter, data.month_for),
             currency_code=currency_code,
             category_id=None,
             supplier_id=None,
@@ -246,6 +270,21 @@ class TransactionService:
             fields["payment_method"] = None
         if "notes" in data.model_fields_set:
             fields["notes"] = data.notes
+        # Moving a payment to another month — or onto another renter — makes the stored
+        # snapshot a quote for something else, so it is re-taken against wherever the row
+        # now points. A changed *amount* deliberately does not re-snapshot: that is the
+        # payment disagreeing with the lease, which is exactly what the flag is for.
+        if "month_for" in fields or "renter_id" in fields:
+            existing = self.transaction_repository.get_by_id(transaction_id, owner_id)
+            if existing is not None:
+                renter_id = fields.get("renter_id", existing.renter_id)
+                month_for = fields.get("month_for", existing.month_for)
+                quoted_for = (
+                    self.renter_repository.get_by_id(renter_id)
+                    if renter_id is not None
+                    else None
+                )
+                fields["expected_amount"] = _expected_rent(quoted_for, month_for)
         updated = self.transaction_repository.update(transaction_id, owner_id, fields)
         if updated is None:
             return None

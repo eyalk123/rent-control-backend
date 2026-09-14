@@ -1,8 +1,9 @@
-from datetime import date, datetime
+from datetime import date
 
 from sqlalchemy import JSON, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 
@@ -52,8 +53,8 @@ class Renter(Base):
     full_contract_url = Column(String, nullable=True)
     id_image_url = Column(String, nullable=True)
     owner_id = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
     property = relationship("Property", back_populates="renters")
     transactions = relationship("Transaction", back_populates="renter", passive_deletes=True)

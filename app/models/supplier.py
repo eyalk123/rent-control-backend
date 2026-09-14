@@ -1,8 +1,7 @@
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import relationship
 
+from app.clock import utc_now_naive
 from app.models.base import Base
 
 supplier_categories = Table(
@@ -24,8 +23,8 @@ class Supplier(Base):
     email = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     bank_account = Column(String(50), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
     categories = relationship(
         "ExpenseCategory",
