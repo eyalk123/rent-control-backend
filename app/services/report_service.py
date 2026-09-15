@@ -9,7 +9,6 @@ from fpdf import FPDF
 from sqlalchemy import and_, extract, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.countries.config import CountryConfig
 
 # Revenue recognition. A report says which one it used, because two reports for the same
 # year that differ by a month's rent, with nothing explaining why, is worse than not
@@ -239,20 +238,26 @@ CURRENCY_LABELS: dict[str, dict[str, str]] = {
 def _fmt(
     amount: Decimal,
     lang: str = DEFAULT_LANG,
-    currency: CountryConfig | None = None,
+    currency: country_service.EffectiveCurrency | None = None,
 ) -> str:
     """An amount with its currency, as the report prints it.
 
-    ``currency`` is the owner's country config. ``None`` means "unknown", which resolves to
-    Israel — every report that predates this parameter was Israeli.
+    ``currency`` is the account's effective currency — its country's, or the one it chose.
+    ``None`` means "unknown", which resolves to Israel: every report that predates this
+    parameter was Israeli.
+
+    Amounts stay whole here regardless of the currency's ``decimals``. That is a property
+    of *this artefact*, not of the money — an annual statement handed to an accountant has
+    always printed round figures, and turning ``₪5,000`` into ``₪5,000.00`` on every line of
+    every report anyone has ever filed is not a change this is allowed to make quietly.
     """
-    config = currency or country_service.config_for(None)
-    legacy = CURRENCY_LABELS.get(config.currency)
+    effective = currency or country_service.effective_currency(None)
+    legacy = CURRENCY_LABELS.get(effective.code)
     if legacy is not None:
         return f"{legacy[normalise_lang(lang)]}{amount:,.0f}"
-    if config.currency_symbol_position == "suffix":
-        return f"{amount:,.0f}{config.currency_symbol}"
-    return f"{config.currency_symbol}{amount:,.0f}"
+    if effective.symbol_position == "suffix":
+        return f"{amount:,.0f}{effective.symbol}"
+    return f"{effective.symbol}{amount:,.0f}"
 
 
 # Table shading. The faint grid is what makes a property block read as one unit; the strong
@@ -555,7 +560,7 @@ class _PDF(FPDF):
         title_key: str,
         year: int,
         lang: str = DEFAULT_LANG,
-        currency: CountryConfig | None = None,
+        currency: country_service.EffectiveCurrency | None = None,
         revenue_basis: str | None = None,
         **kwargs,
     ):
@@ -567,7 +572,7 @@ class _PDF(FPDF):
         # Carried alongside the language, but resolved from the *data* rather than from the
         # reader's locale: a report is about a portfolio, and the portfolio's currency does
         # not change because someone switched the app to English.
-        self.currency = currency or country_service.config_for(None)
+        self.currency = currency or country_service.effective_currency(None)
         self.rtl = self.lang == "he"
         self._title = _t(self.lang, title_key)
         self._year = year
@@ -707,7 +712,7 @@ class _PDF(FPDF):
 def generate_income_expense_pdf(
     data: IncomeExpenseReportResponse,
     lang: str = DEFAULT_LANG,
-    currency: CountryConfig | None = None,
+    currency: country_service.EffectiveCurrency | None = None,
 ) -> bytes:
     """One block per property — Revenue, Expenses and Net on adjacent rows, months as columns.
 
@@ -944,7 +949,7 @@ def _draw_coloured_row(pdf: "_PDF", cells: list[tuple], height: float,
 def generate_expense_log_pdf(
     data: ExpenseLogReportResponse,
     lang: str = DEFAULT_LANG,
-    currency: CountryConfig | None = None,
+    currency: country_service.EffectiveCurrency | None = None,
 ) -> bytes:
     pdf = _PDF(
         "expense_title", data.year, lang=lang, currency=currency,
@@ -1131,6 +1136,12 @@ def generate_income_expense_csv(
     writer = csv.writer(buf)
 
     writer.writerow([f"{_t(lang, 'income_title')} - {data.year}"])
+    # The basis, for the same reason the PDF prints it under its title on every page: two
+    # exports of the same year can differ by a month's rent, and the file has to say which
+    # one it is. Without this the only record is the export-history row in the app, which
+    # is not what lands in the accountant's inbox.
+    if data.revenue_basis:
+        writer.writerow([_t(lang, "basis_cash" if data.revenue_basis == CASH else "basis_accrual")])
     writer.writerow([])
     writer.writerow([_t(lang, "owner"), _t(lang, "property"), "Month",
                      _t(lang, "revenue"), _t(lang, "expenses"), _t(lang, "net")])

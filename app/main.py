@@ -12,6 +12,7 @@ from app.api.routers import (
     admin,
     agent,
     countries,
+    currencies,
     device_tokens,
     document_extraction,
     expense_categories,
@@ -100,9 +101,10 @@ app.include_router(reports.router, prefix="/reports", tags=["reports"], dependen
 app.include_router(device_tokens.router, prefix="/device-tokens", tags=["device-tokens"], dependencies=_owner_refresh)
 app.include_router(notifications.router, prefix="/notifications", tags=["notifications"], dependencies=_owner_refresh)
 app.include_router(notification_preferences.router, tags=["notification-preferences"], dependencies=_owner_refresh)
-# Static reference data, and the only router with no owner refresh: the signup country
+# Static reference data, and the only routers with no owner refresh: the signup country
 # gate runs before there is an account worth refreshing.
 app.include_router(countries.router, prefix="/countries", tags=["countries"])
+app.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 app.include_router(document_extraction.router, prefix="/extract", tags=["extract"], dependencies=_owner_refresh)
 app.include_router(agent.router, prefix="/agent", tags=["agent"], dependencies=_owner_refresh)

@@ -17,6 +17,16 @@ class PropertyRepository:
         )
         return list(self.session.scalars(stmt).all())
 
+    def has_any(self, owner_id: str) -> bool:
+        """Whether this owner has a single property. Cheap — no rows are loaded.
+
+        Used to decide whether the account's currency may still change: every property
+        freezes its currency at creation, so once one exists, changing the account's would
+        relabel amounts already recorded without re-denominating them.
+        """
+        stmt = select(Property.id).where(Property.owner_id == owner_id).limit(1)
+        return self.session.scalar(stmt) is not None
+
     def get_by_id(self, property_id: int, owner_id: str) -> Property | None:
         stmt = (
             select(Property)

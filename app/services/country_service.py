@@ -12,6 +12,9 @@ before the column existed, or an owner who has not reached the country gate yet)
 ``capabilities_for(property.country)`` and the day a foreign property exists nothing has
 to be migrated. Call ``COUNTRIES[owner.country]`` at the call site and it does.
 """
+from dataclasses import dataclass
+
+from app.countries import currencies
 from app.countries.config import COUNTRIES, DEFAULT_COUNTRY, Capabilities, CountryConfig
 
 # What an unrecognised code resolves to. Deliberately *not* Israel: an unknown country
@@ -54,6 +57,67 @@ def config_for(country_code: str | None) -> CountryConfig:
 def capabilities_for(country_code: str | None) -> Capabilities:
     """What this country's accounts may do. The thing conditionals should read."""
     return config_for(country_code).capabilities
+
+
+@dataclass(frozen=True)
+class EffectiveCurrency:
+    """How this account writes money. What every formatter should read."""
+
+    code: str
+    symbol: str
+    symbol_position: str
+    decimals: int
+
+
+def effective_currency(
+    country_code: str | None, owner_currency: str | None = None
+) -> EffectiveCurrency:
+    """The currency an account actually uses, and how to write it. Never raises.
+
+    ``owner_currency`` is the explicit choice made at signup; ``None`` means "not chosen —
+    use the country's own", which is every account that predates the picker and most
+    accounts after it.
+
+    **Where the symbol goes is the interesting part, and it has two answers on purpose.**
+
+    Position is genuinely a property of the *reader*, not of the money: ``€1,234`` in
+    Ireland and ``1.234 €`` in Germany are the same currency written two ways, and only the
+    country knows which. So when the chosen currency is the country's own — the
+    overwhelming majority, Israel included — position comes from the country row and
+    nothing changes.
+
+    It is when the two come apart that the country stops being the authority. An Israeli
+    account holding dollars would otherwise get ``1,234$``, because Israel writes its
+    symbol last; nobody writes dollars that way. There, position comes from the currency's
+    own default.
+
+    An unknown currency code falls back to the country's currency entirely rather than
+    inventing a symbol for it — the same direction of failure as ``config_for``.
+    """
+    config = config_for(country_code)
+    chosen = currencies.get(owner_currency)
+
+    if chosen is None or chosen.code == config.currency:
+        native = currencies.get(config.currency)
+        return EffectiveCurrency(
+            code=config.currency,
+            symbol=config.currency_symbol,
+            # The country row, which is what every existing account already rendered with.
+            symbol_position=config.currency_symbol_position,
+            decimals=native.decimals if native else 2,
+        )
+
+    return EffectiveCurrency(
+        code=chosen.code,
+        symbol=chosen.symbol,
+        symbol_position=chosen.default_symbol_position,
+        decimals=chosen.decimals,
+    )
+
+
+def is_currency_known(currency_code: str | None) -> bool:
+    """Whether the code is in the currency table — for validating user input."""
+    return currencies.get(currency_code) is not None
 
 
 def is_known(country_code: str | None) -> bool:

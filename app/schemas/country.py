@@ -63,18 +63,42 @@ class CountryUpdate(BaseModel):
         return v.strip().upper()
 
 
-class CountryNotifyRequestCreate(BaseModel):
-    """"Notify me when you add {Country}". Optional; nothing depends on it."""
+class CurrencyRead(BaseModel):
+    """One row of the currency table, as the signup picker sees it.
 
-    country_code: str = Field(min_length=2, max_length=2)
+    ``symbol`` is the code itself for a currency with no glyph, which is what lets the
+    picker list every currency rather than only the pretty ones.
 
-    @field_validator("country_code")
-    @classmethod
-    def normalize(cls, v: str) -> str:
-        return v.strip().upper()
+    ``decimals`` is a display *cap*, never a minimum: it exists so a JPY account is not
+    shown a fraction of a unit that does not exist, not to force two places on everything
+    else.
+    """
 
-
-class CountryNotifyRequestRead(BaseModel):
-    country_code: str
+    code: str
+    name: str
+    symbol: str
+    decimals: int
+    default_symbol_position: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PreferencesUpdate(BaseModel):
+    """The two choices made beside the country, and changeable after it.
+
+    Both optional: the gate sends them together, Settings sends one at a time, and an
+    omitted field is left alone rather than cleared.
+    """
+
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    language: str | None = Field(default=None, min_length=2, max_length=5)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, v: str | None) -> str | None:
+        return v.strip().upper() if v else v
+
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, v: str | None) -> str | None:
+        return v.strip().lower() if v else v

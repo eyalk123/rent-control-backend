@@ -34,22 +34,27 @@ class PropertyService:
     def get_property(self, property_id: int, owner_id: str):
         return self.property_repository.get_by_id(property_id, owner_id)
 
-    def _owner_country(self, owner_id: str) -> str | None:
-        """The account's country, or None if unknown — never raises.
+    def _owner_country_and_currency(self, owner_id: str) -> tuple[str | None, str | None]:
+        """The account's country and chosen currency, or None each — never raises.
 
         The owners row is written best-effort (see ``get_current_owner``), so it can be
         missing for a perfectly valid request. A property with no country resolves to
         Israel in ``country_service.config_for``, which is what every row did before this
         column existed, so a miss degrades to today's behaviour rather than to an error.
+
+        The currency is ``None`` for every account that never picked one, which then falls
+        through to the country's own — the same answer this returned before the picker.
         """
         if self.owner_repository is None:
-            return None
+            return None, None
         owner = self.owner_repository.get(owner_id)
-        return owner.country if owner else None
+        if owner is None:
+            return None, None
+        return owner.country, owner.currency
 
     def create_property(self, data: PropertyCreate, owner_id: str):
         property_type = PropertyTypeEnum(data.type.value)
-        country = self._owner_country(owner_id)
+        country, owner_currency = self._owner_country_and_currency(owner_id)
         parking_numbers_str = (
             json.dumps(data.parking_numbers) if data.parking_numbers is not None else None
         )
@@ -87,7 +92,7 @@ class PropertyService:
             # reason `country` is: a transaction already recorded in one currency cannot be
             # re-denominated by an edit somewhere else. `transaction_service` snapshots this
             # onto every row it writes.
-            currency_code=country_service.config_for(country).currency,
+            currency_code=country_service.effective_currency(country, owner_currency).code,
         )
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)

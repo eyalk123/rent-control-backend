@@ -1,7 +1,6 @@
 from app.models.activity_log import ActivityLog
 from app.models.agent import AgentConversation, AgentMessage, AgentUsageLog
 from app.models.base import Base
-from app.models.country_notify_request import CountryNotifyRequest
 from app.models.deleted_account import DeletedAccount
 from app.models.device_token import DevicePlatformEnum, DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
@@ -28,7 +27,6 @@ __all__ = [
     "AgentMessage",
     "AgentUsageLog",
     "Base",
-    "CountryNotifyRequest",
     "DeletedAccount",
     "DevicePlatformEnum",
     "DeviceToken",

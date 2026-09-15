@@ -4,7 +4,6 @@ from typing import Annotated
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
@@ -12,24 +11,21 @@ from app.api.dependencies import (
     get_current_user,
     get_legal_acceptance_repository,
     get_owner_repository,
+    get_property_repository,
     get_user_service,
 )
 from app.config import settings
 from app.database import get_db
-from app.models.country_notify_request import CountryNotifyRequest
 from app.models.legal_acceptance import LegalDocumentEnum
 from app.repositories.legal_acceptance_repository import LegalAcceptanceRepository
 from app.repositories.owner_repository import OwnerRepository
+from app.repositories.property_repository import PropertyRepository
 from app.schemas.legal_acceptance import (
     LegalAcceptanceRead,
     LegalAcceptanceRecord,
     LegalStatusRead,
 )
-from app.schemas.country import (
-    CountryNotifyRequestCreate,
-    CountryNotifyRequestRead,
-    CountryUpdate,
-)
+from app.schemas.country import CountryUpdate, PreferencesUpdate
 from app.schemas.owner import OwnerRead
 from app.schemas.tour_state import TourStateRead, TourStateUpdate
 from app.services import country_service
@@ -77,42 +73,58 @@ def set_my_country(
     return owner_repository.set_country(current_user["user_id"], payload.country)
 
 
-@router.post(
-    "/me/notify-country",
-    response_model=CountryNotifyRequestRead,
-    status_code=status.HTTP_201_CREATED,
-)
-def request_country_notification(
-    payload: CountryNotifyRequestCreate,
+@router.patch("/me/preferences", response_model=OwnerRead)
+def set_my_preferences(
+    payload: PreferencesUpdate,
     current_user: Annotated[dict, Depends(get_current_owner)],
-    db: Annotated[Session, Depends(get_db)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+    property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
 ):
-    """"Tell me when you add {Country}". Optional, and nothing depends on it.
+    """Record the currency and/or language chosen beside the country.
 
-    Idempotent: asking twice is the same fact, not a stronger one, and double-counting
-    would skew the only signal the table exists to give. A repeat returns 201 with the
-    existing row rather than a conflict — the user did nothing wrong.
+    Off the best-effort profile upsert for the reason ``set_country`` gives, and beside it
+    rather than folded into it because these two *can* legitimately change later while the
+    country cannot.
+
+    **Currency locks once the account has a property**, and that is the whole reason this
+    endpoint has an error path worth reading. ``properties.currency_code`` is frozen at
+    creation and every transaction snapshots it, so the stored amounts do not move when
+    this value changes — only their label does. Allowing the change would silently restate
+    a ₪5,000 rent as $5,000 on every screen, with nothing anywhere saying so. Before the
+    first property there is nothing to restate, which is why the same choice is free at
+    signup and refused afterwards.
+
+    The clients hide the control once a property exists; this is the check that actually
+    holds, since a hidden control with a live endpoint behind it is not a lock.
+
+    **Language never locks.** Nothing is stored in a language, so there is nothing to
+    misrepresent.
     """
-    if not country_service.is_known(payload.country_code):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Unknown country code",
-        )
     owner_id = current_user["user_id"]
-    existing = db.scalar(
-        select(CountryNotifyRequest).where(
-            CountryNotifyRequest.owner_id == owner_id,
-            CountryNotifyRequest.country_code == payload.country_code,
-        )
+
+    if payload.currency is not None:
+        if not country_service.is_currency_known(payload.currency):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Unknown currency code",
+            )
+        owner = owner_repository.get(owner_id)
+        # Only a *change* is refused. Re-sending the current value is what the signup gate
+        # does when the user accepts the pre-filled default, and it must stay harmless.
+        changing = owner is None or owner.currency != payload.currency
+        if changing and property_repository.has_any(owner_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Currency cannot be changed once the account has a property. "
+                    "Amounts already recorded are stored in the currency they were "
+                    "entered in."
+                ),
+            )
+
+    return owner_repository.set_preferences(
+        owner_id, currency=payload.currency, language=payload.language
     )
-    if existing is None:
-        existing = CountryNotifyRequest(
-            owner_id=owner_id, country_code=payload.country_code
-        )
-        db.add(existing)
-        db.commit()
-        db.refresh(existing)
-    return existing
 
 
 @router.get("/me/tour-state", response_model=TourStateRead)

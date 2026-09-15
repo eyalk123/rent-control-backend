@@ -114,21 +114,6 @@ class TestAccountDeletionIsComplete:
     """Deleting an account must remove everything it created, including the rows added by
     global support. A sweep that quietly misses one leaves personal data behind."""
 
-    def test_a_notify_me_row_goes_with_the_account(self, client, db_session):
-        from app.models.country_notify_request import CountryNotifyRequest
-        from app.services.user_service import UserService
-
-        owner = db_session.get(Owner, OWNER_A) or Owner(id=OWNER_A, email="a@b.c")
-        owner.country = "US"
-        db_session.add(owner)
-        db_session.commit()
-
-        assert client.post("/users/me/notify-country", json={"country_code": "ES"}).status_code == 201
-        assert db_session.query(CountryNotifyRequest).count() == 1
-
-        UserService(db_session).delete_account(OWNER_A)
-        assert db_session.query(CountryNotifyRequest).count() == 0
-
     def test_the_sweep_covers_every_owner_scoped_table(self):
         """A new owner-scoped table that nobody adds to `delete_account` is the failure
         mode, and it is silent. This lists the tables the sweep must name."""
@@ -138,7 +123,6 @@ class TestAccountDeletionIsComplete:
 
         source = inspect.getsource(UserService.delete_account)
         for table in (
-            "CountryNotifyRequest",
             "Property",
             "Renter",
             "Transaction",
@@ -261,11 +245,56 @@ class TestDeliberateIsraeliChanges:
 
     def test_israeli_report_currency_is_untouched(self):
         """The artifact users hand to an accountant. ILS keeps its language-dependent label
-        in the prefix position rather than taking the config's suffix form."""
+        in the prefix position rather than taking the config's suffix form.
+
+        Unchanged by the currency picker: an Israeli account that never chose a currency
+        resolves to its country's own, which is the path this has always taken."""
         from app.services.report_service import _fmt
 
-        assert _fmt(Decimal("5000"), "en", country_service.config_for("IL")) == "ILS 5,000"
-        assert _fmt(Decimal("5000"), "he", country_service.config_for("IL")) == "₪5,000"
+        israel = country_service.effective_currency("IL")
+        assert _fmt(Decimal("5000"), "en", israel) == "ILS 5,000"
+        assert _fmt(Decimal("5000"), "he", israel) == "₪5,000"
+
+    def test_an_account_that_never_chose_a_currency_is_unchanged(self):
+        """The whole reason `owners.currency` is nullable and unbackfilled.
+
+        NULL means "use the country's own", so every account that predates the picker —
+        and every account that accepted the default — formats exactly as it did before."""
+        for country in ("IL", "US", "DE", "IE"):
+            chose_nothing = country_service.effective_currency(country, None)
+            config = COUNTRIES[country]
+            assert chose_nothing.code == config.currency
+            assert chose_nothing.symbol == config.currency_symbol
+            assert chose_nothing.symbol_position == config.currency_symbol_position
+
+    def test_a_foreign_currency_takes_its_own_symbol_side(self):
+        """Pin on the one case where the country stops being the authority on position.
+
+        Israel writes its symbol last, so an Israeli account holding dollars would
+        otherwise read `1,234$`. Nobody writes dollars that way. The country still decides
+        for its own currency — which is what keeps Israel byte-for-byte identical."""
+        native = country_service.effective_currency("IL")
+        assert (native.symbol, native.symbol_position) == ("₪", "suffix")
+
+        foreign = country_service.effective_currency("IL", "USD")
+        assert (foreign.symbol, foreign.symbol_position) == ("$", "prefix")
+
+        # EUR is written both ways, and the country is why it comes out right either way.
+        assert country_service.effective_currency("DE").symbol_position == "suffix"
+        assert country_service.effective_currency("IE").symbol_position == "prefix"
+
+    def test_every_country_has_a_currency_with_a_name(self):
+        """The picker lists every currency, so every one of them needs a row.
+
+        A country whose currency is missing from the currency table would render its code
+        with no name and no decimals — the failure would be invisible until someone in that
+        country signed up."""
+        from app.countries import currencies
+
+        for code, config in COUNTRIES.items():
+            currency = currencies.get(config.currency)
+            assert currency is not None, f"{code} uses {config.currency}, which has no row"
+            assert currency.name
 
     @pytest.mark.parametrize("value", ["condo_townhouse", "room", "other"])
     def test_israel_also_sees_the_new_property_types(self, value):

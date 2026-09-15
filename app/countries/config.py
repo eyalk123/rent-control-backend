@@ -29,6 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from app.countries import currencies
+
 Tier = Literal["native", "supported"]
 DateFormat = Literal["DMY", "MDY", "YMD"]
 NumberFormat = Literal["1,234.56", "1.234,56", "1 234,56"]
@@ -463,20 +465,6 @@ _DIAL_CODES = {
     "ZW":"263",
 }
 
-#: Display symbols. A currency that is not listed falls back to its ISO code, which is
-#: always correct if not always pretty — better than a wrong glyph.
-_SYMBOLS = {
-    "AED": "د.إ", "ARS": "$", "AUD": "$", "BDT": "৳", "BGN": "лв", "BRL": "R$",
-    "CAD": "$", "CHF": "CHF", "CLP": "$", "CNY": "¥", "COP": "$", "CZK": "Kč",
-    "DKK": "kr", "EGP": "E£", "EUR": "€", "GBP": "£", "HKD": "$", "HUF": "Ft",
-    "IDR": "Rp", "ILS": "₪", "INR": "₹", "ISK": "kr", "JPY": "¥", "KRW": "₩",
-    "MXN": "$", "MYR": "RM", "NGN": "₦", "NOK": "kr", "NZD": "$", "PEN": "S/",
-    "PHP": "₱", "PKR": "₨", "PLN": "zł", "RON": "lei", "RUB": "₽", "SAR": "﷼",
-    "SEK": "kr", "SGD": "$", "THB": "฿", "TRY": "₺", "TWD": "NT$", "UAH": "₴",
-    "USD": "$", "VND": "₫", "ZAR": "R",
-}
-
-
 def _build() -> dict[str, CountryConfig]:
     out: dict[str, CountryConfig] = {}
     for line in _ISO_TABLE.strip().splitlines():
@@ -488,7 +476,7 @@ def _build() -> dict[str, CountryConfig]:
             name=name,
             open_ended_tenancies=code in _OPEN_ENDED,
             currency=currency,
-            currency_symbol=_SYMBOLS.get(currency, currency),
+            currency_symbol=currencies.symbol_for(currency),
             currency_symbol_position="suffix" if code in _SUFFIX_CURRENCY else "prefix",
             date_format="MDY" if code in _MDY else "YMD" if code in _YMD else "DMY",
             number_format=(

@@ -505,6 +505,26 @@ class TestRevenueRecognitionBasis:
             get_income_expense_data(db_session, OWNER_A, 2025, "cash").revenue_basis == "cash"
         )
 
+    def test_the_csv_prints_the_basis_it_used(self, db_session):
+        """The PDF prints it under the title on every page; the CSV printed nothing.
+
+        Two exports of the same year can differ by a month's rent, and the file that
+        lands in an accountant's inbox has to say which one it is — the export-history row
+        in the app does not travel with it."""
+        from app.services.report_service import generate_income_expense_csv
+
+        self._boundary_payment(db_session)
+
+        cash = generate_income_expense_csv(
+            get_income_expense_data(db_session, OWNER_A, 2026, "cash")
+        )
+        assert "cash" in cash.splitlines()[1].lower()
+
+        accrual = generate_income_expense_csv(
+            get_income_expense_data(db_session, OWNER_A, 2025, "accrual")
+        )
+        assert "accrual" in accrual.splitlines()[1].lower()
+
     def test_rows_and_totals_agree_under_cash(self, db_session):
         """The SQL filter and the Python bucketing must use the same date, or a row would
         be selected by one rule and counted by the other."""

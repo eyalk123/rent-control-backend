@@ -76,7 +76,11 @@ _PROPERTY_COLUMNS: list[tuple[str, Callable]] = [
     ("block", lambda p: p.block),
     ("plot", lambda p: p.plot),
     ("number_of_rooms", lambda p: p.number_of_rooms),
-    ("sq_ft", lambda p: p.sq_ft),
+    # The column is named `sq_ft` and has always held square *metres* — a misnomer that
+    # predates any country work and is wrong for Israel too. The export is meant to stand
+    # on its own without the app, so the header says what the number is. The column keeps
+    # its name in the database, where renaming it would touch three repos to fix a word.
+    ("floor_area_m2", lambda p: p.sq_ft),
     ("parking_numbers", lambda p: p.parking_numbers),
     ("purchase_price", lambda p: p.purchase_price),
     ("property_owner", lambda p: p.property_owner),

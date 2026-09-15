@@ -24,14 +24,19 @@ router = APIRouter()
 
 
 def _owner_currency(db: Session, owner_id: str):
-    """The country config a report should print its amounts in.
+    """The currency a report should print its amounts in.
 
     Read from the owner rather than the reader's `?lang=`: a report is about a portfolio,
     and its currency does not change because someone switched the app to English. A missing
     owner row resolves to Israel, which is what every report did before this existed.
+
+    Resolved through ``effective_currency`` so an account that chose a currency other than
+    its country's gets the one it chose — and, with it, the right side for the symbol.
     """
     owner = OwnerRepository(db).get(owner_id)
-    return country_service.config_for(owner.country if owner else None)
+    if owner is None:
+        return country_service.effective_currency(None)
+    return country_service.effective_currency(owner.country, owner.currency)
 
 
 @router.get("/income-expense")

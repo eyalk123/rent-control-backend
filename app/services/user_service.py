@@ -6,7 +6,6 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.activity_log import ActivityLog
-from app.models.country_notify_request import CountryNotifyRequest
 from app.models.deleted_account import DeletedAccount
 from app.models.device_token import DeviceToken
 from app.models.document_extraction_log import DocumentExtractionLog
@@ -72,9 +71,6 @@ class UserService:
         # data like everything else here, and once the account is erased there is nothing
         # left for it to evidence.
         self.db.execute(delete(LegalAcceptance).where(LegalAcceptance.owner_id == owner_id))
-        self.db.execute(
-            delete(CountryNotifyRequest).where(CountryNotifyRequest.owner_id == owner_id)
-        )
 
         # Which client they worked in, per day. Counts only, no PII — but it is
         # owner-scoped and must not outlive the account any more than the rest of this does.

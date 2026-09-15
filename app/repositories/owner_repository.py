@@ -113,6 +113,41 @@ class OwnerRepository:
         self.session.refresh(owner)
         return owner
 
+    # ── currency and language ──────────────────────────────────────────────
+
+    def set_preferences(
+        self,
+        uid: str,
+        currency: str | None = None,
+        language: str | None = None,
+    ) -> Owner:
+        """Record the currency and/or language choice.
+
+        Off the ``upsert`` path for the same reason ``set_country`` is: that write is
+        best-effort telemetry and is allowed to fail silently, and a preference that
+        silently fails to save is a user who changes a setting, watches it revert, and has
+        no idea why.
+
+        ``None`` means "leave alone", not "clear" — the signup gate sends both fields, the
+        Settings rows send one at a time, and an omitted field must not wipe the other.
+
+        Creates the row if the profile upsert has not run yet, like ``set_country``.
+        """
+        owner = self.session.get(Owner, uid)
+        if owner is None:
+            owner = Owner(
+                id=uid, currency=currency, language=language, last_seen_at=utc_now_naive()
+            )
+            self.session.add(owner)
+        else:
+            if currency is not None:
+                owner.currency = currency
+            if language is not None:
+                owner.language = language
+        self.session.commit()
+        self.session.refresh(owner)
+        return owner
+
     # ── onboarding tour state ──────────────────────────────────────────────
 
     def get_tour_state(self, uid: str) -> dict:
