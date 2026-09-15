@@ -58,6 +58,33 @@ def test_upsert_refreshes_last_seen_when_stale(db_session):
     assert db_session.get(Owner, "uid-1").last_seen_at > stale
 
 
+def test_upsert_survives_losing_the_insert_race(db_session, monkeypatch):
+    """Two parallel requests from a brand-new account both find no row and both insert;
+    the loser must recover from the primary-key violation and leave the session usable,
+    because the endpoint that carries this dependency still has its own query to run."""
+    db_session.add(Owner(id="uid-1", email="a@example.com", display_name="Alice",
+                         last_seen_at=utc_now_naive()))
+    db_session.commit()
+    db_session.expunge_all()
+
+    real_get = db_session.get
+    lookups = {"n": 0}
+
+    def racing_get(*args, **kwargs):
+        # The first lookup happens before the winner commits, so it sees nothing.
+        lookups["n"] += 1
+        return None if lookups["n"] == 1 else real_get(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "get", racing_get)
+
+    owner = OwnerRepository(db_session).upsert("uid-1", "a@example.com", "Alice", None)
+
+    assert owner.id == "uid-1"
+    monkeypatch.undo()
+    # The row the winner wrote, not a duplicate — and the session still works.
+    assert db_session.query(Owner).count() == 1
+
+
 # --- Dependency resilience ----------------------------------------------------
 
 def _request():

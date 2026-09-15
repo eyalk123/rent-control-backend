@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.clock import utc_now_naive
@@ -30,22 +31,43 @@ class OwnerRepository:
 
         Throttled: writes only when the row is missing, a claim changed, or last_seen_at
         is stale (older than LAST_SEEN_THROTTLE). Otherwise returns the row untouched.
+
+        Every failure path rolls back before returning or re-raising, so the caller — which
+        treats this write as best-effort and swallows the error — is left with a session it
+        can still use for the rest of the request.
         """
         now = utc_now_naive()
         owner = self.session.get(Owner, uid)
 
         if owner is None:
-            owner = Owner(
+            candidate = Owner(
                 id=uid,
                 email=email,
                 display_name=display_name,
                 picture_url=picture_url,
                 last_seen_at=now,
             )
-            self.session.add(owner)
-            self.session.commit()
-            self.session.refresh(owner)
-            return owner
+            self.session.add(candidate)
+            try:
+                self.session.commit()
+            except IntegrityError:
+                # A brand-new account arrives as several parallel requests (one screen
+                # loads more than one endpoint), each carrying this dependency and each
+                # finding no row — so they all insert and all but one lose on the primary
+                # key. Losing is normal; pick up the winner's row and carry on as an
+                # update. The rollback is what keeps the request alive: without it the
+                # failed INSERT poisons the transaction and the endpoint's own queries
+                # fail too.
+                self.session.rollback()
+                owner = self.session.get(Owner, uid)
+                if owner is None:
+                    raise
+            except SQLAlchemyError:
+                self.session.rollback()
+                raise
+            else:
+                self.session.refresh(candidate)
+                return candidate
 
         claims_changed = (
             owner.email != email
@@ -59,7 +81,11 @@ class OwnerRepository:
             owner.display_name = display_name
             owner.picture_url = picture_url
             owner.last_seen_at = now
-            self.session.commit()
+            try:
+                self.session.commit()
+            except SQLAlchemyError:
+                self.session.rollback()
+                raise
             self.session.refresh(owner)
 
         return owner
