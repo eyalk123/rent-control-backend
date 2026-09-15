@@ -18,11 +18,12 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
-from app.services import firebase_storage
+from app.services import country_service, firebase_storage
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,10 @@ _PROPERTY_COLUMNS: list[tuple[str, Callable]] = [
     ("block", lambda p: p.block),
     ("plot", lambda p: p.plot),
     ("number_of_rooms", lambda p: p.number_of_rooms),
-    # The column is named `sq_ft` and has always held square *metres* — a misnomer that
-    # predates any country work and is wrong for Israel too. The export is meant to stand
-    # on its own without the app, so the header says what the number is. The column keeps
-    # its name in the database, where renaming it would touch three repos to fix a word.
-    ("floor_area_m2", lambda p: p.sq_ft),
+    # Named by the unit the owner actually entered it in — see `_property_columns`. The
+    # DB column is called `sq_ft` and holds no particular unit; renaming it there would
+    # touch three repos to fix a word, so the export is where it gets said correctly.
+    ("floor_area", lambda p: p.sq_ft),
     ("parking_numbers", lambda p: p.parking_numbers),
     ("purchase_price", lambda p: p.purchase_price),
     ("property_owner", lambda p: p.property_owner),
@@ -206,12 +206,36 @@ def _write_sheet(wb: Workbook, title: str, columns: list[tuple[str, Callable]], 
         ws.column_dimensions[get_column_letter(index)].width = min(max(widest + 2, 10), 50)
 
 
+def _property_columns(db: Session, owner_id: str) -> list[tuple[str, Callable]]:
+    """The property columns, with the floor-area header naming its unit.
+
+    Floor area is stored exactly as the owner typed it, in the unit their country uses
+    — nothing is converted on the way in or out, because silently restating someone's
+    own number is worse than making them read a label. That leaves the stored value
+    meaningless without knowing whose it is, which is fine inside the app and not fine
+    in a file meant to outlive it. One account is one unit, so the header can simply
+    say which: `floor_area_sqft` or `floor_area_m2`.
+    """
+    owner = OwnerRepository(db).get(owner_id)
+    unit = country_service.config_for(owner.country if owner else None).area_unit
+    suffix = "sqft" if unit == "sqft" else "m2"
+    return [
+        (f"{header}_{suffix}" if header == "floor_area" else header, extract)
+        for header, extract in _PROPERTY_COLUMNS
+    ]
+
+
 def build_workbook(db: Session, owner_id: str) -> bytes:
     """The .xlsx half of the export: one sheet per record type, all owner-scoped."""
     wb = Workbook()
     wb.remove(wb.active)  # drop the default sheet openpyxl creates
 
-    _write_sheet(wb, "Properties", _PROPERTY_COLUMNS, PropertyRepository(db).get_all_by_owner(owner_id))
+    _write_sheet(
+        wb,
+        "Properties",
+        _property_columns(db, owner_id),
+        PropertyRepository(db).get_all_by_owner(owner_id),
+    )
     _write_sheet(wb, "Renters", _RENTER_COLUMNS, RenterRepository(db).get_all(owner_id))
     _write_sheet(wb, "Transactions", _TRANSACTION_COLUMNS, _all_transactions(db, owner_id))
     _write_sheet(

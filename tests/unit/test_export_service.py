@@ -184,3 +184,37 @@ def test_a_single_file_failing_does_not_lose_the_others(db_session, seeded, monk
     with zipfile.ZipFile(io.BytesIO(build_export_zip(db_session, OWNER_A))) as archive:
         assert "files/ok.pdf" in archive.namelist()
         assert "files/broken.pdf" not in archive.namelist()
+
+
+class TestFloorAreaHeaderNamesItsUnit:
+    """Floor area is stored exactly as the owner typed it — nothing is converted on the way
+    in or out. That leaves the number meaningless without knowing whose it is, which is fine
+    inside the app and not fine in a file meant to outlive it, so the header says the unit."""
+
+    @staticmethod
+    def _headers(db_session, owner_id):
+        from app.services.export_service import _property_columns
+
+        return [header for header, _ in _property_columns(db_session, owner_id)]
+
+    def test_a_metric_account_gets_m2(self, db_session):
+        from app.models.owner import Owner
+
+        owner = db_session.get(Owner, OWNER_A) or Owner(id=OWNER_A)
+        owner.country = "IL"
+        db_session.add(owner)
+        db_session.commit()
+        assert "floor_area_m2" in self._headers(db_session, OWNER_A)
+
+    def test_an_imperial_account_gets_sqft(self, db_session):
+        from app.models.owner import Owner
+
+        owner = db_session.get(Owner, OWNER_A) or Owner(id=OWNER_A)
+        owner.country = "US"
+        db_session.add(owner)
+        db_session.commit()
+        assert "floor_area_sqft" in self._headers(db_session, OWNER_A)
+
+    def test_no_owner_row_still_produces_a_workbook(self, db_session):
+        """The owners row is written best-effort, so it can be missing for a valid request."""
+        assert "floor_area_m2" in self._headers(db_session, "nobody")
