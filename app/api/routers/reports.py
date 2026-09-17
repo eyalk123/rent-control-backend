@@ -23,20 +23,27 @@ from app.services.report_service import (
 router = APIRouter()
 
 
-def _owner_currency(db: Session, owner_id: str):
-    """The currency a report should print its amounts in.
+def _owner_formats(db: Session, owner_id: str):
+    """The currency and the thousands grouping a report should print its amounts in.
 
     Read from the owner rather than the reader's `?lang=`: a report is about a portfolio,
-    and its currency does not change because someone switched the app to English. A missing
+    and neither of these changes because someone switched the app to English. A missing
     owner row resolves to Israel, which is what every report did before this existed.
 
-    Resolved through ``effective_currency`` so an account that chose a currency other than
-    its country's gets the one it chose — and, with it, the right side for the symbol.
+    The currency is resolved through ``effective_currency`` so an account that chose one
+    other than its country's gets the one it chose — and, with it, the right side for the
+    symbol. Grouping has no such override: it is the country's, always, because it is a way
+    of writing numbers rather than a property of the money.
+
+    Both come from one owner read, and both are positional arguments of the two PDF
+    generators in that order.
     """
     owner = OwnerRepository(db).get(owner_id)
-    if owner is None:
-        return country_service.effective_currency(None)
-    return country_service.effective_currency(owner.country, owner.currency)
+    country = owner.country if owner is not None else None
+    currency = country_service.effective_currency(
+        country, owner.currency if owner is not None else None
+    )
+    return currency, country_service.config_for(country).number_format
 
 
 @router.get("/income-expense")
@@ -63,7 +70,7 @@ def income_expense_report(
             headers={"Content-Disposition": f'attachment; filename="income-expense-{year}.csv"'},
         )
 
-    content = generate_income_expense_pdf(data, lang, _owner_currency(db, current_user["user_id"]))
+    content = generate_income_expense_pdf(data, lang, *_owner_formats(db, current_user["user_id"]))
     repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf", revenue_basis=basis))
     return Response(
         content=content,
@@ -92,7 +99,7 @@ def expense_log_report(
             headers={"Content-Disposition": f'attachment; filename="expense-log-{year}.csv"'},
         )
 
-    content = generate_expense_log_pdf(data, lang, _owner_currency(db, current_user["user_id"]))
+    content = generate_expense_log_pdf(data, lang, *_owner_formats(db, current_user["user_id"]))
     repo.create(ReportExport(owner_id=current_user["user_id"], report_type="expense_log", year=year, format="pdf"))
     return Response(
         content=content,

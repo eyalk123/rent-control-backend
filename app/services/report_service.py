@@ -235,10 +235,39 @@ CURRENCY_LABELS: dict[str, dict[str, str]] = {
 }
 
 
+#: What each of the country table's three grouping styles uses between thousands.
+#:
+#: Python's ``:,`` is not locale-aware — it always writes ``1,234``, whatever the account
+#: is — so every figure in every PDF printed US grouping while the app on screen printed
+#: the country's. Same portfolio, two different numbers: the screen said ``2.289€`` and the
+#: PDF handed to the accountant said ``2,289€``.
+#:
+#: Only the thousands separator appears here because reports print whole amounts (see
+#: ``_fmt``), so the decimal separator never reaches the page.
+#:
+#: The space style uses an ordinary space rather than U+202F, which is what the browser's
+#: ``Intl`` picks: the figures are drawn into fixed-width cells that never wrap, so the
+#: narrow no-break space buys nothing and would depend on the embedded font carrying it.
+DEFAULT_NUMBER_FORMAT = "1,234.56"
+_THOUSANDS_SEPARATOR = {
+    "1,234.56": ",",
+    "1.234,56": ".",
+    "1 234,56": " ",
+}
+
+
+def _group(amount, number_format: str = DEFAULT_NUMBER_FORMAT) -> str:
+    """A whole amount with the account's thousands separator, and no currency."""
+    separator = _THOUSANDS_SEPARATOR.get(number_format, ",")
+    text = f"{amount:,.0f}"
+    return text if separator == "," else text.replace(",", separator)
+
+
 def _fmt(
     amount: Decimal,
     lang: str = DEFAULT_LANG,
     currency: country_service.EffectiveCurrency | None = None,
+    number_format: str = DEFAULT_NUMBER_FORMAT,
 ) -> str:
     """An amount with its currency, as the report prints it.
 
@@ -252,12 +281,13 @@ def _fmt(
     every report anyone has ever filed is not a change this is allowed to make quietly.
     """
     effective = currency or country_service.effective_currency(None)
+    text = _group(amount, number_format)
     legacy = CURRENCY_LABELS.get(effective.code)
     if legacy is not None:
-        return f"{legacy[normalise_lang(lang)]}{amount:,.0f}"
+        return f"{legacy[normalise_lang(lang)]}{text}"
     if effective.symbol_position == "suffix":
-        return f"{amount:,.0f}{effective.symbol}"
-    return f"{effective.symbol}{amount:,.0f}"
+        return f"{text}{effective.symbol}"
+    return f"{effective.symbol}{text}"
 
 
 # Table shading. The faint grid is what makes a property block read as one unit; the strong
@@ -561,6 +591,7 @@ class _PDF(FPDF):
         year: int,
         lang: str = DEFAULT_LANG,
         currency: country_service.EffectiveCurrency | None = None,
+        number_format: str = DEFAULT_NUMBER_FORMAT,
         revenue_basis: str | None = None,
         **kwargs,
     ):
@@ -573,6 +604,9 @@ class _PDF(FPDF):
         # reader's locale: a report is about a portfolio, and the portfolio's currency does
         # not change because someone switched the app to English.
         self.currency = currency or country_service.effective_currency(None)
+        # Grouping travels with the currency and for the same reason: it is a property of
+        # the portfolio's country, not of whoever is reading the file.
+        self.number_format = number_format
         self.rtl = self.lang == "he"
         self._title = _t(self.lang, title_key)
         self._year = year
@@ -713,6 +747,7 @@ def generate_income_expense_pdf(
     data: IncomeExpenseReportResponse,
     lang: str = DEFAULT_LANG,
     currency: country_service.EffectiveCurrency | None = None,
+    number_format: str = DEFAULT_NUMBER_FORMAT,
 ) -> bytes:
     """One block per property — Revenue, Expenses and Net on adjacent rows, months as columns.
 
@@ -726,7 +761,7 @@ def generate_income_expense_pdf(
     """
     pdf = _PDF(
         "income_title", data.year, lang=lang, currency=currency,
-        revenue_basis=data.revenue_basis,
+        number_format=number_format, revenue_basis=data.revenue_basis,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -744,7 +779,7 @@ def generate_income_expense_pdf(
     # property column whatever is left.
     pdf.set_font(FONT, "", 7)
     monthly = [
-        f"{value:,.0f}"
+        _group(value, pdf.number_format)
         for owner in data.owners
         for prop in owner.properties
         for cell in prop.months.values()
@@ -752,16 +787,16 @@ def generate_income_expense_pdf(
     ]
     # The owner-total row adds up every property, so it is wider than anything above it.
     monthly += [
-        f"{sum(p.months.get(m, MonthCell()).net for p in owner.properties):,.0f}"
+        _group(sum(p.months.get(m, MonthCell()).net for p in owner.properties), pdf.number_format)
         for owner in data.owners
         for m in range(1, 13)
     ]
     totals = [
-        f"{value:,.0f}"
+        _group(value, pdf.number_format)
         for owner in data.owners
         for prop in owner.properties
         for value in (prop.total.revenue, prop.total.expenses, prop.total.net)
-    ] + [f"{owner.total.net:,.0f}" for owner in data.owners]
+    ] + [_group(owner.total.net, pdf.number_format) for owner in data.owners]
 
     pad = 2 * pdf.c_margin + 0.4
     months_abbr = MONTH_ABBR[pdf.lang]
@@ -848,13 +883,13 @@ def generate_income_expense_pdf(
                       {"border": 1, "fill": is_net, "_fill_rgb": row_fill})]
             for value in values:
                 # An empty month reads as a dash, so the real figures stand out.
-                cells.append((MONTH_W, f"{value:,.0f}" if value else "—",
+                cells.append((MONTH_W, _group(value, pdf.number_format) if value else "—",
                               {"border": 1, "fill": is_net, "align": "R",
                                "_fill_rgb": row_fill,
                                "_colour": colour or _sign_colour(value)}))
             # The Total column is tinted and bold in every row — it is the number most people
             # open the report for.
-            cells.append((TOT_W, f"{total:,.0f}",
+            cells.append((TOT_W, _group(total, pdf.number_format),
                           {"border": 1, "fill": True, "align": "R", "_bold": True,
                            "_fill_rgb": TOTAL_COL_FILL_NET if is_net else TOTAL_COL_FILL,
                            "_colour": colour or _sign_colour(total)}))
@@ -891,9 +926,9 @@ def generate_income_expense_pdf(
         cells = [(PROP_W + METRIC_W, f' {t("owner_total_net")}', {"border": 1, "fill": True})]
         for m in range(1, 13):
             net = sum(p.months.get(m, MonthCell()).net for p in owner.properties)
-            cells.append((MONTH_W, f"{net:,.0f}" if net else "—",
+            cells.append((MONTH_W, _group(net, pdf.number_format) if net else "—",
                           {"border": 1, "fill": True, "align": "R", "_colour": _sign_colour(net)}))
-        cells.append((TOT_W, f"{owner.total.net:,.0f}",
+        cells.append((TOT_W, _group(owner.total.net, pdf.number_format),
                       {"border": 1, "fill": True, "align": "R",
                        "_colour": _sign_colour(owner.total.net)}))
         _draw_coloured_row(pdf, cells, HEADER_H, None, False)
@@ -906,9 +941,9 @@ def generate_income_expense_pdf(
     pdf.set_fill_color(200, 220, 200)
     summary = [
         (t("grand_total"), None),
-        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang, pdf.currency)}', None),
-        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang, pdf.currency)}', None),
-        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang, pdf.currency)}',
+        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang, pdf.currency, pdf.number_format)}', None),
+        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang, pdf.currency, pdf.number_format)}', None),
+        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang, pdf.currency, pdf.number_format)}',
          _sign_colour(data.grand_total.net, strong=True)),
     ]
     cells = [(pdf.get_string_width(text) + 6, text,
@@ -950,9 +985,11 @@ def generate_expense_log_pdf(
     data: ExpenseLogReportResponse,
     lang: str = DEFAULT_LANG,
     currency: country_service.EffectiveCurrency | None = None,
+    number_format: str = DEFAULT_NUMBER_FORMAT,
 ) -> bytes:
     pdf = _PDF(
         "expense_title", data.year, lang=lang, currency=currency,
+        number_format=number_format,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -987,7 +1024,7 @@ def generate_expense_log_pdf(
             row.category_name,
             row.supplier_name,
             row.payment_method,
-            f"{row.amount:,.0f}",
+            _group(row.amount, pdf.number_format),
             row.notes,
         ]
         cells = []
@@ -1025,7 +1062,7 @@ def generate_expense_log_pdf(
         ROW_H = 5
         pdf.set_font(FONT, "", 7)
         amounts = [
-            f"{amount:,.0f}"
+            _group(amount, pdf.number_format)
             for owner in data.owners
             for prop in owner.properties
             for amount in prop.categories.values()
@@ -1033,7 +1070,7 @@ def generate_expense_log_pdf(
         pad = 2 * pdf.c_margin + 0.4
         widest_amount = max(
             max((pdf.get_string_width(a) for a in amounts), default=0),
-            pdf.get_string_width("999,999"),
+            pdf.get_string_width(_group(999999, pdf.number_format)),
         )
         # Headers are drawn bold, which is wider than the regular weight the figures use —
         # measure them as they will actually be drawn or the labels come out truncated.
@@ -1043,7 +1080,7 @@ def generate_expense_log_pdf(
         pdf.set_font(FONT, "", 7)
 
         CAT_W = max(widest_amount, widest_header) + pad
-        TOT_W = max(pdf.get_string_width(f"{data.grand_total:,.0f}"), total_header) + pad
+        TOT_W = max(pdf.get_string_width(_group(data.grand_total, pdf.number_format)), total_header) + pad
 
         # Categories are usually few enough to fit; chunk as a backstop for a very wide list.
         per_block = pdf.columns_per_block(40 + TOT_W, CAT_W)
@@ -1083,9 +1120,9 @@ def generate_expense_log_pdf(
                 cells = [(PROP_W, label, {"border": 1, "fill": fill is not None})]
                 for cat in block:
                     amount = amounts_by_cat.get(cat, Decimal("0"))
-                    cells.append((CAT_W, f"{amount:,.0f}" if amount else "",
+                    cells.append((CAT_W, _group(amount, pdf.number_format) if amount else "",
                                   {"border": 1, "fill": fill is not None, "align": "R"}))
-                cells.append((TOT_W, f"{total:,.0f}",
+                cells.append((TOT_W, _group(total, pdf.number_format),
                               {"border": 1, "fill": fill is not None, "align": "R"}))
                 if fill is not None:
                     pdf.set_fill_color(*fill)

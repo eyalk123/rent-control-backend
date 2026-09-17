@@ -351,6 +351,22 @@ ZW Zimbabwe ZWG
 #
 # Each is a claim someone can check. Anything not listed takes the default.
 
+#: Codes present in the ISO source table that are **not offered as a country**.
+#:
+#: The table above is a verbatim ISO 3166-1 dump, kept that way so it stays checkable
+#: against the standard rather than becoming a hand-curated list nobody can audit. This is
+#: where the list stops being the standard and starts being a product decision, stated once
+#: and in the open: a row removed from the table itself would be re-added by the next person
+#: who diffed it against ISO and found it short.
+#:
+#: ``PS`` is excluded by product decision.
+#:
+#: Excluding a code is only safe while no account is stored with it. ``country_service``
+#: falls back rather than raising for an unknown code, so an existing account would keep
+#: working — but it would silently render as the fallback, which is not a thing to do to
+#: someone quietly. Check before adding to this set.
+_EXCLUDED = {"PS"}
+
 #: Month-first dates. The US and the territories that follow its conventions.
 _MDY = {"US", "PR", "GU", "AS", "MP", "VI", "UM", "FM", "MH", "PW"}
 
@@ -469,6 +485,8 @@ def _build() -> dict[str, CountryConfig]:
     out: dict[str, CountryConfig] = {}
     for line in _ISO_TABLE.strip().splitlines():
         code, rest = line.split(" ", 1)
+        if code in _EXCLUDED:
+            continue
         name, currency = rest.rsplit(" ", 1)
         registry_1, registry_2 = _REGISTRY_KEYS.get(code, (None, None))
         out[code] = CountryConfig(
