@@ -32,8 +32,10 @@ from pydantic import ValidationError
 from app.schemas.document_extraction import (
     ExtractedProperty,
     ExtractedRenter,
+    FieldNote,
     LeaseExtraction,
 )
+from app.services import country_service
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +101,15 @@ _MAX_PDF_PAGES = 20
 #   - electricity_meter_number, electricity_account_number, water_meter_number, water_account_number: utility identifiers.
 #   - property_tax, house_committee: periodic property tax ("arnona") and building-committee ("vaad bayit") amounts.
 #   - inventory_notes: any inventory / contents description.
-_SYSTEM_PROMPT = """You extract structured data from rental lease / property contracts to pre-fill a property-management app's forms. Documents are often in Hebrew (right-to-left) and may mix Hebrew, English, and numbers in tables — read them carefully and preserve the correct values.
+_SYSTEM_PROMPT = """You extract structured data from rental lease / property contracts to pre-fill a property-management app's forms. A lease may be in any language and any script, including right-to-left ones such as Hebrew and Arabic, and often mixes scripts and numbers inside tables — read them carefully and preserve the correct values. Many examples below are Hebrew, because that is the market this app served first; they show the SHAPE of a clause, not the only language you will meet. A short block after this one names the country the lease is expected to come from and the conventions that apply there.
 
-A single lease usually describes a property and one or more renters (co-tenants who sign the same lease). Populate the property once and add one entry to `renters` for EACH tenant. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money/areas as plain numbers (no currency symbols or commas).
+A single lease usually describes a property and one or more renters (co-tenants who sign the same lease). Populate the property once and add one entry to `renters` for EACH tenant. Fill EVERY field that the document states — a typical lease contains most of them. Leave a field null ONLY if the document genuinely doesn't contain it; never guess or invent values. Dates as ISO YYYY-MM-DD; money and areas as plain numbers, with no currency symbol and no digit grouping.
+
+READING NUMBERS — read this before copying any amount.
+- Digit separators differ by country, and reading one the wrong way changes an amount by a factor of a thousand. "1.500" is one thousand five hundred where a dot groups thousands, and one-and-a-half where a dot is the decimal point. The same ambiguity applies to "1,500".
+- Decide which convention applies from the country named in the block below, and from the document itself — a lease that writes "2.289,50" has told you the dot groups and the comma is the decimal point, whatever its country.
+- Then output the bare value: "1.500" → 1500, "2.289,50" → 2289.5, "1,234.56" → 1234.56. Never emit a grouping separator, and use "." for any decimal point.
+- Sanity-check every amount before you return it. Rent is a monthly sum someone pays to live somewhere. If a rent, deposit or price comes out as a single-digit or near-zero number while the document plainly showed a large figure, you have read a grouping separator as a decimal point — re-read it. If you are still unsure, return your best reading AND add a `notes` entry for that field with `confidence` "low".
 
 Confidence: for any field you are NOT highly confident about (inferred, ambiguous, or loosely derived), append one entry to `notes` with its `section` ("property" or "renter"), `field` (the exact field name below), `renter_index` (for a renter field, the 0-based index of the renter in `renters`; null for a property field), `confidence` ("medium" or "low"), and `source_text` (the short verbatim snippet it came from). Do NOT add a note for a field you're confident about, and never add a note for a null field.
 
@@ -245,8 +253,16 @@ class DocumentExtractionService:
                     lines.append(" | ".join(cells))
         return "\n".join(lines)
 
-    def extract_lease(self, file_bytes: bytes, content_type: str) -> ExtractionResult:
-        """Extract a property + renter draft from a lease document, with call telemetry."""
+    def extract_lease(
+        self, file_bytes: bytes, content_type: str, country: str | None = None
+    ) -> ExtractionResult:
+        """Extract a property + renter draft from a lease document, with call telemetry.
+
+        ``country`` is the account's, and decides which reading conventions the model is
+        told to expect — above all which separator groups thousands, which is the one
+        misreading that silently changes an amount by a factor of a thousand. ``None``
+        resolves to Israel, which is what every extraction did before this existed.
+        """
         content_blocks = self._build_content_blocks(file_bytes, content_type)
         client = self._client()
 
@@ -261,7 +277,12 @@ class DocumentExtractionService:
                     "type": "text",
                     "text": _SYSTEM_PROMPT,
                     "cache_control": {"type": "ephemeral"},
-                }
+                },
+                # A second block, deliberately NOT cached. The prompt above is byte-identical
+                # for every request, which is what makes caching it worth having; this part
+                # varies per account and folding it into the cached text would split the
+                # cache into one entry per country.
+                {"type": "text", "text": _country_brief(country)},
             ],
             tools=[_EXTRACTION_TOOL],
             tool_choice={"type": "tool", "name": _TOOL_NAME},
@@ -306,7 +327,7 @@ class DocumentExtractionService:
         # instead of silently vanishing. Deliberately narrow: we log ONLY the discarded
         # values, never the whole extraction, which is full of tenant PII.
         discarded: list[str] = []
-        extraction = _clean_extraction(parsed, discarded)
+        extraction = _clean_extraction(parsed, discarded, country)
         if discarded:
             logger.warning(
                 "Lease extraction (model=%s) returned unusable values, discarded: %s",
@@ -360,6 +381,55 @@ _PAYMENT_TYPES = {"cash", "bank_transfer", "bit", "check"}
 _PAYMENT_TYPE_ALIASES = {"wire_transfer": "bank_transfer"}
 
 
+#: How each grouping style reads, said the way the model needs to hear it. The awkward
+#: spelled-out repetition is deliberate: "2.289" is the exact string the model gets wrong,
+#: so the brief names it and says what it is not.
+_SEPARATOR_BRIEF = {
+    "1,234.56": (
+        'a comma groups thousands and a dot is the decimal point, so "2,289.50" is two '
+        "thousand two hundred and eighty-nine and a half"
+    ),
+    "1.234,56": (
+        "a DOT groups thousands and a COMMA is the decimal point, so \"2.289,50\" is two "
+        "thousand two hundred and eighty-nine and a half, and \"2.289\" on its own is two "
+        "thousand two hundred and eighty-nine — NOT two point two eight nine"
+    ),
+    "1 234,56": (
+        'a space groups thousands and a comma is the decimal point, so "2 289,50" is two '
+        "thousand two hundred and eighty-nine and a half"
+    ),
+}
+
+_DATE_ORDER = {
+    "DMY": "day before month",
+    "MDY": "month before day",
+    "YMD": "year first",
+}
+
+
+def _country_brief(country: str | None) -> str:
+    """What this account's leases are expected to look like, derived from the country table.
+
+    Nothing here is hand-written per country: the separator style, the currency and the date
+    order are all already config. The one thing that cannot be derived — which language the
+    lease is actually in — is deliberately left for the model to see for itself rather than
+    asserted, because an Israeli landlord may hold a lease written in English and a Spanish
+    one may hold a Catalan lease.
+    """
+    config = country_service.config_for(country)
+    return "\n".join(
+        [
+            f"This account is in {config.name}. Unless the document itself clearly says "
+            f"otherwise, expect that:",
+            f"- Numbers are written so that {_SEPARATOR_BRIEF[config.number_format]}.",
+            f"- Amounts are in {config.currency}. Output the number alone, without a symbol.",
+            f"- A date written with slashes or dots puts the {_DATE_ORDER[config.date_format]}.",
+            "- National identifiers, phone number shapes, tax terms and land-registry terms "
+            "are that country's. Do not assume an Israeli form unless the country is Israel.",
+        ]
+    )
+
+
 def _looks_like_email(value: str) -> bool:
     """Shape check only — one "@" with non-blank text either side and a dot in the domain.
     Deliberately loose: the point is to catch a phone/ID/name landing in `email`, not to
@@ -371,12 +441,64 @@ def _looks_like_email(value: str) -> bool:
 
 
 def _looks_like_israeli_id(value: str) -> bool:
-    """A bare 9-digit number is almost certainly a national ID (ת\"ז), not a phone."""
+    """A bare 9-digit number is almost certainly a national ID (ת\"ז), not a phone.
+
+    **True in Israel only.** A bare nine digits is an ordinary national phone number in
+    plenty of countries — France, Spain and Portugal all write one — so applying this
+    everywhere silently threw away valid phone numbers. See `_clean_renter`, which is what
+    decides whether to consult it.
+    """
     digits = "".join(ch for ch in value if ch.isdigit())
     return len(digits) == 9 and digits == value.strip()
 
 
-def _clean_renter(r: ExtractedRenter, discarded: Optional[list[str]] = None) -> None:
+#: Below this, a monthly rent is not a rent — it is a grouping separator read as a decimal
+#: point ("2.289" understood as two-point-two-eight-nine). Deliberately far under any real
+#: rent in any currency, including the weakest: the job is to catch an order-of-magnitude
+#: misread, not to second-guess a cheap room. Nothing is dropped on the strength of it —
+#: see `_flag_implausible_amounts`, which only annotates.
+_IMPLAUSIBLE_RENT_BELOW = 10
+
+
+def _flag_implausible_amounts(extraction: LeaseExtraction) -> None:
+    """Mark an amount that reads like a misparsed separator, without discarding it.
+
+    The `_clean_*` passes check sign and range only, so `base_rent = 2.289` for a Spanish
+    lease reading "2.289 €" cleared every gate and landed in the form as two euros. This
+    cannot know the right answer, so it does not guess: it adds a low-confidence note,
+    which is the mechanism the review screen already uses to make a user look at a field.
+    """
+    def _flag(section: str, field: str, value, renter_index: Optional[int]) -> None:
+        if value is None or value <= 0 or value >= _IMPLAUSIBLE_RENT_BELOW:
+            return
+        if any(
+            n.section == section and n.field == field and n.renter_index == renter_index
+            for n in extraction.notes
+        ):
+            return  # the model already flagged it; don't say it twice
+        extraction.notes.append(
+            FieldNote(
+                section=section,
+                field=field,
+                renter_index=renter_index,
+                confidence="low",
+                source_text=(
+                    f"{value} looks too small for a monthly amount — check whether a "
+                    f"thousands separator was read as a decimal point."
+                ),
+            )
+        )
+
+    _flag("property", "joint_monthly_rent", extraction.joint_monthly_rent, None)
+    for i, renter in enumerate(extraction.renters):
+        _flag("renter", "base_rent", renter.base_rent, i)
+
+
+def _clean_renter(
+    r: ExtractedRenter,
+    discarded: Optional[list[str]] = None,
+    country: str | None = None,
+) -> None:
     def _drop(field: str) -> None:
         if discarded is not None:
             discarded.append(f"{field}={getattr(r, field)!r}")
@@ -427,13 +549,25 @@ def _clean_renter(r: ExtractedRenter, discarded: Optional[list[str]] = None) -> 
     # An email that isn't address-shaped is a phone/ID/name that wandered into the field.
     if r.email is not None and not _looks_like_email(r.email):
         _drop("email")
-    # Guard against the national ID being mistaken for a phone (see the prompt).
-    if r.phone is not None and _looks_like_israeli_id(r.phone):
+    # Guard against the national ID being mistaken for a phone (see the prompt) — but only
+    # where a bare nine digits really is an ID rather than an ordinary phone number.
+    #
+    # An unknown country keeps the number, unlike the usual "unknown resolves to Israel"
+    # rule elsewhere. The two errors are not symmetric: keeping an ID shows the user a wrong
+    # phone they can see and fix on the review screen, while dropping a real phone loses
+    # data silently. Erring towards keeping is the recoverable direction.
+    if (
+        r.phone is not None
+        and country_service.normalize(country) == "IL"
+        and _looks_like_israeli_id(r.phone)
+    ):
         _drop("phone")
 
 
 def _clean_extraction(
-    extraction: LeaseExtraction, discarded: Optional[list[str]] = None
+    extraction: LeaseExtraction,
+    discarded: Optional[list[str]] = None,
+    country: str | None = None,
 ) -> LeaseExtraction:
     """Null out extracted values that wouldn't survive form/back-end validation, then
     drop any uncertainty notes whose field we just nulled.
@@ -443,9 +577,12 @@ def _clean_extraction(
     """
     _clean_property(extraction.property)
     for renter in extraction.renters:
-        _clean_renter(renter, discarded)
+        _clean_renter(renter, discarded, country)
     if extraction.joint_monthly_rent is not None and extraction.joint_monthly_rent < 0:
         extraction.joint_monthly_rent = None
+    # After the range checks and before the notes are pruned: this one ADDS a note, and a
+    # note whose field is null is dropped below, which is exactly the behaviour we want.
+    _flag_implausible_amounts(extraction)
 
     def _note_target(n):
         if n.section == "property":
@@ -454,10 +591,17 @@ def _clean_extraction(
             return extraction.renters[n.renter_index]
         return None
 
-    extraction.notes = [
-        n for n in extraction.notes
-        if (_t := _note_target(n)) is not None and getattr(_t, n.field, None) is not None
-    ]
+    def _still_populated(n) -> bool:
+        target = _note_target(n)
+        if target is not None and getattr(target, n.field, None) is not None:
+            return True
+        # `joint_monthly_rent` is the one field the model is told about that lives on the
+        # extraction itself rather than on a section, so a note about it looked like a note
+        # about a nulled field and was pruned on the way out. Nothing else reaches here: a
+        # field name that matches neither the section nor the extraction is still dropped.
+        return n.section == "property" and getattr(extraction, n.field, None) is not None
+
+    extraction.notes = [n for n in extraction.notes if _still_populated(n)]
     return extraction
 
 

@@ -24,7 +24,7 @@ router = APIRouter()
 
 
 def _owner_formats(db: Session, owner_id: str):
-    """The currency and the thousands grouping a report should print its amounts in.
+    """The currency, the thousands grouping and the symbol spacing a report prints with.
 
     Read from the owner rather than the reader's `?lang=`: a report is about a portfolio,
     and neither of these changes because someone switched the app to English. A missing
@@ -35,15 +35,16 @@ def _owner_formats(db: Session, owner_id: str):
     symbol. Grouping has no such override: it is the country's, always, because it is a way
     of writing numbers rather than a property of the money.
 
-    Both come from one owner read, and both are positional arguments of the two PDF
-    generators in that order.
+    All three come from one owner read, and all three are positional arguments of the two
+    PDF generators in that order.
     """
     owner = OwnerRepository(db).get(owner_id)
     country = owner.country if owner is not None else None
     currency = country_service.effective_currency(
         country, owner.currency if owner is not None else None
     )
-    return currency, country_service.config_for(country).number_format
+    config = country_service.config_for(country)
+    return currency, config.number_format, config.currency_symbol_spaced
 
 
 @router.get("/income-expense")

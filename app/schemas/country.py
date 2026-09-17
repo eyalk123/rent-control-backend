@@ -35,6 +35,7 @@ class CountryRead(BaseModel):
     currency: str
     currency_symbol: str
     currency_symbol_position: str
+    currency_symbol_spaced: bool
     locale: str
     date_format: str
     number_format: str

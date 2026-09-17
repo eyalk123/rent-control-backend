@@ -8,8 +8,10 @@ from app.api.dependencies import (
     get_current_user,
     get_document_extraction_log_repository,
     get_document_extraction_service,
+    get_owner_repository,
 )
 from app.models.document_extraction_log import DocumentExtractionLog
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.document_extraction_log_repository import (
     DocumentExtractionLogRepository,
 )
@@ -27,6 +29,7 @@ async def extract_lease(
     current_user: Annotated[dict, Depends(get_current_user)],
     service: Annotated[DocumentExtractionService, Depends(get_document_extraction_service)],
     log_repo: Annotated[DocumentExtractionLogRepository, Depends(get_document_extraction_log_repository)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
     file: Annotated[UploadFile, File()],
 ):
     """Extract a property + renter draft from an uploaded lease (PDF / DOCX / image).
@@ -59,7 +62,12 @@ async def extract_lease(
             sentry_sdk.capture_exception(exc)
 
     try:
-        result = service.extract_lease(file_bytes, file.content_type)
+        # The owner's country decides which digit-separator convention the model is told
+        # to expect. A missing owner row passes None, which resolves to Israel.
+        owner = owner_repository.get(current_user["user_id"])
+        result = service.extract_lease(
+            file_bytes, file.content_type, owner.country if owner else None
+        )
     except HTTPException as exc:
         _log_failure("unsupported" if exc.status_code == 415 else "error", str(exc.detail))
         raise

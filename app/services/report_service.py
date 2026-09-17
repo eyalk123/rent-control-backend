@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 ACCRUAL = "accrual"
 CASH = "cash"
 SUPPORTED_BASES = (ACCRUAL, CASH)
-from app.services import country_service
+from app.services import country_service, money_format
 from app.models.transaction import Transaction, TransactionTypeEnum
 from app.schemas.report import (
     ExpenseLogReportResponse,
@@ -235,32 +235,11 @@ CURRENCY_LABELS: dict[str, dict[str, str]] = {
 }
 
 
-#: What each of the country table's three grouping styles uses between thousands.
-#:
-#: Python's ``:,`` is not locale-aware — it always writes ``1,234``, whatever the account
-#: is — so every figure in every PDF printed US grouping while the app on screen printed
-#: the country's. Same portfolio, two different numbers: the screen said ``2.289€`` and the
-#: PDF handed to the accountant said ``2,289€``.
-#:
-#: Only the thousands separator appears here because reports print whole amounts (see
-#: ``_fmt``), so the decimal separator never reaches the page.
-#:
-#: The space style uses an ordinary space rather than U+202F, which is what the browser's
-#: ``Intl`` picks: the figures are drawn into fixed-width cells that never wrap, so the
-#: narrow no-break space buys nothing and would depend on the embedded font carrying it.
-DEFAULT_NUMBER_FORMAT = "1,234.56"
-_THOUSANDS_SEPARATOR = {
-    "1,234.56": ",",
-    "1.234,56": ".",
-    "1 234,56": " ",
-}
-
-
-def _group(amount, number_format: str = DEFAULT_NUMBER_FORMAT) -> str:
-    """A whole amount with the account's thousands separator, and no currency."""
-    separator = _THOUSANDS_SEPARATOR.get(number_format, ",")
-    text = f"{amount:,.0f}"
-    return text if separator == "," else text.replace(",", separator)
+# Grouping and symbol spacing live in `money_format`, shared with the chat agent — both
+# artefacts were getting the same thing wrong separately. `_group` stays as a local name
+# because it is used a dozen times below for column-width measurement as well as output.
+_group = money_format.group
+DEFAULT_NUMBER_FORMAT = money_format.DEFAULT_NUMBER_FORMAT
 
 
 def _fmt(
@@ -268,6 +247,7 @@ def _fmt(
     lang: str = DEFAULT_LANG,
     currency: country_service.EffectiveCurrency | None = None,
     number_format: str = DEFAULT_NUMBER_FORMAT,
+    symbol_spaced: bool = False,
 ) -> str:
     """An amount with its currency, as the report prints it.
 
@@ -284,9 +264,17 @@ def _fmt(
     text = _group(amount, number_format)
     legacy = CURRENCY_LABELS.get(effective.code)
     if legacy is not None:
+        # The ILS exception above carries its own spacing inside the label ("ILS " / "₪").
         return f"{legacy[normalise_lang(lang)]}{text}"
     if effective.symbol_position == "suffix":
-        return f"{text}{effective.symbol}"
+        # A space where the country writes one — "1.234,56 €" in the euro zone. Never for a
+        # prefix symbol, which is written tight everywhere.
+        #
+        # An ordinary space, not U+00A0, for the same reason `_group` gives above: these are
+        # drawn into fixed-width cells that never wrap, so a no-break space buys nothing here
+        # and would depend on the embedded font carrying the glyph. The clients do wrap, so
+        # they use U+00A0 — the two render identically.
+        return f"{text} {effective.symbol}" if symbol_spaced else f"{text}{effective.symbol}"
     return f"{effective.symbol}{text}"
 
 
@@ -592,6 +580,7 @@ class _PDF(FPDF):
         lang: str = DEFAULT_LANG,
         currency: country_service.EffectiveCurrency | None = None,
         number_format: str = DEFAULT_NUMBER_FORMAT,
+        symbol_spaced: bool = False,
         revenue_basis: str | None = None,
         **kwargs,
     ):
@@ -607,6 +596,7 @@ class _PDF(FPDF):
         # Grouping travels with the currency and for the same reason: it is a property of
         # the portfolio's country, not of whoever is reading the file.
         self.number_format = number_format
+        self.symbol_spaced = symbol_spaced
         self.rtl = self.lang == "he"
         self._title = _t(self.lang, title_key)
         self._year = year
@@ -748,6 +738,7 @@ def generate_income_expense_pdf(
     lang: str = DEFAULT_LANG,
     currency: country_service.EffectiveCurrency | None = None,
     number_format: str = DEFAULT_NUMBER_FORMAT,
+    symbol_spaced: bool = False,
 ) -> bytes:
     """One block per property — Revenue, Expenses and Net on adjacent rows, months as columns.
 
@@ -761,7 +752,8 @@ def generate_income_expense_pdf(
     """
     pdf = _PDF(
         "income_title", data.year, lang=lang, currency=currency,
-        number_format=number_format, revenue_basis=data.revenue_basis,
+        number_format=number_format, symbol_spaced=symbol_spaced,
+        revenue_basis=data.revenue_basis,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -941,9 +933,9 @@ def generate_income_expense_pdf(
     pdf.set_fill_color(200, 220, 200)
     summary = [
         (t("grand_total"), None),
-        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang, pdf.currency, pdf.number_format)}', None),
-        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang, pdf.currency, pdf.number_format)}', None),
-        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang, pdf.currency, pdf.number_format)}',
+        (f'{t("revenue")}: {_fmt(data.grand_total.revenue, pdf.lang, pdf.currency, pdf.number_format, pdf.symbol_spaced)}', None),
+        (f'{t("expenses")}: {_fmt(data.grand_total.expenses, pdf.lang, pdf.currency, pdf.number_format, pdf.symbol_spaced)}', None),
+        (f'{t("net")}: {_fmt(data.grand_total.net, pdf.lang, pdf.currency, pdf.number_format, pdf.symbol_spaced)}',
          _sign_colour(data.grand_total.net, strong=True)),
     ]
     cells = [(pdf.get_string_width(text) + 6, text,
@@ -986,10 +978,11 @@ def generate_expense_log_pdf(
     lang: str = DEFAULT_LANG,
     currency: country_service.EffectiveCurrency | None = None,
     number_format: str = DEFAULT_NUMBER_FORMAT,
+    symbol_spaced: bool = False,
 ) -> bytes:
     pdf = _PDF(
         "expense_title", data.year, lang=lang, currency=currency,
-        number_format=number_format,
+        number_format=number_format, symbol_spaced=symbol_spaced,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)

@@ -412,6 +412,7 @@ def get_reminder_service(
     device_token_repository: Annotated[
         DeviceTokenRepository, Depends(get_device_token_repository)
     ],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
 ) -> ReminderService:
     return ReminderService(
         engine=engine,
@@ -420,4 +421,5 @@ def get_reminder_service(
         renter_repository=renter_repository,
         push_service=push_service,
         device_token_repository=device_token_repository,
+        owner_repository=owner_repository,
     )

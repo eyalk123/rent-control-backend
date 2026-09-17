@@ -32,7 +32,8 @@ class _StubService:
     def __init__(self, draft):
         self._result = ExtractionResult(extraction=draft, meta=_meta())
 
-    def extract_lease(self, file_bytes, content_type):
+    def extract_lease(self, file_bytes, content_type, country=None):
+        self.country = country
         return self._result
 
 

@@ -17,8 +17,8 @@ Two rules make this safe and are enforced structurally, not by trusting the mode
 ``TOOL_SCHEMAS`` is the list handed to the Anthropic Messages API as ``tools=``; each
 entry's ``name`` matches a ``_tool_<name>`` method below. Tool results are returned as
 compact, JSON-serialisable dicts that always include ids (so answers can cite sources)
-and pre-formatted ``₪`` display strings (so the model quotes money verbatim instead of
-formatting it).
+and pre-formatted money display strings in the account's own currency (so the model quotes
+money verbatim instead of formatting it).
 """
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ from app.services.cpi_indexing_service import compute_chained_cpi_amount, comput
 from app.services.property_service import PropertyService
 from app.services.renter_service import RenterService
 from app.services.supplier_service import SupplierService
+from app.services import money_format
 from app.services.transaction_service import TransactionService
 
 # How many transaction rows a single query_transactions call will pull. Small-landlord
@@ -60,14 +61,20 @@ from app.services.transaction_service import TransactionService
 _MAX_TXN_ROWS = 500
 
 
-def format_shekels(amount: Optional[float | Decimal]) -> str:
-    """Money the app's way: ``₪12,000`` (no decimals when whole, else two)."""
-    if amount is None:
-        return "₪0"
-    value = Decimal(str(amount))
-    if value == value.to_integral_value():
-        return f"₪{int(value):,}"
-    return f"₪{value:,.2f}"
+#: The account's currency and grouping, as `money_format.format_money` wants them.
+#: Resolved once per owner per request — see `AgentTools._money`.
+MoneyStyle = tuple[country_service.EffectiveCurrency, str, bool]
+
+
+def format_money(amount: Optional[float | Decimal], style: MoneyStyle) -> str:
+    """Money the way this account writes it: ``₪12,000``, ``$12,000``, ``12.000 €``.
+
+    This was ``format_shekels`` and hardcoded both the glyph and US digit grouping, so every
+    non-Israeli account was answered in shekels — the one place in the product where the
+    country was ignored outright rather than merely unstyled.
+    """
+    currency, number_format, symbol_spaced = style
+    return money_format.format_money(amount, currency, number_format, symbol_spaced)
 
 
 def _num(amount: Optional[float | Decimal]) -> float:
@@ -124,22 +131,22 @@ def _current_year_index(
     return 0 if today < lease_start else len(lease_years) - 1
 
 
-def _cell(mc: Any) -> dict:
+def _cell(mc: Any, style: "MoneyStyle") -> dict:
     """MonthCell (revenue/expenses/net Decimals) → JSON dict with display strings."""
     rev, exp, net = mc.revenue, mc.expenses, mc.net
     return {
         "revenue": _num(rev),
         "expenses": _num(exp),
         "net": _num(net),
-        "revenue_display": format_shekels(rev),
-        "expenses_display": format_shekels(exp),
-        "net_display": format_shekels(net),
+        "revenue_display": format_money(rev, style),
+        "expenses_display": format_money(exp, style),
+        "net_display": format_money(net, style),
     }
 
 
-def _cat_map(categories: dict) -> dict:
-    """category → Decimal  ==>  category → '₪…' display string."""
-    return {name: format_shekels(amt) for name, amt in categories.items()}
+def _cat_map(categories: dict, style: "MoneyStyle") -> dict:
+    """category → Decimal  ==>  category → formatted display string."""
+    return {name: format_money(amt, style) for name, amt in categories.items()}
 
 
 # --- aggregate() query tool -------------------------------------------------------
@@ -147,7 +154,7 @@ def _cat_map(categories: dict) -> dict:
 # the agent answers arbitrary "how many / how much … where …" questions without ever
 # tallying rows itself. Each entity exposes a fixed, app-aligned set of filterable fields.
 
-# field -> kind ("num" | "str" | "bool" | "date"); MONEY fields also get a ₪ display.
+# field -> kind ("num" | "str" | "bool" | "date"); MONEY fields also get a formatted display.
 _AGG_FIELDS: dict[str, dict[str, str]] = {
     "properties": {
         "id": "num", "address": "str", "city": "str", "type": "str",
@@ -330,12 +337,12 @@ TOOL_SCHEMAS: list[dict] = [
             "Dates are ISO YYYY-MM-DD. Optional group_by returns a per-group breakdown.\n"
             "Fields — properties: id, address, city, type, property_owner, occupied(bool — has a "
             "renter whose lease has not ended), renter_count (every renter ever linked, past "
-            "tenants included), current_lease_end(date), purchase_price(₪). "
+            "tenants included), current_lease_end(date), purchase_price(money). "
             "renters: id, name, property_id, has_property(bool), lease_start(date), lease_end(date), "
-            "contract_term_years, option_years, current_monthly_rent(₪), rent_escalation_mode, "
+            "contract_term_years, option_years, current_monthly_rent(money), rent_escalation_mode, "
             "payment_frequency, insurance_type. "
             "transactions: id, type(revenue|expense), property_id, renter_id, category_name, "
-            "supplier_name, amount(₪), date_of_payment(date), month_for(date).\n"
+            "supplier_name, amount(money), date_of_payment(date), month_for(date).\n"
             "Example — occupied properties with a lease running to at least 2027: entity=properties, "
             'filters={"occupied": true, "current_lease_end": {"gte": "2027-01-01"}}, operation=count. '
             "For canonical yearly income/expense totals, prefer get_report_summary."
@@ -462,8 +469,35 @@ class AgentTools:
         owner = OwnerRepository(self.db).get(owner_id)
         return owner.country if owner else None
 
+    def _money(self, owner_id: str) -> MoneyStyle:
+        """How this account writes money: (currency, grouping, symbol spacing).
+
+        Memoised per instance, and one instance is one request, so a turn that calls six
+        tools does one owner read rather than six. The country cannot change mid-turn —
+        the same reasoning `agent_service` uses to resolve the tool list once.
+
+        Country *and* currency come from the one read: an account may hold a currency its
+        country does not use, and `effective_currency` needs both to pick the right symbol
+        and side. A missing owner row resolves to Israel, which is what every tool did
+        before this existed.
+        """
+        cached = self._money_cache.get(owner_id)
+        if cached is not None:
+            return cached
+        owner = OwnerRepository(self.db).get(owner_id)
+        country = owner.country if owner else None
+        config = country_service.config_for(country)
+        style: MoneyStyle = (
+            country_service.effective_currency(country, owner.currency if owner else None),
+            config.number_format,
+            config.currency_symbol_spaced,
+        )
+        self._money_cache[owner_id] = style
+        return style
+
     def __init__(self, db: Session):
         self.db = db
+        self._money_cache: dict[str, MoneyStyle] = {}
         property_repo = PropertyRepository(db)
         renter_repo = RenterRepository(db)
         transaction_repo = TransactionRepository(db)
@@ -560,6 +594,7 @@ class AgentTools:
         return sorted(pool, key=lambda r: (r.lease_start or date.min), reverse=True)[0]
 
     def _tool_list_properties(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         properties, by_prop = self._grouped_renters(owner_id)
         out = []
         occupied_count = 0
@@ -586,7 +621,7 @@ class AgentTools:
                             "id": current.id,
                             "name": f"{current.first_name} {current.last_name}".strip(),
                             "monthly_rent": _num(current_rent),
-                            "monthly_rent_display": format_shekels(current_rent),
+                            "monthly_rent_display": format_money(current_rent, style),
                         }
                         if current
                         else None
@@ -664,6 +699,7 @@ class AgentTools:
         return rows
 
     def _tool_aggregate(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         entity = params.get("entity")
         if entity not in _AGG_FIELDS:
             return {"error": f"entity must be one of {sorted(_AGG_FIELDS)}"}
@@ -698,7 +734,7 @@ class AgentTools:
 
         def _fmt(value) -> dict:
             if value_field in _AGG_MONEY and isinstance(value, (int, float)):
-                return {"value": value, "value_display": format_shekels(value)}
+                return {"value": value, "value_display": format_money(value, style)}
             return {"value": value}
 
         result: dict = {"entity": entity, "operation": operation, "matched": len(matched), "filters": filters}
@@ -718,6 +754,7 @@ class AgentTools:
         return result
 
     def _tool_query_transactions(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         type_filter = params.get("type")
         rows = self.transaction_service.list_transactions(
             owner_id=owner_id,
@@ -734,7 +771,7 @@ class AgentTools:
             "count": len(rows),
             "truncated": len(rows) >= _MAX_TXN_ROWS,
             "total": _num(total),
-            "total_display": format_shekels(total),
+            "total_display": format_money(total, style),
             "transactions": [
                 {
                     "id": r.id,
@@ -742,7 +779,7 @@ class AgentTools:
                     "date_of_payment": _iso(r.date_of_payment),
                     "month_for": _iso(r.month_for),
                     "amount": _num(r.amount),
-                    "amount_display": format_shekels(r.amount),
+                    "amount_display": format_money(r.amount, style),
                     "property_id": r.property_id,
                     "property_name": r.property_name,
                     "renter_id": r.renter_id,
@@ -756,6 +793,7 @@ class AgentTools:
         }
 
     def _tool_get_property(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         property_id = params.get("property_id")
         p = self.property_service.get_property(property_id, owner_id)
         if p is None:
@@ -784,7 +822,7 @@ class AgentTools:
             "floor": p.floor,
             "apartment": p.apartment,
             "purchase_price": _num(p.purchase_price),
-            "purchase_price_display": format_shekels(p.purchase_price),
+            "purchase_price_display": format_money(p.purchase_price, style),
             "property_tax": _num(p.property_tax) if p.property_tax is not None else None,
             "house_committee": _num(p.house_committee) if p.house_committee is not None else None,
             "status": "occupied" if current else "vacant",
@@ -793,7 +831,7 @@ class AgentTools:
                     "id": current.id,
                     "name": f"{current.first_name} {current.last_name}".strip(),
                     "monthly_rent": _num(current.monthly_rent),
-                    "monthly_rent_display": format_shekels(current.monthly_rent),
+                    "monthly_rent_display": format_money(current.monthly_rent, style),
                 }
                 if current
                 else None
@@ -802,13 +840,14 @@ class AgentTools:
                 "revenue": _num(revenue),
                 "expenses": _num(expenses),
                 "net": _num(net),
-                "revenue_display": format_shekels(revenue),
-                "expenses_display": format_shekels(expenses),
-                "net_display": format_shekels(net),
+                "revenue_display": format_money(revenue, style),
+                "expenses_display": format_money(expenses, style),
+                "net_display": format_money(net, style),
             },
         }
 
     def _tool_list_renters(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         property_id = params.get("property_id")
         renters = self.renter_service.list_renters(owner_id)
         out = []
@@ -831,7 +870,7 @@ class AgentTools:
                     "contract_term_years": r.contract_term_years,
                     "option_years": r.option_years,
                     "current_monthly_rent": _num(current_amount),
-                    "current_monthly_rent_display": format_shekels(current_amount),
+                    "current_monthly_rent_display": format_money(current_amount, style),
                     "payment_day_of_month": r.payment_day_of_month,
                     "payment_frequency": _payment_frequency(r.number_of_payments),
                     "rent_escalation_mode": r.rent_escalation_mode,
@@ -842,6 +881,7 @@ class AgentTools:
         return {"count": len(out), "renters": out}
 
     def _tool_get_lease_schedule(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         r = self.renter_service.get_renter(params.get("renter_id"), owner_id)
         if r is None:
             return {"error": "not found"}
@@ -863,7 +903,7 @@ class AgentTools:
                     # that is not a whole number of years.
                     "months": period_months(y),
                     "amount": _num(y.get("amount")),
-                    "amount_display": format_shekels(y.get("amount")),
+                    "amount_display": format_money(y.get("amount"), style),
                     "rule": y.get("rule"),
                 }
             )
@@ -897,6 +937,7 @@ class AgentTools:
         return {"value": row.value, "month": f"{row.year:04d}-{row.month:02d}"}, (row.year, row.month)
 
     def _tool_explain_cpi(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         r = self.renter_service.get_renter(params.get("renter_id"), owner_id)
         if r is None:
             return {"error": "not found"}
@@ -932,7 +973,7 @@ class AgentTools:
         if not year_is_cpi:
             result["cpi_linked"] = False
             result["amount"] = _num(year_row.get("amount"))
-            result["amount_display"] = format_shekels(year_row.get("amount"))
+            result["amount_display"] = format_money(year_row.get("amount"), style)
             result["message"] = (
                 f"Year {idx + 1} of this lease is not CPI-linked; its rent follows the "
                 f"'{rule.get('mode') if rule else mode}' rule, not index linkage."
@@ -949,7 +990,7 @@ class AgentTools:
             {
                 "cpi_linked": True,
                 "base_rent": _num(base_rent),
-                "base_rent_display": format_shekels(base_rent),
+                "base_rent_display": format_money(base_rent, style),
                 "known_index": known_dict,
                 "known_index_status": "finalized" if finalized else "projected",
                 "floor_note": "Rent never falls below its floor (the לא יפחת clause).",
@@ -976,9 +1017,9 @@ class AgentTools:
                     "ratio": round(ratio, 6) if ratio is not None else None,
                     "floor_applied": floor_applied,
                     "previous_year_amount": _num(prev_amount),
-                    "previous_year_amount_display": format_shekels(prev_amount),
+                    "previous_year_amount_display": format_money(prev_amount, style),
                     "amount": _num(amount),
-                    "amount_display": format_shekels(amount),
+                    "amount_display": format_money(amount, style),
                 }
             )
         else:
@@ -995,17 +1036,18 @@ class AgentTools:
                     "linkage": "chained_per_year",
                     "formula": "rent = previous_year_rent × max(known_index ÷ previous_year_index, 1)",
                     "previous_year_amount": _num(prev_amount),
-                    "previous_year_amount_display": format_shekels(prev_amount),
+                    "previous_year_amount_display": format_money(prev_amount, style),
                     "previous_year_index": prev_dict,
                     "ratio": round(ratio, 6) if ratio is not None else None,
                     "floor_applied": floor_applied,
                     "amount": _num(amount),
-                    "amount_display": format_shekels(amount),
+                    "amount_display": format_money(amount, style),
                 }
             )
         return result
 
     def _tool_get_overdue(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         overdue = self.renter_service.get_overdue_this_month(
             owner_id, property_owner=params.get("property_owner")
         )
@@ -1019,7 +1061,7 @@ class AgentTools:
                     "property_address": o.property_address,
                     "property_owner": o.property_owner,
                     "amount_owed": _num(o.monthly_amount),
-                    "amount_owed_display": format_shekels(o.monthly_amount),
+                    "amount_owed_display": format_money(o.monthly_amount, style),
                     "payment_day_of_month": o.payment_day_of_month,
                     "days_overdue": o.days_overdue,
                 }
@@ -1028,6 +1070,7 @@ class AgentTools:
         }
 
     def _tool_get_report_summary(self, owner_id: str, params: dict) -> dict:
+        style = self._money(owner_id)
         report_type = params.get("type")
         year = params.get("year") or date.today().year
         if report_type == "income_expense":
@@ -1035,13 +1078,13 @@ class AgentTools:
             return {
                 "report": "income_expense",
                 "year": year,
-                "grand_total": _cell(data.grand_total),
+                "grand_total": _cell(data.grand_total, style),
                 "owners": [
                     {
                         "owner_name": o.owner_name or "(No Owner)",
-                        "total": _cell(o.total),
+                        "total": _cell(o.total, style),
                         "properties": [
-                            {"property_address": p.property_address, **_cell(p.total)}
+                            {"property_address": p.property_address, **_cell(p.total, style)}
                             for p in o.properties
                         ],
                     }
@@ -1053,19 +1096,19 @@ class AgentTools:
             return {
                 "report": "expense_log",
                 "year": year,
-                "grand_total": format_shekels(data.grand_total),
+                "grand_total": format_money(data.grand_total, style),
                 "categories": data.categories,
-                "grand_total_by_category": _cat_map(data.grand_total_by_category),
+                "grand_total_by_category": _cat_map(data.grand_total_by_category, style),
                 "owners": [
                     {
                         "owner_name": o.owner_name or "(No Owner)",
-                        "total": format_shekels(o.total),
-                        "categories": _cat_map(o.categories),
+                        "total": format_money(o.total, style),
+                        "categories": _cat_map(o.categories, style),
                         "properties": [
                             {
                                 "property_address": p.property_address,
-                                "total": format_shekels(p.total),
-                                "categories": _cat_map(p.categories),
+                                "total": format_money(p.total, style),
+                                "categories": _cat_map(p.categories, style),
                             }
                             for p in o.properties
                         ],

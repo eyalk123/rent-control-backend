@@ -6,8 +6,29 @@ are rendered in its app language. Unknown or unset locales fall back to English.
 
 from datetime import date
 
+from app.services import country_service, money_format
+
 DEFAULT_LOCALE = "en"
 _SUPPORTED = ("en", "he")
+
+#: (currency, grouping, symbol spacing) — the same triple the agent passes around.
+MoneyStyle = tuple[country_service.EffectiveCurrency, str, bool]
+
+#: Israel, resolved lazily so importing this module does not build the country table.
+_DEFAULT_STYLE: MoneyStyle | None = None
+
+
+def default_style() -> MoneyStyle:
+    """Israel's style, for a caller that has no owner to resolve."""
+    global _DEFAULT_STYLE
+    if _DEFAULT_STYLE is None:
+        config = country_service.config_for(None)
+        _DEFAULT_STYLE = (
+            country_service.effective_currency(None),
+            config.number_format,
+            config.currency_symbol_spaced,
+        )
+    return _DEFAULT_STYLE
 
 _MESSAGES = {
     "overdue": {
@@ -76,20 +97,25 @@ _MESSAGES = {
     },
 }
 
-# ₪ sits before the number in both languages; Hebrew is RTL so the rendering engine
-# places it correctly from the same string.
-def format_amount(value: float | None) -> str:
+# The symbol's side comes from the country table, not from a comment here. This used to
+# assert "₪ sits before the number in both languages", which the table has never agreed
+# with — ILS is a *suffix* currency (see `tests/test_regression_gates.py`), and it is what
+# every screen in the app prints. Direction is an RTL rendering concern and separate.
+def format_amount(value: float | None, style: MoneyStyle | None = None) -> str:
     if value is None:
         return "—"
-    return f"₪{round(value):,}"
+    currency, number_format, spaced = style or default_style()
+    return money_format.format_money(round(value), currency, number_format, spaced)
 
 
-def format_delta(delta: float | None, percent: float | None) -> str:
-    """A signed money delta with its percentage, e.g. ``+₪240, +4.8%``."""
+def format_delta(
+    delta: float | None, percent: float | None, style: MoneyStyle | None = None
+) -> str:
+    """A signed money delta with its percentage, e.g. ``+240₪, +4.8%``."""
     if delta is None:
         return "—"
     sign = "+" if delta >= 0 else "−"
-    out = f"{sign}₪{abs(round(delta)):,}"
+    out = f"{sign}{format_amount(abs(round(delta)), style)}"
     if percent is not None:
         out += f", {sign}{abs(percent):.1f}%"
     return out
@@ -110,16 +136,24 @@ def render_lease_expiring(locale: str, *, label: str, days: int) -> tuple[str, s
     return copy["title"], copy["body"].format(label=label, days=days)
 
 
-def render_cpi_rent_change(locale: str, *, label: str, data: dict) -> tuple[str, str]:
-    """One renter's CPI change, in whichever stage the row carries."""
+def render_cpi_rent_change(
+    locale: str, *, label: str, data: dict, style: MoneyStyle | None = None
+) -> tuple[str, str]:
+    """One renter's CPI change, in whichever stage the row carries.
+
+    ``style`` defaults to Israel, which is not merely a safe fallback here: CPI linkage is
+    capability-gated and ``renter_service._guard_index_linkage`` refuses to create an
+    index-linked lease outside a country that has it, so today Israel is the only account
+    that can ever reach this message. The parameter exists for the second such country.
+    """
     upcoming = data.get("stage") == "upcoming"
     key = "cpi_rent_change_upcoming" if upcoming else "cpi_rent_change"
     copy = _MESSAGES[key][normalize_locale(locale)]
     return copy["title"], copy["body"].format(
         label=label,
-        old=format_amount(data.get("old_amount")),
-        new=format_amount(data.get("new_amount")),
-        delta=format_delta(data.get("delta"), data.get("delta_percent")),
+        old=format_amount(data.get("old_amount"), style),
+        new=format_amount(data.get("new_amount"), style),
+        delta=format_delta(data.get("delta"), data.get("delta_percent"), style),
         date=_format_date(data.get("effective_date")),
     )
 

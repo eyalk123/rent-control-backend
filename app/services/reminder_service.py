@@ -22,8 +22,10 @@ from app.repositories.notification_repository import NotificationRepository
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
+from app.repositories.owner_repository import OwnerRepository
 from app.repositories.renter_repository import RenterRepository
-from app.services import cpi_rent_change as cpi
+from app.services import country_service, cpi_rent_change as cpi
+from app.services import notification_messages
 from app.services.notification_engine import (
     NON_RESOLVING_EVENTS,
     Candidate,
@@ -77,6 +79,7 @@ class ReminderService:
         renter_repository: RenterRepository,
         push_service: PushService,
         device_token_repository: DeviceTokenRepository,
+        owner_repository: OwnerRepository | None = None,
     ):
         self.engine = engine
         self.notification_repository = notification_repository
@@ -84,6 +87,10 @@ class ReminderService:
         self.renter_repository = renter_repository
         self.push_service = push_service
         self.device_token_repository = device_token_repository
+        # Optional so existing call sites — the test suite included — keep working: without
+        # it the money in a push resolves to Israel, which is today's behaviour exactly.
+        # Same shape as `PropertyService.__init__`.
+        self.owner_repository = owner_repository
 
     def generate_for_owner(
         self, owner_id: str, today: date | None = None
@@ -189,6 +196,9 @@ class ReminderService:
         if not tokens_by_locale:
             return 0
 
+        # One owner read for the whole batch, not one per row.
+        style = self._money_style(owner_id)
+
         # The index publishes for the whole portfolio at once, so CPI rows arrive in a
         # burst and are digested into one push. Every other type stays one push per row.
         cpi_rows = [r for r in rows if r.type == NotificationTypeEnum.CPI_RENT_CHANGE]
@@ -208,7 +218,7 @@ class ReminderService:
             address = renter.property.address if renter.property else None
             label = _renter_label(renter.first_name, renter.last_name, address)
             for locale, tokens in tokens_by_locale.items():
-                title, body = self._render(row, locale, label)
+                title, body = self._render(row, locale, label, style)
                 messages.extend(
                     {"to": t, "title": title, "body": body, "data": data} for t in tokens
                 )
@@ -237,11 +247,29 @@ class ReminderService:
             out.extend({"to": t, "title": title, "body": body, "data": data} for t in tokens)
         return out
 
+    def _money_style(self, owner_id: str):
+        """How this owner's amounts are written. Israel when there is no repository."""
+        if self.owner_repository is None:
+            return notification_messages.default_style()
+        owner = self.owner_repository.get(owner_id)
+        country = owner.country if owner is not None else None
+        config = country_service.config_for(country)
+        return (
+            country_service.effective_currency(
+                country, owner.currency if owner is not None else None
+            ),
+            config.number_format,
+            config.currency_symbol_spaced,
+        )
+
     @staticmethod
-    def _render(row: Notification, locale: str, label: str) -> tuple[str, str]:
+    def _render(row: Notification, locale: str, label: str, style=None) -> tuple[str, str]:
         if row.type == NotificationTypeEnum.CPI_RENT_CHANGE:
             return render_cpi_rent_change(
-                locale, label=label, data=json.loads(row.data) if row.data else {}
+                locale,
+                label=label,
+                data=json.loads(row.data) if row.data else {},
+                style=style,
             )
         if row.type == NotificationTypeEnum.LEASE_EXPIRING:
             data = json.loads(row.data) if row.data else {}

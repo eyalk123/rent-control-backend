@@ -73,6 +73,11 @@ class CountryConfig:
     currency: str = "USD"
     currency_symbol: str = "$"
     currency_symbol_position: SymbolPosition = "prefix"
+    # Whether a space sits between the amount and the symbol. A property of the *country*,
+    # not of the currency, for the reason ``currencies.py`` already gives: "€1,234 in
+    # Ireland and 1.234 € in Germany are the same currency written two ways". A prefix
+    # symbol is written tight everywhere, so this only ever qualifies a suffix.
+    currency_symbol_spaced: bool = False
     locale: str = "en"
     date_format: DateFormat = "DMY"
     number_format: NumberFormat = "1,234.56"
@@ -393,6 +398,17 @@ _SQFT = {"US", "CA", "GB", "IN", "PK", "BD", "HK", "SG", "MY", "PH", "LR", "MM"}
 #: Schedule E on the cash basis; everywhere else defaults to accrual, as today.
 _CASH_BASIS = {"US"}
 
+#: Suffix countries that write the amount tight against the symbol, with no space.
+#:
+#: Everywhere else in ``_SUFFIX_CURRENCY`` takes a space — ``1.234,56 €`` is how the euro
+#: zone writes it, and printing ``1.234,56€`` is simply wrong there.
+#:
+#: **Israel is here to keep every existing account byte-for-byte unchanged.** The app has
+#: always printed ``5,000₪`` tight, that string is in shipped reports and on every screen,
+#: and widening it by a space is not a change to make on the way past. Same reasoning as the
+#: deliberate ``CURRENCY_LABELS["ILS"]`` exception in ``report_service``.
+_SUFFIX_NO_SPACE = {"IL"}
+
 #: Currency symbol written after the amount.
 _SUFFIX_CURRENCY = {
     "IL", "DE", "AT", "NL", "BE", "LU", "ES", "IT", "PT", "GR", "FI", "FR", "EE", "LV",
@@ -496,6 +512,7 @@ def _build() -> dict[str, CountryConfig]:
             currency=currency,
             currency_symbol=currencies.symbol_for(currency),
             currency_symbol_position="suffix" if code in _SUFFIX_CURRENCY else "prefix",
+            currency_symbol_spaced=code in _SUFFIX_CURRENCY and code not in _SUFFIX_NO_SPACE,
             date_format="MDY" if code in _MDY else "YMD" if code in _YMD else "DMY",
             number_format=(
                 "1.234,56" if code in _COMMA_DECIMAL

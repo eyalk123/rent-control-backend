@@ -555,6 +555,7 @@ def test_run_reminders_pushes_a_single_cpi_change_per_renter(
     assert len(captured_pushes) == 1
     message = captured_pushes[0]
     assert "Dani Cohen" in message["body"]
-    assert "₪5,000" in message["body"] and "₪5,500" in message["body"]
+    # Suffix, as the country table declares for ILS and as every screen prints it.
+    assert "5,000₪" in message["body"] and "5,500₪" in message["body"]
     assert "1 Mar 2026" in message["body"]
     assert message["data"]["route"] == f"/renters/{renter.id}"

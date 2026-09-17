@@ -6,7 +6,8 @@ data, even when handed OWNER_B's ids.
 """
 from datetime import date, timedelta
 
-from app.services.agent_tools import AgentTools, format_shekels
+from app.services.agent_tools import AgentTools, format_money
+from app.services import country_service
 from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import (
     make_expense_category,
@@ -20,10 +21,36 @@ _TODAY = date.today()
 _ACTIVE_LEASE = dict(lease_start=_TODAY - timedelta(days=30), lease_end=_TODAY + timedelta(days=335))
 
 
-def test_format_shekels():
-    assert format_shekels(12000) == "₪12,000"
-    assert format_shekels(12000.5) == "₪12,000.50"
-    assert format_shekels(None) == "₪0"
+def _style(code: str | None):
+    """The (currency, grouping, spacing) triple `format_money` takes, for one country."""
+    config = country_service.config_for(code)
+    return (
+        country_service.effective_currency(code),
+        config.number_format,
+        config.currency_symbol_spaced,
+    )
+
+
+def test_format_money_follows_the_country():
+    """Israel keeps its own shape; everyone else gets theirs, not Israel's.
+
+    ILS is a *suffix* currency in the country table, and every screen in the app has always
+    printed `12,000₪`. The agent was the one surface writing `₪12,000`, because it
+    hardcoded a prefix that the table never agreed with.
+    """
+    israel = _style("IL")
+    assert format_money(12000, israel) == "12,000₪"
+    assert format_money(12000.5, israel) == "12,000.50₪"
+    assert format_money(None, israel) == "0₪"
+
+    # Grouping and spacing both follow the country, not just the glyph.
+    assert format_money(12000, _style("ES")) == "12.000 €".replace(" ", " ")
+    assert format_money(12000.5, _style("ES")) == "12.000,50 €"
+    assert format_money(12000, _style("FR")) == "12 000 €"
+    assert format_money(12000, _style("US")) == "$12,000"
+
+    # An account with no country resolves to Israel — what every tool did before this existed.
+    assert format_money(12000, _style(None)) == "12,000₪"
 
 
 def test_list_properties_reports_occupancy_and_current_renter(db_session):
@@ -42,7 +69,7 @@ def test_list_properties_reports_occupancy_and_current_renter(db_session):
     assert occupied["property_owner"] == "Dad"
     assert occupied["current_renter"]["name"] == "Yossi Cohen"
     assert occupied["current_renter"]["monthly_rent"] == 12000.0
-    assert occupied["current_renter"]["monthly_rent_display"] == "₪12,000"
+    assert occupied["current_renter"]["monthly_rent_display"] == "12,000₪"
     assert by_id[vacant.id]["status"] == "vacant"
     assert by_id[vacant.id]["current_renter"] is None
 
@@ -126,7 +153,7 @@ def test_aggregate_sum_and_group_by(db_session):
         {"entity": "transactions", "operation": "sum", "value_field": "amount", "filters": {"type": "expense"}},
     )
     assert total["value"] == 1000.0
-    assert total["value_display"] == "₪1,000"
+    assert total["value_display"] == "1,000₪"
 
     grouped = tools.dispatch(
         "aggregate",
@@ -180,7 +207,7 @@ def test_query_transactions_totals_and_filters(db_session):
 
     assert expenses["count"] == 2
     assert expenses["total"] == 1000.0
-    assert expenses["total_display"] == "₪1,000"
+    assert expenses["total_display"] == "1,000₪"
     assert expenses["truncated"] is False
 
     revenue = tools.dispatch("query_transactions", OWNER_A, {"type": "revenue"})
@@ -236,7 +263,7 @@ def test_get_property_headline_numbers(db_session):
     assert result["totals"]["revenue"] == 10000.0
     assert result["totals"]["expenses"] == 1200.0
     assert result["totals"]["net"] == 8800.0
-    assert result["totals"]["net_display"] == "₪8,800"
+    assert result["totals"]["net_display"] == "8,800₪"
 
 
 def test_list_renters_reports_lease_terms(db_session):
@@ -283,7 +310,7 @@ def test_get_lease_schedule_year_by_year(db_session):
     )
 
     assert len(result["years"]) == 3
-    assert result["years"][0]["amount_display"] == "₪5,000"
+    assert result["years"][0]["amount_display"] == "5,000₪"
     assert result["years"][2]["type"] == "option"
     assert result["years"][1]["starts"] == "2027-01-01"
     assert result["years"][0]["months"] == 12
@@ -495,7 +522,7 @@ def test_get_report_summary_expense_log_repairs_by_owner(db_session):
     dad = next(o for o in result["owners"] if o["owner_name"] == "Dad")
     # Built-in categories are keyed `repairs` but reported by their label, so the assistant
     # quotes "Repairs" to the user rather than the raw key.
-    assert dad["categories"]["Repairs"] == "₪1,000"  # 300 + 700, not Me's 999
+    assert dad["categories"]["Repairs"] == "1,000₪"  # 300 + 700, not Me's 999
 
 
 def test_get_report_summary_income_expense_net(db_session):
@@ -523,3 +550,33 @@ def test_list_suppliers(db_session):
 
     withinactive = tools.dispatch("list_suppliers", OWNER_A, {"include_inactive": True})
     assert withinactive["count"] == 2
+
+
+def test_tool_output_uses_the_owners_currency_not_shekels(db_session):
+    """The end-to-end shape of the bug: a Spanish account asking about its own rent.
+
+    `format_money` is unit-tested above; this covers the wiring — that a tool actually
+    resolves the owner's country rather than defaulting, which is the part that was broken.
+    """
+    from app.models.owner import Owner
+
+    owner = db_session.get(Owner, OWNER_A)
+    if owner is None:
+        owner = Owner(id=OWNER_A, email="a@b.c")
+        db_session.add(owner)
+    owner.country = "ES"
+    db_session.commit()
+
+    prop = make_property(db_session, address="Gran Via 1", city="Madrid")
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_years=[{"amount": 2289.0, "type": "contract"}],
+        **_ACTIVE_LEASE,
+    )
+
+    result = AgentTools(db_session).dispatch("list_properties", OWNER_A, {})
+    display = result["properties"][0]["current_renter"]["monthly_rent_display"]
+
+    # Spanish grouping, spaced suffix euro — and emphatically not "2,289₪".
+    assert display == "2.289 €"

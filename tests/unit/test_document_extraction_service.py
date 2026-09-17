@@ -334,11 +334,24 @@ def test_clean_drops_non_email_shaped_email(value):
     assert e.renters[0].email is None
 
 
-def test_clean_drops_national_id_mistaken_for_phone():
+def test_clean_drops_national_id_mistaken_for_phone_in_israel():
     e = _one_renter()
     e.renters[0].phone = "312345678"  # bare 9-digit national ID, not a phone
-    _clean_extraction(e)
+    _clean_extraction(e, None, "IL")
     assert e.renters[0].phone is None
+
+
+def test_clean_keeps_a_nine_digit_phone_outside_israel():
+    """The same shape is an ordinary national phone number in France, Spain, Portugal...
+
+    Applying the Israeli ת"ז heuristic everywhere silently discarded valid phone numbers,
+    which is the worse of the two errors: a wrong phone is visible on the review screen and
+    can be corrected, a missing one is not.
+    """
+    e = _one_renter()
+    e.renters[0].phone = "612345678"
+    _clean_extraction(e, None, "ES")
+    assert e.renters[0].phone == "612345678"
 
 
 def test_clean_keeps_real_phone():
