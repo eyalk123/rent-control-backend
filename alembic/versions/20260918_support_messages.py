@@ -1,7 +1,7 @@
 """support_messages — in-app bug reports, questions and suggestions
 
-Revision ID: 058
-Revises: 057
+Revision ID: 059
+Revises: 058
 Create Date: 2026-09-18
 
 The table is a durable record, not a delivery mechanism: submissions are emailed
@@ -20,8 +20,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "058"
-down_revision: Union[str, None] = "057"
+revision: str = "059"
+down_revision: Union[str, None] = "058"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
