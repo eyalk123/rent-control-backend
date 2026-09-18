@@ -559,3 +559,61 @@ def test_run_reminders_pushes_a_single_cpi_change_per_renter(
     assert "5,000₪" in message["body"] and "5,500₪" in message["body"]
     assert "1 Mar 2026" in message["body"]
     assert message["data"]["route"] == f"/renters/{renter.id}"
+
+# --- feed query cost ---------------------------------------------------------
+
+@freeze_time("2026-06-15")
+def test_feed_dedupe_does_not_scale_with_renter_count(client_factory, db_session):
+    """The feed's "have I generated this already?" check must cost the same whether the
+    owner has two renters or six.
+
+    Generation produces a candidate per renter *per event type per offset*, so a
+    row-at-a-time check turned a single feed read into roughly one query per reminder on
+    screen — the N+1 Sentry flagged on ``/notifications``. Measured on the *second* read,
+    where nothing new is created: row creation is allowed to scale with renters, the
+    dedupe lookup is not.
+    """
+    from sqlalchemy import event
+
+    def _seed(owner_id, count):
+        prop = make_property(db_session, owner_id=owner_id)
+        for i in range(count):
+            make_renter(
+                db_session,
+                owner_id=owner_id,
+                property_id=prop.id,
+                first_name=f"Tenant{i}",
+                lease_start=date(2026, 3, 1),
+                lease_end=date(2026, 12, 31),
+                payment_day_of_month=14,  # today is the 15th -> overdue
+            )
+
+    def _reads_on_second_call(owner_id, expected_alerts):
+        client = client_factory(owner_id)
+        first = client.get("/notifications")  # materializes the rows
+        assert len(first.json()) == expected_alerts
+
+        reads = []
+
+        def _count(conn, cursor, statement, params, context, executemany):
+            if statement.lstrip().startswith("SELECT") and "FROM notifications" in statement:
+                reads.append(statement)
+
+        event.listen(db_session.bind, "before_cursor_execute", _count)
+        try:
+            resp = client.get("/notifications")
+        finally:
+            event.remove(db_session.bind, "before_cursor_execute", _count)
+        assert len(resp.json()) == expected_alerts  # nothing created, nothing lost
+        return len(reads)
+
+    _seed(OWNER_A, 2)
+    _seed(OWNER_B, 6)
+
+    few = _reads_on_second_call(OWNER_A, 2)
+    many = _reads_on_second_call(OWNER_B, 6)
+
+    assert few == many, (
+        f"reading the feed cost {few} queries for 2 renters but {many} for 6 — "
+        "the dedupe check is fanning out again"
+    )

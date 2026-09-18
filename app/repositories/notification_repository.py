@@ -32,6 +32,25 @@ class NotificationRepository:
         )
         return self.session.scalar(stmt) is not None
 
+    def generated_keys(
+        self, owner_id: str
+    ) -> set[tuple[NotificationTypeEnum, int, str, int]]:
+        """Every ``(type, entity_id, period_key, offset)`` already generated for one
+        owner — the batch form of :meth:`was_generated`, for callers that test a whole
+        run of candidates at once instead of one at a time.
+
+        Dismissed rows are included, exactly as in ``was_generated``: "already
+        generated" has to stay true after the user clears the item, or the next feed
+        read would recreate what they just dismissed.
+        """
+        stmt = select(
+            Notification.type,
+            Notification.entity_id,
+            Notification.period_key,
+            Notification.offset,
+        ).where(Notification.owner_id == owner_id)
+        return {tuple(row) for row in self.session.execute(stmt)}
+
     def create(
         self,
         owner_id: str,

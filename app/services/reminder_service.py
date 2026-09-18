@@ -103,11 +103,18 @@ class ReminderService:
         self._dismiss_resolved(owner_id, candidates)
         self._dismiss_expired(owner_id)
         created: list[tuple[Notification, Candidate]] = []
+        # One lookup for the whole run, not one per candidate: a candidate is produced
+        # per renter *per event type per offset*, so the old row-at-a-time check turned
+        # a single feed read into ~one query per reminder on screen.
+        already_generated = self.notification_repository.generated_keys(owner_id)
         for cand in candidates:
-            if self.notification_repository.was_generated(
-                owner_id, cand.type, cand.renter_id, cand.period_key, cand.offset
-            ):
+            key = (cand.type, cand.renter_id, cand.period_key, cand.offset)
+            if key in already_generated:
                 continue
+            # Keep the set in step with what we just wrote, so two candidates sharing a
+            # key in one run still collapse to one row — the per-candidate query used to
+            # see the committed row and skip the second.
+            already_generated.add(key)
             row = self.notification_repository.create(
                 owner_id=owner_id,
                 type=cand.type,
