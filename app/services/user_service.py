@@ -20,6 +20,7 @@ from app.models.property import Property
 from app.models.renter import Renter
 from app.models.report_export import ReportExport
 from app.models.supplier import Supplier
+from app.models.support_message import SupportMessage
 from app.models.transaction import Transaction
 from app.repositories.agent_repository import AgentRepository
 
@@ -82,6 +83,7 @@ class UserService:
         # verbatim in agent_messages, so this must go too.
         AgentRepository(self.db).delete_owner_data(owner_id)
 
+        self.db.execute(delete(SupportMessage).where(SupportMessage.owner_id == owner_id))
         self.db.execute(delete(Owner).where(Owner.id == owner_id))
 
         # What survives: counts and a one-way hash. Nothing that identifies anyone.

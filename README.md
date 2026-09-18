@@ -82,6 +82,7 @@ Latin-1 only and raises on the first Hebrew character.
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration. Three event types: `overdue`, `lease_expiring`, `cpi_rent_change` (the last has no rules — mute + materiality threshold instead) |
 | `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-lease-generation` (tops up open-ended leases), `run-retention` (`?dry_run=true` supported), and `run-nightly-rollup` (the single Sentry cron check-in for all of them) — cron-triggered, guarded by a shared secret |
+| `/support-messages` | The in-app *Report a bug* form: stores the submission and emails it to the product owner via Resend. No read routes — replies go out by email, not into the app |
 | `/health` | Unauthenticated liveness check |
 
 Every router except `/internal` and `/health` requires a Firebase ID token. Interactive API docs
@@ -219,6 +220,11 @@ live in `.claude/docs/architectural_patterns.md`.
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — the same series as `CPI_INDEX_ID` 120010 |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`. How far behind the newest published month the cache may fall before `run-cpi-indexing` returns 503 |
 | `PORT` | No | Set by Railway automatically; defaults to 8000 |
+| `RESEND_API_KEY` | No | Resend API key for in-app support messages. Empty ⇒ `POST /support-messages` answers 502 (the row is still written). See [Support messages](#support-messages) |
+| `RESEND_FROM_ADDRESS` | No | The `From:` address. Must be a domain verified in Resend, or their sandbox sender |
+| `SUPPORT_EMAIL_TO` | No | Where support messages land — the product owner's mailbox. Empty disables sending, like an empty key |
+| `SUPPORT_MESSAGE_HOURLY_LIMIT` | No | Default `5`. Submissions per owner per rolling hour before `429` |
+| `SUPPORT_MESSAGE_MAX_ATTACHMENT_BYTES` | No | Default `6000000`. Combined decoded size of a submission's screenshots |
 
 ### Chat agent
 
@@ -254,6 +260,34 @@ Not swept: `document_extraction_logs` (scanner-quality telemetry, holds no lease
 
 A window alone does nothing — the job must also be scheduled. See [Deployment](#deployment) for
 the dry run to do first.
+
+### Support messages
+
+`POST /support-messages` is the in-app *Report a bug / ask a question / suggest something* form
+on both clients (`PLATFORM.md` §14). It writes a row and emails it to `SUPPORT_EMAIL_TO` through
+Resend. **There is no admin screen and no in-app inbox** — you reply from your own mail client.
+
+Three things about it are deliberate and easy to break:
+
+* **`Reply-To` is the submitter's address.** Hitting Reply answers the user. Their address is
+  never the `From:` — that fails SPF and lands the notification in spam.
+* **The email body holds only the user's own words, their name and the type.** Everything
+  internal — owner id, message id, client, platform, version, language, country — goes in the
+  `diagnostics.txt` attachment, because a mail client quotes the body when you reply and drops
+  attachments. Move a field from one to the other and the next routine reply pastes an owner id
+  into a customer's mailbox. `tests/test_support_messages.py::test_body_carries_nothing_internal`
+  is what guards it.
+* **Screenshots are never persisted.** They arrive base64 in the request, go out as attachments
+  and are dropped; only a count is stored. A screenshot of this product contains renter PII, so
+  the only lasting copy is the one in the recipient's mailbox.
+
+Unlike `push_service`, a failed send is **not** swallowed: the route answers 502 and the client
+asks the user to retry. With nobody watching the table, a silently-eaten message would be one
+nobody ever reads. The row is committed first either way, so the text survives.
+
+**Setup.** Create a Resend account with the address you want the mail to arrive at, then set the
+three variables above. With no verified domain, Resend's sandbox sender only delivers to the
+Resend account owner's own address — which is exactly the one recipient this feature has.
 
 ---
 

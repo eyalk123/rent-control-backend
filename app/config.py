@@ -130,6 +130,27 @@ class Settings(BaseSettings):
     FIREBASE_WEB_API_KEY: str = ""
     FIREBASE_WEB_APP_ID: str = ""
 
+    # --- Support messages (in-app "report a bug / ask a question") ---
+    # Resend API key. Empty disables sending: the row is still written, but the route
+    # answers 502 so the submitter is told to retry rather than believing a message
+    # reached us. There is no admin screen for these, so a swallowed failure would be
+    # a message nobody ever goes looking for.
+    RESEND_API_KEY: str = ""
+    # The From: address. Must be on a domain verified in Resend, or Resend's own
+    # sandbox sender — which only delivers to the Resend account owner's address, and
+    # is the right choice here because there is exactly one recipient.
+    RESEND_FROM_ADDRESS: str = ""
+    # Where every support message lands: the product owner's own mailbox. Empty
+    # disables sending, like an empty key.
+    SUPPORT_EMAIL_TO: str = ""
+    # Submissions allowed per owner per rolling hour. Counted in the database rather
+    # than in process memory: the API runs several Railway replicas, and an in-memory
+    # counter would admit one burst per replica.
+    SUPPORT_MESSAGE_HOURLY_LIMIT: int = 5
+    # Cap on the combined decoded size of a submission's screenshots. Base64 inflates
+    # by about a third on the wire, so this is roughly 8MB of request body.
+    SUPPORT_MESSAGE_MAX_ATTACHMENT_BYTES: int = 6_000_000
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property

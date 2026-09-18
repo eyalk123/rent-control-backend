@@ -15,6 +15,7 @@ from app.models.owner_client_day import OwnerClientDay
 from app.models.property import Property, PropertyTypeEnum
 from app.models.renter import Renter
 from app.models.supplier import Supplier
+from app.models.support_message import SupportMessage, SupportMessageTypeEnum
 from app.models.transaction import (
     PaymentMethodEnum,
     Transaction,
@@ -45,6 +46,8 @@ __all__ = [
     "PropertyTypeEnum",
     "Renter",
     "Supplier",
+    "SupportMessage",
+    "SupportMessageTypeEnum",
     "PaymentMethodEnum",
     "Transaction",
     "TransactionTypeEnum",

@@ -33,6 +33,7 @@ from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.report_export_repository import ReportExportRepository
 from app.repositories.supplier_repository import SupplierRepository
+from app.repositories.support_message_repository import SupportMessageRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services.agent_service import AgentService
 from app.services.boi_index_service import BoiIndexService
@@ -305,6 +306,12 @@ def get_transaction_service(
         supplier_repository=supplier_repository,
         activity_log_repository=activity_log_repository,
     )
+
+
+def get_support_message_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> SupportMessageRepository:
+    return SupportMessageRepository(db)
 
 
 def get_device_token_repository(
