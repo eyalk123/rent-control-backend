@@ -127,6 +127,39 @@ def test_body_carries_nothing_internal(client, owner_row, sent):
     assert "dani@example.com" not in text
 
 
+def test_body_footer_carries_the_harmless_context(client, owner_row, sent):
+    """Build and settings facts belong in the body; identifiers never do."""
+    client.post(
+        "/support-messages",
+        json=_payload(),
+        headers={
+            "X-Client-App": "web",
+            "X-Client-Platform": "web",
+            "X-Client-Version": "1a2b3c4d5e6f",
+        },
+    )
+
+    footer = sent[0]["json"]["text"].rsplit("—", 1)[1]
+    assert "web" in footer
+    assert "1a2b3c4d5e6f" in footer
+    assert "he" in footer  # the owner's language
+    assert "IL" in footer
+    # The line that makes the footer safe to quote back.
+    assert OWNER_A not in footer
+    assert "dani@example.com" not in footer
+    assert "Message id" not in footer
+
+
+def test_body_footer_omits_empty_fields(client, owner_row, sent):
+    """A local dev build sends no version — that must not print as a dash."""
+    client.post("/support-messages", json=_payload())
+
+    text = sent[0]["json"]["text"]
+    assert "—\nweb" not in text  # no client headers were sent at all
+    assert "·  ·" not in text
+    assert " — " not in text.replace("\n—\n", "")
+
+
 def test_diagnostics_ride_in_an_attachment(client, owner_row, sent):
     client.post("/support-messages", json=_payload())
 

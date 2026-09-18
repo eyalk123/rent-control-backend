@@ -58,14 +58,43 @@ def _subject(entry: SupportMessage, submitter_name: str | None) -> str:
     return f"[{label}] {snippet} — {who}" if snippet else f"[{label}] — {who}"
 
 
-def _body(entry: SupportMessage, submitter_name: str | None) -> str:
-    """Only the user's own words, their name and the type they picked.
+def _context_footer(entry: SupportMessage) -> str:
+    """The handful of facts that are safe to be quoted back at the sender.
 
-    Nothing here is a problem if it is quoted back to them on reply — which is
-    exactly the test any new line added to this function has to pass.
+    Everything here describes the sender's *own* device and account settings —
+    which client, which build, which language, which country. They already know
+    all of it, so a reply that quotes it tells them nothing they did not have.
+
+    The identifiers deliberately excluded are the whole point: owner id, message
+    id and email address stay in ``diagnostics.txt``, which a reply cannot quote.
+    Adding one of those here would put it in a customer's mailbox the next time
+    anyone hits Reply, so :func:`_body` is the wrong place for anything that
+    identifies a *person* rather than a *build*.
+
+    Empty fields are dropped rather than printed as a dash — a submission from a
+    local dev build has no version, and a line of placeholders reads like
+    something is broken.
+    """
+    parts = [
+        entry.client_app,
+        entry.client_version,
+        entry.language,
+        entry.country,
+    ]
+    return " · ".join(part for part in parts if part)
+
+
+def _body(entry: SupportMessage, submitter_name: str | None) -> str:
+    """The user's own words, their name, the type — and the context footer.
+
+    Nothing here is a problem if it is quoted back to them on reply, which is
+    exactly the test any new line added to this function has to pass. See
+    :func:`_context_footer` before putting anything else in it.
     """
     label = _TYPE_LABELS.get(entry.type, str(entry.type))
-    return f"{submitter_name or 'An owner'}\n{label}\n\n{entry.message}\n"
+    body = f"{submitter_name or 'An owner'}\n{label}\n\n{entry.message}\n"
+    footer = _context_footer(entry)
+    return f"{body}\n—\n{footer}\n" if footer else body
 
 
 def _diagnostics(entry: SupportMessage, submitter_email: str | None) -> str:
