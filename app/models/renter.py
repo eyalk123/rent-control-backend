@@ -63,6 +63,18 @@ class Renter(Base):
     suppress_expiry_alerts = Column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )
+    # A tenancy with no agreed end — the norm across most of Europe, and in Israel whenever a
+    # tenant holds over month to month. It does NOT mean `lease_end` is null: a nightly job
+    # keeps a rolling five-year window of periods on the lease, so every consumer of the year
+    # list (the active/ended derivation, overdue detection, Extend, the reports) keeps working
+    # on a real date. See `lease_generation_service`.
+    #
+    # Per lease rather than per country: the country only decides the switch's default.
+    # Implies `suppress_expiry_alerts` — the countdown it silences is to a date this feature
+    # moves every year, so it would never be true for long enough to mean anything.
+    open_ended = Column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     terminated_on = Column(Date, nullable=True)
     termination_reason = Column(String, nullable=True)
     number_of_payments = Column(Integer, nullable=True)

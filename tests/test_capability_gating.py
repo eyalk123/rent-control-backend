@@ -284,3 +284,85 @@ class TestPerRenterExpiryMute:
         prop = _property(db_session, "IL")
         created = client.post("/renters", json=self._expiring_payload(prop.id))
         assert created.json()["suppress_expiry_alerts"] in (False, None)
+
+
+class TestOpenEndedRejectsScheduleShapedModes:
+    """The same enforcement rule, one feature over.
+
+    Both clients hide `custom` and `cpi` when the open-ended switch is on, so the API has to
+    refuse them too — a hidden control with a live endpoint behind it is a bug, not a feature
+    flag. The reason they cannot work is structural rather than regional: `custom` gives every
+    period its own rule and `cpi` needs an index reading per period, and neither can be
+    written for a period the generator has not appended yet.
+    """
+
+    @pytest.mark.parametrize("mode", ["custom", "cpi"])
+    def test_rejected_on_create(self, client, db_session, mode):
+        _owner(db_session, "IL")  # Israel, so the index guard cannot be what rejects it
+        prop = _property(db_session, "IL")
+        r = client.post(
+            "/renters",
+            json=_renter_payload(prop.id, rent_escalation_mode=mode, open_ended=True),
+        )
+        assert r.status_code == 422
+        assert "open-ended" in r.json()["detail"]
+
+    @pytest.mark.parametrize("mode", ["none", "percent", "fixed"])
+    def test_the_generatable_modes_are_accepted(self, client, db_session, mode):
+        _owner(db_session, "DE")
+        prop = _property(db_session, "DE")
+        r = client.post(
+            "/renters",
+            json=_renter_payload(
+                prop.id, rent_escalation_mode=mode, rent_escalation_value=3, open_ended=True
+            ),
+        )
+        assert r.status_code == 201, r.text
+
+    def test_rejected_when_an_edit_turns_the_switch_on(self, client, db_session):
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        created = client.post(
+            "/renters", json=_renter_payload(prop.id, rent_escalation_mode="cpi")
+        )
+        assert created.status_code == 201
+        r = client.patch(f"/renters/{created.json()['id']}", json={"open_ended": True})
+        assert r.status_code == 422
+
+    def test_rejected_when_an_edit_changes_the_mode_under_the_switch(self, client, db_session):
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        created = client.post(
+            "/renters",
+            json=_renter_payload(prop.id, rent_escalation_mode="none", open_ended=True),
+        )
+        assert created.status_code == 201
+        r = client.patch(
+            f"/renters/{created.json()['id']}", json={"rent_escalation_mode": "custom"}
+        )
+        assert r.status_code == 422
+
+    def test_an_unrelated_edit_is_not_blocked(self, client, db_session):
+        """Same rule as the index guard: refuse to *introduce* the combination, never lock
+        the owner out of a row that already holds it."""
+        _owner(db_session, "DE")
+        prop = _property(db_session, "DE")
+        created = client.post(
+            "/renters",
+            json=_renter_payload(prop.id, rent_escalation_mode="percent", open_ended=True),
+        )
+        assert created.status_code == 201
+        r = client.patch(f"/renters/{created.json()['id']}", json={"phone": "050-111-1111"})
+        assert r.status_code == 200, r.text
+
+    def test_the_switch_mutes_the_expiry_countdown(self, client, db_session):
+        """It counts down to a date the generator moves every year, so it could never mean
+        anything. One switch rather than asking the user to find two."""
+        _owner(db_session, "DE")
+        prop = _property(db_session, "DE")
+        r = client.post(
+            "/renters",
+            json=_renter_payload(prop.id, rent_escalation_mode="none", open_ended=True),
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["suppress_expiry_alerts"] is True

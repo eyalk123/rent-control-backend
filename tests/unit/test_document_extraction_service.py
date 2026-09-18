@@ -390,3 +390,46 @@ def test_clean_scopes_notes_to_the_right_renter():
     ]
     _clean_extraction(e)
     assert [(n.field, n.renter_index) for n in e.notes] == [("base_rent", 1)]
+
+
+# --- the per-country brief (the second, uncached system block) ---
+
+def _brief(country):
+    from app.services.document_extraction_service import _country_brief
+
+    return _country_brief(country)
+
+
+def test_country_brief_names_the_dot_grouping_convention():
+    """The live bug: "2.289 EUR" came back as 2.289 because the prompt banned commas and
+    said nothing about dots. The brief has to name the convention, not hint at it."""
+    brief = _brief("ES")
+    assert "DOT groups thousands" in brief
+    assert "2.289" in brief
+
+
+def test_country_brief_withholds_israeli_only_enum_values():
+    """A value the account cannot store is worse than no value: the form has no option to
+    hold it, so it renders a blank control and then fails validation on submit."""
+    brief = _brief("ES")
+    assert "garden_apartment" in brief and "do not exist here" in brief
+    assert '"bit" is an Israeli payment app' in brief
+
+
+def test_country_brief_offers_every_enum_value_in_israel():
+    """Israel has every capability on, so its brief must carry none of the withdrawals —
+    this is the assertion that keeps an Israeli extraction byte-for-byte what it was."""
+    brief = _brief("IL")
+    assert "garden_apartment" not in brief
+    assert "bit" not in brief
+
+
+def test_country_brief_does_not_suppress_cpi_outside_israel():
+    """Deliberate, and the opposite of the two above.
+
+    An index-linked rent is real wherever the lease says so, even where the app cannot
+    record it. Telling the model to avoid "cpi" would turn a fact about the document into a
+    silent blank; instead it reports it and the clients say "we read this, you have to
+    choose" — the same treatment an unsupported payment cadence already gets.
+    """
+    assert "cpi" not in _brief("ES").lower()

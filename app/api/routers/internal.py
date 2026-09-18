@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.clock import utc_now_naive, utc_today
 from app.api.dependencies import (
     get_cpi_indexing_service,
+    get_lease_generation_service,
     get_job_run_repository,
     get_reminder_service,
     get_retention_service,
@@ -17,6 +18,7 @@ from app.api.dependencies import (
 from app.config import settings
 from app.repositories.job_run_repository import JobRunRepository
 from app.services.cpi_indexing_service import CpiIndexingService
+from app.services.lease_generation_service import LeaseGenerationService
 from app.services.reminder_service import ReminderService
 from app.services.retention_service import RetentionService
 
@@ -44,6 +46,7 @@ router = APIRouter(dependencies=[Depends(verify_cron_secret)])
 JOB_REMINDERS = "reminders"
 JOB_CPI_INDEXING = "cpi_indexing"
 JOB_RETENTION = "retention"
+JOB_LEASE_GENERATION = "lease_generation"
 
 # The single Sentry cron monitor this backend declares. `job_runs` records what happened
 # when a job runs; only a monitor with an expected schedule can report the case where
@@ -78,7 +81,12 @@ ROLLUP_MONITOR_CONFIG: dict[str, Any] = {
 }
 
 # The jobs the rollup watches, in the order they run.
-ROLLUP_WATCHED_JOBS = (JOB_CPI_INDEXING, JOB_RETENTION, JOB_REMINDERS)
+ROLLUP_WATCHED_JOBS = (
+    JOB_LEASE_GENERATION,
+    JOB_CPI_INDEXING,
+    JOB_RETENTION,
+    JOB_REMINDERS,
+)
 
 # How long a job may go without a successful run before the rollup calls it stale. Every
 # watched job runs daily and the rollup runs at a fixed offset from all three, so "no
@@ -125,6 +133,9 @@ def _record(
 def run_reminders(
     reminder_service: Annotated[ReminderService, Depends(get_reminder_service)],
     cpi_indexing_service: Annotated[CpiIndexingService, Depends(get_cpi_indexing_service)],
+    lease_generation_service: Annotated[
+        LeaseGenerationService, Depends(get_lease_generation_service)
+    ],
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
 ):
     """Send overdue-rent and expiring-lease pushes. Intended to be called once a
@@ -141,6 +152,22 @@ def run_reminders(
     rent and expiring leases don't depend on the index, and a CBS outage must not suppress
     unrelated pushes.
     """
+    # Before the CPI catch-up and before the sweep, so the expiring-lease check reads a
+    # schedule that has already been topped up rather than one a day out of date. Same
+    # best-effort shape as the CPI catch-up below: generation is idempotent (it appends only
+    # what the horizon is short by), so a redundant run costs a query and nothing else.
+    leases_generated = False
+    if not job_runs.succeeded_on(JOB_LEASE_GENERATION, utc_today()):
+        try:
+            _record(
+                job_runs,
+                JOB_LEASE_GENERATION,
+                lease_generation_service.run_lease_generation,
+            )
+            leases_generated = True
+        except Exception:
+            logger.warning("Inline lease generation failed; sending reminders anyway")
+
     caught_up = False
     if not job_runs.succeeded_on(JOB_CPI_INDEXING, utc_today()):
         try:
@@ -156,7 +183,37 @@ def run_reminders(
             logger.warning("Inline CPI catch-up failed; sending reminders anyway")
 
     sent = _record(job_runs, JOB_REMINDERS, reminder_service.run_daily_reminders)
-    return {"status": "ok", "sent": sent, "cpi_caught_up": caught_up}
+    return {
+        "status": "ok",
+        "sent": sent,
+        "cpi_caught_up": caught_up,
+        "leases_generated": leases_generated,
+    }
+
+
+@router.post("/run-lease-generation")
+def run_lease_generation(
+    lease_generation_service: Annotated[
+        LeaseGenerationService, Depends(get_lease_generation_service)
+    ],
+    job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
+):
+    """Top up every open-ended lease so its schedule stays five periods ahead of today.
+
+    An open-ended tenancy has no agreed end, but the product cannot store one that is null —
+    every "is this renter active" query keys off `lease_end`. So the schedule is kept rolling
+    instead, and this is what rolls it: one period appended whenever an anniversary takes the
+    horizon down to four.
+
+    Append-only, and never at any position but the last, so it cannot rewrite an amount the
+    owner corrected. Idempotent — a second run the same day finds the horizon already full
+    and writes nothing. `run-reminders` performs it inline when it has not run, so it needs no
+    scheduler entry of its own to work; give it one when you want it independent of reminders.
+    """
+    summary = _record(
+        job_runs, JOB_LEASE_GENERATION, lease_generation_service.run_lease_generation
+    )
+    return {"status": "ok", **summary}
 
 
 @router.post("/run-cpi-indexing")

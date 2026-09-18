@@ -84,6 +84,21 @@ class RenterRepository:
             )
         return list(self.session.scalars(stmt).all())
 
+    def get_open_ended(self) -> list[Renter]:
+        """Every live open-ended lease, across all owners — the candidate set the lease
+        generation job tops up.
+
+        ``terminated_on IS NULL`` is filtered **here** rather than in the caller's loop for
+        the reason given on :meth:`get_by_escalation_modes`: a closed lease must never be
+        selected, and skipping rows after loading them is not the same thing. Unlike that
+        method there is no country filter, because the switch is per lease — an Israeli
+        month-to-month holdover is open-ended too.
+        """
+        stmt = select(Renter).where(
+            Renter.open_ended.is_(True), Renter.terminated_on.is_(None)
+        )
+        return list(self.session.scalars(stmt).all())
+
     def get_all(self, owner_id: str | None = None) -> list[Renter]:
         stmt = select(Renter).options(selectinload(Renter.property))
         if owner_id is not None:

@@ -1,4 +1,4 @@
-"""The nightly rollup: one Sentry cron check-in standing in for all three daily jobs.
+"""The nightly rollup: one Sentry cron check-in standing in for every daily job.
 
 Sentry's plan has room for a single cron monitor, so the jobs no longer check in
 themselves — they leave rows in ``job_runs`` and this endpoint reads them. What matters
@@ -13,6 +13,7 @@ import sentry_sdk
 from app.clock import utc_now_naive
 from app.api.routers.internal import (
     JOB_CPI_INDEXING,
+    JOB_LEASE_GENERATION,
     JOB_REMINDERS,
     JOB_RETENTION,
     ROLLUP_MONITOR_CONFIG,
@@ -62,6 +63,7 @@ def _seed_all_fresh(db_session, *, except_for: str | None = None):
     """A successful run for each job at roughly the hour it really runs, relative to the
     09:30 rollup. ``except_for`` leaves one job with no successful run at all."""
     for job_name, hours_ago in (
+        (JOB_LEASE_GENERATION, 7.0),
         (JOB_CPI_INDEXING, 6.5),
         (JOB_RETENTION, 5.5),
         (JOB_REMINDERS, 0.5),
@@ -70,7 +72,7 @@ def _seed_all_fresh(db_session, *, except_for: str | None = None):
             _seed(db_session, job_name, hours_ago=hours_ago)
 
 
-def test_all_three_fresh_closes_the_check_in_ok(
+def test_every_job_fresh_closes_the_check_in_ok(
     client, db_session, monkeypatch, sentry_calls
 ):
     _enable(monkeypatch)
@@ -105,6 +107,7 @@ def test_a_stale_job_is_named_and_reported_as_error(
     assert level == "error"
     assert JOB_RETENTION in message
     assert JOB_REMINDERS not in message and JOB_CPI_INDEXING not in message
+    assert JOB_LEASE_GENERATION not in message
     assert sentry_calls["checkins"][-1]["status"] == "error"
 
 
@@ -113,9 +116,17 @@ def test_a_job_that_has_never_run_is_stale(client, monkeypatch, sentry_calls):
 
     resp = client.post("/internal/run-nightly-rollup", headers=_headers())
 
-    assert resp.json()["stale"] == [JOB_CPI_INDEXING, JOB_RETENTION, JOB_REMINDERS]
+    assert resp.json()["stale"] == [
+        JOB_LEASE_GENERATION,
+        JOB_CPI_INDEXING,
+        JOB_RETENTION,
+        JOB_REMINDERS,
+    ]
     message, _ = sentry_calls["messages"][0]
-    assert all(j in message for j in (JOB_CPI_INDEXING, JOB_RETENTION, JOB_REMINDERS))
+    assert all(
+        j in message
+        for j in (JOB_LEASE_GENERATION, JOB_CPI_INDEXING, JOB_RETENTION, JOB_REMINDERS)
+    )
     assert sentry_calls["checkins"][-1]["status"] == "error"
 
 

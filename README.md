@@ -81,7 +81,7 @@ Latin-1 only and raises on the first Hebrew character.
 | `/extract/lease` | AI lease extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration. Three event types: `overdue`, `lease_expiring`, `cpi_rent_change` (the last has no rules — mute + materiality threshold instead) |
-| `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-retention` (`?dry_run=true` supported), and `run-nightly-rollup` (the single Sentry cron check-in for all three) — cron-triggered, guarded by a shared secret |
+| `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-lease-generation` (tops up open-ended leases), `run-retention` (`?dry_run=true` supported), and `run-nightly-rollup` (the single Sentry cron check-in for all of them) — cron-triggered, guarded by a shared secret |
 | `/health` | Unauthenticated liveness check |
 
 Every router except `/internal` and `/health` requires a Firebase ID token. Interactive API docs
@@ -281,13 +281,20 @@ alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 Railway health-checks `/health`. Set every required env var in the Railway dashboard, and include
 the deployed web origin in `CORS_ORIGINS` or the browser will block the web app.
 
+`run-lease-generation` needs no entry of its own to *work* — `run-reminders` performs it inline when
+it has not run that day, the same catch-up `run-cpi-indexing` gets — but giving it one keeps an
+open-ended lease's schedule current even if reminders are failing, and is what the nightly rollup
+expects to see.
+
 The `/internal/*` jobs are **not** self-scheduling — an external scheduler must call them with the
-`X-Cron-Secret` header: `run-reminders`, `run-cpi-indexing`, and `run-retention`, all daily. (The
-index itself only updates monthly, but running the job daily costs one request and picks up a new
-reading the day it lands.) The Railway cron entries, in UTC — they do not shift with Israeli DST:
+`X-Cron-Secret` header: `run-reminders`, `run-cpi-indexing`, `run-lease-generation` and
+`run-retention`, all daily. (The index itself only updates monthly, but running the job daily costs
+one request and picks up a new reading the day it lands.) The Railway cron entries, in UTC — they do
+not shift with Israeli DST:
 
 | Job | Schedule (UTC) |
 |---|---|
+| `run-lease-generation` | `0 2 * * *` |
 | `run-cpi-indexing` | `0 3 * * *` |
 | `run-retention` | `0 4 * * *` |
 | `run-reminders` | `0 9 * * *` |

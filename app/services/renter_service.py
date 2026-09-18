@@ -231,6 +231,32 @@ class RenterService:
             if isinstance(rule, dict) and rule.get("mode") == "cpi":
                 raise HTTPException(status_code=422, detail=detail)
 
+    @staticmethod
+    def _guard_open_ended_mode(open_ended: bool, mode: str | None) -> None:
+        """Reject an open-ended lease priced by a mode that needs a finite schedule.
+
+        ``custom`` gives every year its own rule, which cannot be written for a lease that has
+        no last year; ``cpi`` needs an index feed, and an open-ended lease is never Israeli in
+        practice — but the real reason is the same one as above: both clients hide these two
+        modes when the switch is on, and a hidden control with a live endpoint behind it is a
+        bug rather than a feature flag.
+
+        Per-year *amounts* are still editable under ``percent``/``fixed`` — a pinned amount is
+        a value, not a rule, and the generator chains off it. It is only per-year *rules* that
+        have nowhere to live.
+        """
+        if not open_ended or mode not in ("custom", "cpi"):
+            return
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "An open-ended lease cannot use the 'custom' or 'cpi' rent-change modes, "
+                "because they describe a schedule that has to end. Use a flat rent, a "
+                "percentage, or a fixed yearly amount — you can still correct any single "
+                "year by hand."
+            ),
+        )
+
     def create_renter(self, data: RenterCreate, owner_id: str):
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
@@ -239,6 +265,7 @@ class RenterService:
         mode = data.rent_escalation_mode.value if data.rent_escalation_mode else None
         lease_years_payload = _lease_years_to_dicts(data.lease_years)
         self._guard_index_linkage(mode, lease_years_payload, data.property_id, owner_id)
+        self._guard_open_ended_mode(bool(data.open_ended), mode)
         lease_years_payload, cpi_base_index = self._resolve_lease_year_amounts(
             mode,
             lease_years_payload,
@@ -268,7 +295,10 @@ class RenterService:
             number_of_payments=data.number_of_payments,
             payment_type=data.payment_type,
             payment_day_of_month=data.payment_day_of_month,
-            suppress_expiry_alerts=bool(data.suppress_expiry_alerts),
+            # The switch subsumes the expiry toggle: the countdown it would silence is to a
+            # date the generator moves every year, so it can never mean anything here.
+            suppress_expiry_alerts=bool(data.suppress_expiry_alerts) or bool(data.open_ended),
+            open_ended=bool(data.open_ended),
             insurance_type=data.insurance_type,
             insurance_amount=data.insurance_amount,
             contact_id=data.contact_id,
@@ -320,6 +350,17 @@ class RenterService:
                 update_dict.get("property_id", renter.property_id),
                 owner_id,
             )
+
+        # Same rule for the open-ended pairing: refuse the combination only when this request
+        # creates it, whether by turning the switch on or by changing the mode under a lease
+        # that already has it on.
+        if "open_ended" in update_dict or "rent_escalation_mode" in update_dict:
+            self._guard_open_ended_mode(
+                bool(update_dict.get("open_ended", renter.open_ended)), mode
+            )
+        # Turning it on mutes the expiry countdown, for the reason on the column itself.
+        if update_dict.get("open_ended"):
+            update_dict["suppress_expiry_alerts"] = True
 
         if mode in ("cpi", "custom"):
             # The server owns derived amounts in both modes — the fixed-base index linkage

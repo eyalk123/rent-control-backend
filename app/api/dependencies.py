@@ -38,6 +38,7 @@ from app.services.agent_service import AgentService
 from app.services.boi_index_service import BoiIndexService
 from app.services.cbs_index_service import CbsIndexService
 from app.services.cpi_indexing_service import CpiIndexingService
+from app.services.lease_generation_service import LeaseGenerationService
 from app.services.device_token_service import DeviceTokenService
 from app.services.document_extraction_service import DocumentExtractionService
 from app.services.expense_category_service import ExpenseCategoryService
@@ -328,6 +329,15 @@ def get_notification_rule_repository(
     db: Annotated[Session, Depends(get_db)],
 ) -> NotificationRuleRepository:
     return NotificationRuleRepository(db)
+
+
+def get_lease_generation_service(
+    renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+) -> LeaseGenerationService:
+    """The open-ended top-up job. One repository and nothing else: unlike CPI indexing it
+    reads no external feed and raises no notification — an appended period is the schedule
+    continuing, not a rent change the owner has to be told about."""
+    return LeaseGenerationService(renter_repository)
 
 
 def get_cpi_indexing_service(

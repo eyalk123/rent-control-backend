@@ -406,6 +406,29 @@ _DATE_ORDER = {
     "YMD": "year first",
 }
 
+#: Enum values naming a concept that simply does not exist where a capability is off. Told to
+#: the model up front, because a value the account cannot store is worse than useless: the
+#: form has no option to hold it, so it renders a blank control and then fails on submit.
+#: Keyed on the `Capabilities` attribute — nothing here branches on a country code.
+#:
+#: `cpi_linkage` is deliberately NOT in this table, and the omission is the point. The two
+#: entries below describe things that do not exist in the country at all, so naming one is a
+#: misread worth heading off. An index-linked rent is real wherever it is written — the lease
+#: says what it says — so the model is left free to report it and the clients surface it as
+#: "we read this, and you have to choose", the way an unsupported payment cadence already is.
+#: Suppressing it here would turn a fact about the lease into a silent blank.
+_UNAVAILABLE_BRIEF: dict[str, str] = {
+    "israeli_property_types": (
+        '- "garden_apartment" and "housing_unit" are Israeli categories that do not exist '
+        'here. Use "apartment", "house" or "commercial" for `type`.'
+    ),
+    "bit_payments": (
+        '- "bit" is an Israeli payment app that is not used here, so it is never the '
+        '`payment_type`. A local instant-payment service named in the lease is a '
+        '"bank_transfer".'
+    ),
+}
+
 
 def _country_brief(country: str | None) -> str:
     """What this account's leases are expected to look like, derived from the country table.
@@ -417,17 +440,22 @@ def _country_brief(country: str | None) -> str:
     one may hold a Catalan lease.
     """
     config = country_service.config_for(country)
-    return "\n".join(
-        [
-            f"This account is in {config.name}. Unless the document itself clearly says "
-            f"otherwise, expect that:",
-            f"- Numbers are written so that {_SEPARATOR_BRIEF[config.number_format]}.",
-            f"- Amounts are in {config.currency}. Output the number alone, without a symbol.",
-            f"- A date written with slashes or dots puts the {_DATE_ORDER[config.date_format]}.",
-            "- National identifiers, phone number shapes, tax terms and land-registry terms "
-            "are that country's. Do not assume an Israeli form unless the country is Israel.",
-        ]
+    lines = [
+        f"This account is in {config.name}. Unless the document itself clearly says "
+        f"otherwise, expect that:",
+        f"- Numbers are written so that {_SEPARATOR_BRIEF[config.number_format]}.",
+        f"- Amounts are in {config.currency}. Output the number alone, without a symbol.",
+        f"- A date written with slashes or dots puts the {_DATE_ORDER[config.date_format]}.",
+        "- National identifiers, phone number shapes, tax terms and land-registry terms "
+        "are that country's. Do not assume an Israeli form unless the country is Israel.",
+    ]
+    # Israel has every capability on, so its brief is unchanged by this.
+    lines.extend(
+        text
+        for capability, text in _UNAVAILABLE_BRIEF.items()
+        if not getattr(config.capabilities, capability)
     )
+    return "\n".join(lines)
 
 
 def _looks_like_email(value: str) -> bool:
