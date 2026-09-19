@@ -4,7 +4,6 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
 
-from app.config import settings
 from app.models.renter import Renter
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
@@ -49,36 +48,54 @@ def _lease_end_dates(lease_start: date | None, lease_years: list[dict]) -> dict:
 def _lease_years_to_dicts(lease_years) -> list[dict]:
     # LeaseYear.serialize omits an absent `rule`, so a rule-less year encodes exactly as
     # it always has ({"amount", "type"}) and legacy blobs round-trip unchanged.
-    return [ly.model_dump() for ly in lease_years]
+    #
+    # `generated` is dropped on the way *in*. The field exists on the schema so the flag
+    # can be read back (see `LeaseYear.generated`), which also makes it writable — and a
+    # period is generated because the nightly job appended it, never because a client said
+    # so. `_carry_forward_server_fields` puts the stored value back.
+    out = []
+    for ly in lease_years:
+        year = ly.model_dump()
+        year.pop("generated", None)
+        out.append(year)
+    return out
 
 
-def _encode_lease_years(lease_years) -> str:
-    return json.dumps(_lease_years_to_dicts(lease_years))
-
-
-def _carry_forward_readings(
-    incoming: list[dict], stored_raw: str | None, keep: bool
+def _carry_forward_server_fields(
+    incoming: list[dict], stored_raw: str | None, keep_readings: bool
 ) -> list[dict]:
-    """Re-attach the server-owned ``cpi_reading`` that the client never sees.
+    """Re-attach the per-year fields the server owns and the client never sends.
 
-    ``LeaseYear`` deliberately has no ``cpi_reading`` field, so a client can neither read
-    one nor forge one — which also means an incoming payload always arrives without it.
-    Writing that payload straight through would drop every stored reading and silently
-    unfreeze years the tenant has already started paying, so they are carried across by
-    year index.
+    Two of them, for the same underlying reason: ``LeaseYear`` deliberately has no field
+    for either, so a client can neither read one nor forge one — which also means an
+    incoming payload always arrives without them, and writing it straight through would
+    erase what the background jobs wrote.
 
-    ``keep=False`` when ``lease_start`` is being changed: every anniversary moves, so the
-    stored readings are for the wrong months and must be dropped and re-derived.
+    - ``cpi_reading`` — which index month a year resolved against. Dropping it silently
+      unfreezes years the tenant has already started paying. Carried only when
+      ``keep_readings``, which is false while ``lease_start`` is changing: every
+      anniversary moves, so the stored readings are for the wrong months.
+    - ``generated`` — whether ``run-lease-generation`` appended this period rather than the
+      owner agreeing it. Carried unconditionally: moving the lease start does not turn a
+      generated period into a negotiated one, and losing the flag is what makes the
+      timeline badge it as Contract.
+
+    Both are carried across by year index, so a schedule the client reshaped can misalign
+    them. That is the accepted trade — the alternative is an id per period.
     """
-    if not keep or not stored_raw:
+    if not stored_raw:
         return incoming
     try:
         stored = json.loads(stored_raw)
     except (json.JSONDecodeError, TypeError):
         return incoming
     for i, year in enumerate(incoming):
-        if i < len(stored) and isinstance(stored[i], dict) and "cpi_reading" in stored[i]:
+        if i >= len(stored) or not isinstance(stored[i], dict):
+            continue
+        if keep_readings and "cpi_reading" in stored[i]:
             year["cpi_reading"] = stored[i]["cpi_reading"]
+        if stored[i].get("generated"):
+            year["generated"] = True
     return incoming
 
 
@@ -118,13 +135,47 @@ class RenterService:
         # Israel, which is what every lease did before countries existed.
         self.owner_repository = owner_repository
 
-    def _index_lookup(self):
+    def _country_for_lease(self, property_id: int | None, owner_id: str) -> str | None:
+        """Which country's rules price this lease.
+
+        The **property**, because a lease attaches to a building; the account only when
+        there is no property yet. Both guards and the index resolution read it from here so
+        they can never disagree about which country a single save is being judged against.
+        """
+        if property_id is not None:
+            prop = self.property_repository.get_by_id(property_id, owner_id)
+            if prop is not None and prop.country is not None:
+                return prop.country
+        if self.owner_repository is not None:
+            owner = self.owner_repository.get(owner_id)
+            if owner is not None:
+                return owner.country
+        return None
+
+    def index_series_for_lease(self, property_id: int | None, owner_id: str):
+        """Which published index prices this lease, or ``None`` where there is none.
+
+        Public because it is the answer two other services need and must not re-derive:
+        the notification engine estimates the next repricing, and the assistant explains a
+        past one. Both have to read the same series this service wrote the amounts with, or
+        the three disagree about what the rent is.
+        """
+        return country_service.index_series_for(
+            self._country_for_lease(property_id, owner_id)
+        )
+
+    def _index_lookup(self, series):
         """Same reading-aware lookup the indexing job uses, so an amount computed on
         create/update and one computed by the job agree — including on which month the
-        year resolved against, which is what makes the freeze stick."""
-        if self.cpi_index_repository is None:
+        year resolved against, which is what makes the freeze stick.
+
+        Takes the country's series rather than a deployment-wide setting: the reading that
+        prices an Israeli lease has to come from the Israeli series even on a day when the
+        cache also holds somebody else's.
+        """
+        if self.cpi_index_repository is None or series is None:
             return lambda d: None
-        index_id = settings.CPI_INDEX_ID
+        index_id = series.series_id
 
         def lookup(d: date):
             row = self.cpi_index_repository.reading_on_or_before(index_id, d)
@@ -140,6 +191,7 @@ class RenterService:
         base_rent: float | None,
         existing_base_index: float | None,
         recompute_base_index: bool,
+        series=None,
     ) -> tuple[list[dict], float | None]:
         """Derive the amounts the server owns, and return the (possibly re-frozen) CPI
         base index alongside them.
@@ -156,23 +208,29 @@ class RenterService:
             # Chained CPI resolves every anniversary from the cache, so unlike whole-lease
             # `cpi` there is no base index to freeze.
             resolved = materialize_ruled_lease_years(
-                lease_years, lease_start, base_rent, self._index_lookup()
+                lease_years, lease_start, base_rent, self._index_lookup(series)
             )
             return resolved, None
         if mode != "cpi":
             return lease_years, None
-        if not lease_start or not lease_years or self.cpi_index_repository is None:
-            # Can't compute yet (no start date, or the cache isn't wired) — keep the
-            # incoming projection; the indexing job fills real amounts in later.
+        if (
+            not lease_start
+            or not lease_years
+            or self.cpi_index_repository is None
+            or series is None
+        ):
+            # Can't compute yet (no start date, no index for this country, or the cache
+            # isn't wired) — keep the incoming projection; the indexing job fills real
+            # amounts in later.
             return lease_years, existing_base_index
-        index_id = settings.CPI_INDEX_ID
+        index_id = series.series_id
         base = base_rent if base_rent else lease_years[0]["amount"]
         if recompute_base_index:
             base_index = self.cpi_index_repository.latest_on_or_before(index_id, lease_start)
         else:
             base_index = existing_base_index
         materialized = materialize_cpi_amounts(
-            lease_years, lease_start, base, base_index, self._index_lookup()
+            lease_years, lease_start, base, base_index, self._index_lookup(series)
         )
         return materialized, base_index
 
@@ -208,13 +266,7 @@ class RenterService:
         Existing Israeli leases are untouched: Israel has the capability, so this never
         fires for them.
         """
-        country = None
-        if property_id is not None:
-            prop = self.property_repository.get_by_id(property_id, owner_id)
-            country = prop.country if prop else None
-        if country is None and self.owner_repository is not None:
-            owner = self.owner_repository.get(owner_id)
-            country = owner.country if owner else None
+        country = self._country_for_lease(property_id, owner_id)
 
         if country_service.capabilities_for(country).cpi_linkage:
             return
@@ -235,25 +287,32 @@ class RenterService:
     def _guard_open_ended_mode(open_ended: bool, mode: str | None) -> None:
         """Reject an open-ended lease priced by a mode that needs a finite schedule.
 
-        ``custom`` gives every year its own rule, which cannot be written for a lease that has
-        no last year; ``cpi`` needs an index feed, and an open-ended lease is never Israeli in
-        practice — but the real reason is the same one as above: both clients hide these two
-        modes when the switch is on, and a hidden control with a live endpoint behind it is a
-        bug rather than a feature flag.
+        Only ``custom`` qualifies. It gives every period its own rule, and a rule cannot be
+        written for a period the generator has not appended yet — there is nowhere to put it
+        and nothing to derive it from. Both clients hide the mode when the switch is on, and
+        a hidden control with a live endpoint behind it is a bug rather than a feature flag.
 
-        Per-year *amounts* are still editable under ``percent``/``fixed`` — a pinned amount is
-        a value, not a rule, and the generator chains off it. It is only per-year *rules* that
-        have nowhere to live.
+        ``cpi`` used to be refused here too, on the reading that index linkage "describes a
+        schedule that has to end". It does not. Whole-lease CPI prices every period from the
+        base index frozen at signing — ``base_rent × (index at the period's start ÷ base
+        index)``, floored at the base — which never asks where the schedule stops. A
+        month-to-month holdover whose rent is index-linked is an ordinary Israeli tenancy,
+        and refusing it cost the product the one case the switch exists for.
+        ``_guard_index_linkage`` still refuses ``cpi`` where the country has no index behind
+        it, so the two guards compose and nothing opens up outside Israel.
+
+        Per-year *amounts* stay editable in every mode — a pinned amount is a value, not a
+        rule, and both the generator and the indexing job carry it forward.
         """
-        if not open_ended or mode not in ("custom", "cpi"):
+        if not open_ended or mode != "custom":
             return
         raise HTTPException(
             status_code=422,
             detail=(
-                "An open-ended lease cannot use the 'custom' or 'cpi' rent-change modes, "
-                "because they describe a schedule that has to end. Use a flat rent, a "
-                "percentage, or a fixed yearly amount — you can still correct any single "
-                "year by hand."
+                "An open-ended lease cannot use the 'custom' rent-change mode, because it "
+                "needs a rule for every year and an open-ended lease has no last year. Use "
+                "a flat rent, a percentage, a fixed yearly amount, or index linkage — you "
+                "can still correct any single year by hand."
             ),
         )
 
@@ -273,6 +332,9 @@ class RenterService:
             data.base_rent,
             existing_base_index=None,
             recompute_base_index=True,
+            series=country_service.index_series_for(
+                self._country_for_lease(data.property_id, owner_id)
+            ),
         )
         end_dates = _lease_end_dates(data.lease_start, lease_years_payload)
         renter = Renter(
@@ -367,10 +429,10 @@ class RenterService:
             # for `cpi`, the per-year rule walk for `custom`. Re-materialize from the
             # incoming years if provided, else the stored ones for structure.
             if "lease_years" in update_dict:
-                lease_years_dicts = _carry_forward_readings(
+                lease_years_dicts = _carry_forward_server_fields(
                     _lease_years_to_dicts(data.lease_years),
                     renter.lease_years,
-                    keep="lease_start" not in update_dict,
+                    keep_readings="lease_start" not in update_dict,
                 )
             else:
                 lease_years_dicts = json.loads(renter.lease_years) if renter.lease_years else []
@@ -387,12 +449,26 @@ class RenterService:
                 base_rent,
                 existing_base_index=renter.cpi_base_index,
                 recompute_base_index=recompute_base_index,
+                series=country_service.index_series_for(
+                    self._country_for_lease(
+                        update_dict.get("property_id", renter.property_id), owner_id
+                    )
+                ),
             )
             update_dict["lease_years"] = json.dumps(lease_years_dicts)
             update_dict["cpi_base_index"] = cpi_base_index
         else:
             if "lease_years" in update_dict:
-                update_dict["lease_years"] = _encode_lease_years(data.lease_years)
+                # `generated` is server-owned in every mode, not just the indexed ones: an
+                # open-ended lease on percent is topped up by the same job, and saving an
+                # edit to it must not relabel those periods as agreed terms.
+                update_dict["lease_years"] = json.dumps(
+                    _carry_forward_server_fields(
+                        _lease_years_to_dicts(data.lease_years),
+                        renter.lease_years,
+                        keep_readings=False,
+                    )
+                )
             # Switching to (or staying on) a mode with no index linkage clears the frozen
             # base index.
             if "rent_escalation_mode" in update_dict:

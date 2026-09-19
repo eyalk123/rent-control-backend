@@ -63,7 +63,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `EXPO_ACCESS_TOKEN` | No | Expo Push Service; only needed with Expo "Enhanced Security" |
 | `REMINDER_CRON_SECRET` | No | Shared secret for every `POST /internal/*` job (`X-Cron-Secret` header) — all four, enforced by a router-level dependency; empty disables them (it then rejects every request rather than allowing them). Prefer scheduling `run-cpi-indexing` **before** `run-reminders` — the former writes `cpi_rent_change` rows, the latter pushes them — but it is no longer required: `run-reminders` checks `job_runs` and runs indexing inline if it hasn't run today |
 | `CBS_API_BASE_URL` | No | **Primary** CPI source; default `https://api.cbs.gov.il` (CPI rent linkage) |
-| `CPI_INDEX_ID` | No | CBS series id for CPI linkage; default `120010` (general Consumer Price Index) |
+| `CPI_INDEX_ID` | No | Override for Israel's configured series id; the per-country series lives in `app/countries/config.py` (`IndexSeries`). Default `120010` (general Consumer Price Index) |
 | `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — BOI's republication of the same series as `CPI_INDEX_ID` |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`; past it `run-cpi-indexing` returns 503 instead of a green 200 |

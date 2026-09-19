@@ -71,18 +71,35 @@ class RenterRepository:
         back to the account's and then to the default — the same NULL-means-legacy rule
         ``country_service.config_for`` applies, expressed in SQL.
         """
-        stmt = select(Renter).where(Renter.rent_escalation_mode.in_(modes))
+        return [
+            renter
+            for renter, _ in self.get_by_escalation_modes_with_country(modes, countries)
+        ]
+
+    def get_by_escalation_modes_with_country(
+        self, modes: list[str], countries: list[str] | None = None
+    ) -> list[tuple[Renter, str]]:
+        """The same set, each renter paired with the country whose rules price it.
+
+        The indexing job needs the country for more than the filter now: which *index* a
+        lease is linked to is a property of its country, so the job has to know which one
+        each row resolved to. Returning it from the query is what keeps that from becoming
+        a property lookup per renter.
+
+        The coalesce is the single expression of "property, then account, then the
+        default" — selected and filtered by the same one, so the country a row is admitted
+        on is the country it is then priced against.
+        """
+        country = func.coalesce(Property.country, Owner.country, DEFAULT_COUNTRY)
+        stmt = (
+            select(Renter, country.label("country"))
+            .outerjoin(Property, Renter.property_id == Property.id)
+            .outerjoin(Owner, Renter.owner_id == Owner.id)
+            .where(Renter.rent_escalation_mode.in_(modes))
+        )
         if countries is not None:
-            stmt = (
-                stmt.outerjoin(Property, Renter.property_id == Property.id)
-                .outerjoin(Owner, Renter.owner_id == Owner.id)
-                .where(
-                    func.coalesce(Property.country, Owner.country, DEFAULT_COUNTRY).in_(
-                        countries
-                    )
-                )
-            )
-        return list(self.session.scalars(stmt).all())
+            stmt = stmt.where(country.in_(countries))
+        return [(row[0], row[1]) for row in self.session.execute(stmt).all()]
 
     def get_open_ended(self) -> list[Renter]:
         """Every live open-ended lease, across all owners — the candidate set the lease

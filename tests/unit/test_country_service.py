@@ -149,3 +149,50 @@ class TestDialCodes:
         """The mobile client hardcoded 972 before this existed; it must still resolve to it."""
         assert cs.config_for("IL").dial_code == "972"
         assert cs.config_for(None).dial_code == "972"
+
+
+class TestIndexSeries:
+    """The country -> published-index mapping. A second market is a row here plus one
+    adapter; these are the invariants that keep the two halves in step."""
+
+    def test_israel_is_the_cbs_general_cpi(self):
+        series = cs.index_series_for("IL")
+        assert series is not None
+        assert series.series_id == 120010
+        assert series.sources == ("cbs", "boi")
+        assert series.history_floor == (2019, 11)
+
+    def test_the_labels_are_i18n_keys(self):
+        """Not finished strings: the country picks the concept, the language says it. A
+        literal here would break on an Israeli landlord reading the app in French."""
+        series = cs.index_series_for("IL")
+        assert series.label_key == "renter.rentChangeCpi"
+        assert series.note_key == "renter.rentChangeCpiNote"
+
+    def test_a_null_country_still_resolves_to_israel(self):
+        """The same NULL-means-legacy rule the rest of this module follows — every row
+        written before the column existed was Israeli."""
+        assert cs.index_series_for(None) == cs.index_series_for("IL")
+
+    def test_nowhere_else_has_one(self):
+        for code in COUNTRIES:
+            assert (cs.index_series_for(code) is not None) == (code == "IL"), code
+
+    def test_the_flag_and_the_series_never_disagree(self):
+        """A capability with no series behind it would scope the refresh job to a country
+        it then has nothing to fetch for; a series with the flag off would be dead config."""
+        for code, cfg in COUNTRIES.items():
+            assert cfg.capabilities.cpi_linkage == (cfg.index_series is not None), code
+
+    def test_the_job_scope_is_derived_from_both(self):
+        assert cs.countries_with_index_linkage() == ["IL"]
+
+    def test_every_named_source_is_one_the_app_wires_up(self):
+        """`IndexSeries.sources` names feeds by `IndexSource.name`. A name with no adapter
+        behind it falls back to every wired source, which would fetch the wrong series."""
+        wired = {"cbs", "boi"}
+        for code, cfg in COUNTRIES.items():
+            if cfg.index_series is None:
+                continue
+            assert set(cfg.index_series.sources) <= wired, code
+

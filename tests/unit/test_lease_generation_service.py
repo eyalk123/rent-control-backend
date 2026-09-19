@@ -234,23 +234,52 @@ def test_job_skips_a_lease_that_is_not_open_ended(db_session):
     assert renter.lease_years == before
 
 
-def test_job_skips_custom_and_cpi_modes(db_session):
-    """The API refuses to pair these with the switch, but a row predating that guard —
+def test_job_skips_custom_mode(db_session):
+    """The API refuses to pair `custom` with the switch, but a row predating that guard —
     or one written directly — must be left alone rather than mispriced."""
     prop = make_property(db_session)
-    for mode in ("custom", "cpi"):
-        renter = make_renter(
-            db_session,
-            property_id=prop.id,
-            lease_years=years(5000),
-            lease_start=START,
-            open_ended=True,
-            rent_escalation_mode=mode,
-        )
-        before = renter.lease_years
-        _service(db_session).run_lease_generation(today=START)
-        db_session.refresh(renter)
-        assert renter.lease_years == before, mode
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_years=years(5000),
+        lease_start=START,
+        open_ended=True,
+        rent_escalation_mode="custom",
+    )
+    before = renter.lease_years
+
+    _service(db_session).run_lease_generation(today=START)
+
+    db_session.refresh(renter)
+    assert renter.lease_years == before
+
+
+def test_job_extends_a_cpi_lease_with_a_placeholder(db_session):
+    """Index linkage does not describe a schedule that has to end, so an open-ended lease
+    can use it — this job appends the period and `run-cpi-indexing` prices it.
+
+    The placeholder is the previous period's amount, deliberately: it is what an
+    unpublished index month falls back to anyway, so the figure is never a surprise even
+    in the hour between the two jobs.
+    """
+    prop = make_property(db_session)
+    renter = make_renter(
+        db_session,
+        property_id=prop.id,
+        lease_years=years(5000, 5250),
+        lease_start=START,
+        open_ended=True,
+        rent_escalation_mode="cpi",
+        base_rent=5000.0,
+    )
+
+    summary = _service(db_session).run_lease_generation(today=START)
+
+    db_session.refresh(renter)
+    stored = json.loads(renter.lease_years)
+    assert summary["periods_added"] == 3
+    assert [y["amount"] for y in stored] == [5000, 5250, 5250, 5250, 5250]
+    assert all(y["generated"] for y in stored[2:])
 
 
 def test_job_survives_an_unreadable_schedule(db_session):

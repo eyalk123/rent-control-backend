@@ -493,3 +493,56 @@ def test_expiry_uses_the_contract_end_not_the_option_end(client, db_session):
         r for r in client.get("/renters/expiring").json() if r["renter_id"] == renter.id
     )
     assert row["lease_end_date"] == "2026-08-01"
+
+
+# ── The `generated` flag is the server's, and survives a round trip ──────────────
+
+
+def test_a_generated_period_is_returned_to_the_client(client, db_session):
+    """The nightly top-up marks the periods it appended; both apps badge those **Auto**
+    rather than as Contract or Option. `LeaseYear` has to emit the flag or the badge can
+    never render — which is exactly what happened before it did."""
+    renter = make_renter(
+        db_session,
+        lease_start=date(2026, 1, 1),
+        lease_years=[
+            {"amount": 5000, "type": "contract"},
+            {"amount": 5000, "type": "contract", "generated": True},
+        ],
+    )
+
+    body = client.get(f"/renters/{renter.id}").json()
+
+    assert body["lease_years"][0] == {"amount": 5000.0, "type": "contract"}
+    assert body["lease_years"][1]["generated"] is True
+
+
+def test_an_edit_cannot_forge_or_erase_the_generated_flag(client, db_session):
+    """Server-owned, like `cpi_reading`: the flag says the job appended this period, so a
+    client neither sets it nor clears it by sending a schedule without it."""
+    renter = make_renter(
+        db_session,
+        lease_start=date(2026, 1, 1),
+        rent_escalation_mode="percent",
+        rent_escalation_value=3,
+        open_ended=True,
+        lease_years=[
+            {"amount": 5000, "type": "contract"},
+            {"amount": 5150, "type": "contract", "generated": True},
+        ],
+    )
+
+    body = client.patch(
+        f"/renters/{renter.id}",
+        json={
+            "lease_years": [
+                # Claims the first period was generated and drops the flag off the second.
+                {"amount": 5000, "type": "contract", "generated": True},
+                {"amount": 5150, "type": "contract"},
+            ]
+        },
+    ).json()
+
+    assert "generated" not in body["lease_years"][0]
+    assert body["lease_years"][1]["generated"] is True
+

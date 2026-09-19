@@ -11,6 +11,8 @@ from google.oauth2 import id_token
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.countries.config import DEFAULT_COUNTRY
+from app.services import country_service
 from app.database import get_db
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.agent_repository import AgentRepository
@@ -220,15 +222,27 @@ def get_renter_service(
     )
 
 
+#: Israel's series, read from the country table rather than from env vars so the series id
+#: and the history floor have one home. ``CPI_INDEX_ID`` still overrides the id — that is
+#: applied inside ``index_series_for``.
+def _israel_index_series():
+    return country_service.index_series_for(DEFAULT_COUNTRY)
+
+
 def get_cbs_index_service() -> CbsIndexService:
+    series = _israel_index_series()
     return CbsIndexService(
-        base_url=settings.CBS_API_BASE_URL, index_id=settings.CPI_INDEX_ID
+        base_url=settings.CBS_API_BASE_URL,
+        index_id=series.series_id,
+        history_floor=series.history_floor,
     )
 
 
 def get_boi_index_service() -> BoiIndexService:
     return BoiIndexService(
-        base_url=settings.BOI_API_BASE_URL, series_code=settings.BOI_CPI_SERIES_CODE
+        base_url=settings.BOI_API_BASE_URL,
+        series_code=settings.BOI_CPI_SERIES_CODE,
+        history_floor=_israel_index_series().history_floor,
     )
 
 
@@ -236,8 +250,15 @@ def get_index_sources(
     cbs_service: Annotated[CbsIndexService, Depends(get_cbs_index_service)],
     boi_service: Annotated[BoiIndexService, Depends(get_boi_index_service)],
 ) -> list[IndexSource]:
-    """CPI feeds in order of authority. CBS first — it is the publisher lease contracts
-    reference; BOI only answers when CBS cannot."""
+    """Every index feed this deployment has wired up, in order of authority.
+
+    An instance here **is** a (publisher × series) pair: CBS's general CPI, and the Bank of
+    Israel's republication of the same series. Which of them a given country's leases are
+    priced from is decided by name in ``IndexSeries.sources`` — so a second market adds an
+    adapter here under a new name and names it there, and nothing in between changes.
+
+    CBS first — it is the publisher lease contracts reference; BOI only answers when CBS
+    cannot."""
     return [cbs_service, boi_service]
 
 

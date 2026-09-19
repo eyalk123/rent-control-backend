@@ -313,3 +313,53 @@ def test_run_cpi_indexing_endpoint_503s_when_the_cache_is_stale(
     assert body["latest_period"] == "2023-11"
     # The summary survives the non-2xx, so the scheduler's log line still explains why.
     assert body["stale_months"] > 2
+
+
+def test_an_open_ended_cpi_lease_is_topped_up_then_priced(client, db_session, monkeypatch):
+    """The two nightly jobs in the order the scheduler runs them, end to end.
+
+    `run-lease-generation` (02:00 UTC) appends a period at a placeholder amount;
+    `run-cpi-indexing` (03:00) resolves it against the index. This is the whole reason CPI
+    can be paired with an open-ended lease at all — neither job has to know where the
+    schedule ends, because there is nothing in fixed-base linkage that asks.
+    """
+    _seed_index(db_session, [(2022, 11, 100.0), (2023, 11, 110.0), _fresh_period()])
+    monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
+
+    created = client.post(
+        "/renters",
+        json={
+            "first_name": "Noa",
+            "last_name": "Barak",
+            "phone": "0501234567",
+            "lease_start": "2023-01-01",
+            "base_rent": 5000,
+            "rent_escalation_mode": "cpi",
+            "open_ended": True,
+            "lease_years": [{"amount": 5000, "type": "contract"}],
+        },
+    )
+    assert created.status_code == 201, created.text
+    renter_id = created.json()["id"]
+
+    topped_up = client.post(
+        "/internal/run-lease-generation", headers={"X-Cron-Secret": CRON_SECRET}
+    )
+    assert topped_up.status_code == 200, topped_up.text
+    # Five, not four: the single period the lease was created with started in 2023 and has
+    # already run out, so none of the horizon is left and all five have to be appended.
+    # That is the ordinary shape of this feature — a holdover is entered after the fact.
+    assert topped_up.json()["periods_added"] == 5
+
+    assert _post(client, [FakeSource("cbs")]).status_code == 200
+
+    body = client.get(f"/renters/{renter_id}").json()
+    years = body["lease_years"]
+    assert len(years) == 6
+    # Year one at the base, year two against the index known at its anniversary
+    # (2023-11 = 110 over a base of 100), the rest projected off the newest reading.
+    assert years[0]["amount"] == 5000
+    assert years[1]["amount"] == 5500
+    # And the four the job appended are still labelled as its own, not as agreed terms.
+    assert all(y.get("generated") is True for y in years[1:])
+

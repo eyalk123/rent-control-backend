@@ -18,6 +18,7 @@ known at signing, so the **backend owns them**:
 The pure helpers below are the single source of truth for the math (used by both
 renter create/update and the job) and are unit-testable with a fake ``index_lookup``.
 """
+import dataclasses
 import json
 import logging
 from dataclasses import dataclass
@@ -141,7 +142,12 @@ def materialize_cpi_amounts(
         anniversary = period_start(lease_start, lease_years, i)
         # Rebuilt rather than copied, so a client-sent key can never sneak into storage —
         # which means every field the server *does* own has to be carried across by hand.
-        carried = {k: year[k] for k in ("months",) if year.get(k) is not None}
+        # `generated` is one of them: an open-ended CPI lease is topped up by
+        # `run-lease-generation` and repriced here, and dropping the flag would relabel
+        # every appended period as a term somebody agreed to.
+        carried = {
+            k: year[k] for k in ("months", "generated") if year.get(k) is not None
+        }
         if not force_recompute and is_frozen(year, anniversary, today):
             result.append(
                 {
@@ -314,47 +320,90 @@ class CpiIndexingService:
         # Ordered by authority: the first source that returns rows wins, and the rest are
         # never called. sources[0] is the one whose absence counts as "degraded".
         self.sources = list(sources)
-        self.index_id = index_id if index_id is not None else settings.CPI_INDEX_ID
+        # Name -> instance, so a series can name the feeds it trusts rather than every
+        # series sharing one global order. `get_index_sources` still decides which feeds
+        # exist at all; this decides which of them answer for a given index.
+        self.sources_by_name = {s.name: s for s in self.sources}
+        # Pins every series to one id when set. It is how a deployment overrode the series
+        # before the country table carried one, and how a test drives the job without a
+        # country fixture. `None` — the normal case — means each country's own series.
+        self.pinned_index_id = index_id
         self.max_stale_months = (
             max_stale_months
             if max_stale_months is not None
             else settings.CPI_MAX_STALE_MONTHS
         )
 
-    def _lookup(self) -> IndexLookup:
+    def _series_in_scope(self) -> dict[str, "country_service.IndexSeries"]:
+        """Every country with a live index, and the series it is linked to.
+
+        This is what makes the job multi-market without a second code path: today the dict
+        has one entry, and the loops below already read like they have several.
+        """
+        series = country_service.index_series_by_country()
+        if self.pinned_index_id is None:
+            return series
+        return {
+            code: dataclasses.replace(s, series_id=self.pinned_index_id)
+            for code, s in series.items()
+        }
+
+    def _sources_for(self, series) -> list[IndexSource]:
+        """The feeds this series trusts, in order of authority.
+
+        Falls back to every wired source when the series names none that are actually
+        available — which is what keeps a test driving the job with one stand-in working,
+        and what stops a typo in a series definition silently fetching nothing.
+        """
+        named = [
+            self.sources_by_name[name]
+            for name in series.sources
+            if name in self.sources_by_name
+        ]
+        return named or self.sources
+
+    def _lookup(self, index_id: int) -> IndexLookup:
         def lookup(d: date) -> Optional[IndexReading]:
-            row = self.cpi_index_repository.reading_on_or_before(self.index_id, d)
+            row = self.cpi_index_repository.reading_on_or_before(index_id, d)
             return IndexReading(row.year, row.month, row.value) if row else None
 
         return lookup
 
-    def _refresh_cache(self, summary: dict) -> set[tuple[int, int]]:
-        """Try each source in order until one yields rows. Returns the set of periods
-        whose source was upgraded, so the caller knows to re-derive frozen values."""
-        full_backfill = self.cpi_index_repository.is_empty(self.index_id)
+    def _refresh_cache(self, series, summary: dict) -> set[tuple[int, int]]:
+        """Try each of this series' sources in order until one yields rows. Returns the set
+        of periods whose source was upgraded, so the caller knows to re-derive frozen
+        values."""
+        index_id = series.series_id
+        sources = self._sources_for(series)
+        full_backfill = self.cpi_index_repository.is_empty(index_id)
         superseded: set[tuple[int, int]] = set()
-        for source in self.sources:
+        served_by = None
+        for source in sources:
             rows = source.fetch_all() if full_backfill else source.fetch_latest()
             if not rows:
                 continue
-            summary["fetched"], superseded = self.cpi_index_repository.upsert_many(
-                self.index_id, rows, source=source.name
+            fetched, superseded = self.cpi_index_repository.upsert_many(
+                index_id, rows, source=source.name
             )
-            summary["source"] = source.name
+            summary["fetched"] += fetched
+            summary["source"] = served_by = source.name
             break
 
-        served_by = summary["source"]
         if served_by is None:
             logger.warning(
-                "CPI: no index source returned data (tried %s)",
-                ", ".join(s.name for s in self.sources) or "none",
+                "CPI: no index source returned data for series %s (tried %s)",
+                index_id,
+                ", ".join(s.name for s in sources) or "none",
             )
-        elif self.sources and served_by != self.sources[0].name:
+        elif sources and served_by != sources[0].name:
             # Correct data from a fallback is a working state, not a failure — the run
             # still reports success. Staleness is what escalates.
             summary["degraded"] = True
             logger.warning(
-                "CPI: %s unavailable, served from %s", self.sources[0].name, served_by
+                "CPI: %s unavailable, series %s served from %s",
+                sources[0].name,
+                index_id,
+                served_by,
             )
         return superseded
 
@@ -365,6 +414,7 @@ class CpiIndexingService:
         new_years: list[dict],
         base_index: Optional[float],
         today: date,
+        index_id: int,
     ) -> int:
         """Raise the confirmation notification when *the year currently in effect* was
         repriced. Returns 1 if a row was written.
@@ -392,7 +442,7 @@ class CpiIndexingService:
 
         anniversary = cpi.anniversary_of(renter.lease_start, new_years, index)
         reading = new_years[index].get("cpi_reading") or {}
-        source = self.cpi_index_repository.reading_on_or_before(self.index_id, anniversary)
+        source = self.cpi_index_repository.reading_on_or_before(index_id, anniversary)
         if self.notification_repository.was_generated(
             renter.owner_id,
             NotificationTypeEnum.CPI_RENT_CHANGE,
@@ -451,20 +501,38 @@ class CpiIndexingService:
             return False
         return NotificationTypeEnum.CPI_RENT_CHANGE.value in muted
 
-    def _staleness(self, summary: dict) -> None:
-        """How far the cache trails the newest month that should be published by now."""
+    def _staleness(self, index_ids: list[int], summary: dict) -> None:
+        """How far the cache trails the newest month that should be published by now.
+
+        Reported for the **worst** series in scope, because one market's index going dark
+        is an outage whatever the others are doing, and the run's 503 is a single answer.
+        With one series — today — this is exactly what it always was.
+        """
         expected = reference_period(date.today())
-        latest = self.cpi_index_repository.latest_period(self.index_id)
         summary["expected_period"] = _period_str(expected)
-        summary["latest_period"] = _period_str(latest)
-        if latest is None:
-            # An empty cache is maximally stale: every CPI lease is stuck at base rent.
+        worst: tuple[int, int] | None = None
+        worst_months: int | None = None
+        empty = False
+        for index_id in index_ids:
+            latest = self.cpi_index_repository.latest_period(index_id)
+            if latest is None:
+                # An empty cache is maximally stale: every CPI lease on it is stuck at
+                # base rent.
+                empty = True
+                continue
+            months = max(
+                (expected[0] * 12 + expected[1]) - (latest[0] * 12 + latest[1]), 0
+            )
+            if worst_months is None or months > worst_months:
+                worst_months, worst = months, latest
+        if empty or worst_months is None:
+            summary["latest_period"] = _period_str(worst)
             summary["stale_months"] = None
             summary["stale"] = True
             return
-        stale_months = (expected[0] * 12 + expected[1]) - (latest[0] * 12 + latest[1])
-        summary["stale_months"] = max(stale_months, 0)
-        summary["stale"] = summary["stale_months"] > self.max_stale_months
+        summary["latest_period"] = _period_str(worst)
+        summary["stale_months"] = worst_months
+        summary["stale"] = worst_months > self.max_stale_months
 
     def run_cpi_indexing(self, today: Optional[date] = None) -> dict:
         today = today or date.today()
@@ -478,29 +546,47 @@ class CpiIndexingService:
             "stale": False,
         }
 
-        # 1. Refresh the cache from the first source that answers: full backfill when
-        #    empty, else the latest few months.
-        superseded = self._refresh_cache(summary)
-        # A period changing hands means anything frozen against the old value is now
-        # anchored to a superseded reading, so re-derive the frozen bases this run — and
-        # for the same reason lift the per-year freeze, since every amount downstream of
-        # a provisional reading was derived from a number now known to be wrong.
-        reconcile_bases = bool(superseded)
+        # Countries that actually have an index behind them, and which series each one is
+        # linked to. Derived from the country table, never a hardcoded list — the day a
+        # second market gets an adapter, its config row is the whole change here.
+        series_by_country = self._series_in_scope()
+        # De-duplicated on the series id: several countries can share one published index,
+        # and fetching it twice would be two requests for the same rows.
+        series_by_id = {}
+        for series in series_by_country.values():
+            series_by_id.setdefault(series.series_id, series)
 
-        # 2. Recompute every CPI-linked renter against the (now fresher) cache. Two kinds
+        # 1. Refresh each series from the first of its sources that answers: full backfill
+        #    when empty, else the latest few months.
+        reconciled_ids: set[int] = set()
+        for index_id, series in series_by_id.items():
+            if self._refresh_cache(series, summary):
+                # A period changing hands means anything frozen against the old value is
+                # now anchored to a superseded reading, so re-derive the frozen bases this
+                # run — and for the same reason lift the per-year freeze, since every
+                # amount downstream of a provisional reading was derived from a number now
+                # known to be wrong. Per series: one market's correction says nothing about
+                # another's.
+                reconciled_ids.add(index_id)
+
+        # 2. Recompute every index-linked renter against the (now fresher) cache. Two kinds
         #    qualify: whole-lease `cpi` leases, and `custom` leases with at least one
         #    CPI year — the latter still need the index even though their other years
         #    are percent/fixed/manual.
-        lookup = self._lookup()
-        # Countries that actually have an index source behind them. Derived from the
-        # capability flags, never a hardcoded list — the day a second country gets an
-        # adapter, flipping its flag is the whole change.
-        index_countries = country_service.countries_with_index_linkage()
-        for renter in self.renter_repository.get_by_escalation_modes(
-            ["cpi", "custom"], countries=index_countries
+        lookups = {index_id: self._lookup(index_id) for index_id in series_by_id}
+        for renter, country in self.renter_repository.get_by_escalation_modes_with_country(
+            ["cpi", "custom"], countries=list(series_by_country)
         ):
             if not renter.lease_start:
                 continue
+            # The country comes back resolved by the query — property, then account, then
+            # the default — so a renter is always priced against the index of the place its
+            # building is in, never the deployment's.
+            series = series_by_country.get(country_service.normalize(country))
+            if series is None:
+                continue
+            lookup = lookups[series.series_id]
+            reconcile_bases = series.series_id in reconciled_ids
             # A closed lease is not repriced at the next period boundary — and the CPI
             # change notification below would be about rent nobody owes.
             if renter.terminated_on:
@@ -555,7 +641,7 @@ class CpiIndexingService:
                 # Raise the notification *before* the write, while `current` still holds
                 # the amount the owner last knew about.
                 summary["notified"] += self._notify_rent_change(
-                    renter, current, new_years, base_index, today
+                    renter, current, new_years, base_index, today, series.series_id
                 )
                 self.renter_repository.update(
                     renter,
@@ -565,7 +651,7 @@ class CpiIndexingService:
 
         # 3. Report. A run that fetched nothing is only a problem if the cache has fallen
         #    behind — which is the check that would have caught the CBS outage.
-        self._staleness(summary)
+        self._staleness(list(series_by_id), summary)
         if summary["renters_before_index_start"]:
             # Not stale — the cache is current, just doesn't reach far enough back. Lowering
             # HISTORY_FLOOR and letting the next run re-backfill is the fix.
@@ -573,7 +659,10 @@ class CpiIndexingService:
                 "CPI: %s CPI-linked lease(s) start before the cached history (from %s) and "
                 "are holding at base rent — consider lowering HISTORY_FLOOR",
                 summary["renters_before_index_start"],
-                _period_str(self.cpi_index_repository.earliest_period(self.index_id)),
+                ", ".join(
+                    _period_str(self.cpi_index_repository.earliest_period(index_id)) or "?"
+                    for index_id in series_by_id
+                ),
             )
         if summary["stale"]:
             logger.error(

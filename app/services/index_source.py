@@ -32,12 +32,19 @@ FETCH_TIMEOUT_SECONDS = 8
 # original rent, so ``CpiIndexingService`` counts those and warns rather than letting it
 # pass unnoticed. If real users start entering older leases, lower this and let the next
 # run re-backfill.
+#
+# It is the *default*, not the rule: "how far back does a lease in this market plausibly
+# start" is a per-series question, so each source is constructed with its series' own floor
+# (``IndexSeries.history_floor``). This value is what Israel's is set to, and what a source
+# built without one falls back to.
 HISTORY_FLOOR = (2019, 11)
 
 
-def at_or_after_floor(rows: list[tuple[int, int, float]]) -> list[tuple[int, int, float]]:
-    """Drop readings older than :data:`HISTORY_FLOOR`."""
-    cutoff = HISTORY_FLOOR[0] * 12 + HISTORY_FLOOR[1]
+def at_or_after_floor(
+    rows: list[tuple[int, int, float]], floor: tuple[int, int] = HISTORY_FLOOR
+) -> list[tuple[int, int, float]]:
+    """Drop readings older than ``floor``."""
+    cutoff = floor[0] * 12 + floor[1]
     return [r for r in rows if r[0] * 12 + r[1] >= cutoff]
 
 

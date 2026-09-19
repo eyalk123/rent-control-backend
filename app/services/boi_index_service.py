@@ -48,15 +48,21 @@ _MONTHLY_PERIOD = re.compile(r"^(\d{4})-(\d{2})$")
 class BoiIndexService:
     name = "boi"
 
-    def __init__(self, base_url: str, series_code: str):
+    def __init__(
+        self,
+        base_url: str,
+        series_code: str,
+        history_floor: tuple[int, int] = HISTORY_FLOOR,
+    ):
         self.base_url = base_url.rstrip("/")
         self.series_code = series_code
+        self.history_floor = history_floor
 
     def fetch_all(self) -> list[tuple[int, int, float]]:
         """History back to :data:`HISTORY_FLOOR` in one request — used to backfill an empty
         cache. ``startPeriod`` trims the response server-side, so this is a small payload."""
         return self._fetch(
-            {"startPeriod": f"{HISTORY_FLOOR[0]:04d}-{HISTORY_FLOOR[1]:02d}"}
+            {"startPeriod": f"{self.history_floor[0]:04d}-{self.history_floor[1]:02d}"}
         )
 
     def fetch_latest(self, n: int = 6) -> list[tuple[int, int, float]]:

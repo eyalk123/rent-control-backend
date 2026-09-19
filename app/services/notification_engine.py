@@ -11,7 +11,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.config import settings as app_settings
 from app.models.notification import NotificationTypeEnum
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.notification_rule_repository import NotificationRuleRepository
@@ -259,11 +258,15 @@ class NotificationEngine:
         estimate of what the new rent will be."""
         if self.cpi_index_repository is None:
             return []
+        # Which index this owner's leases are linked to. One country per account is a
+        # product rule, so this is asked once per owner rather than once per renter —
+        # and an account in a country with no index simply has no heads-up to give.
+        series = self.renter_service.index_series_for_lease(None, owner_id)
+        if series is None:
+            return []
         # The anniversary's own index isn't published yet — that is the whole reason
         # this stage is an estimate. The newest reading known today is the best proxy.
-        proxy = self.cpi_index_repository.latest_on_or_before(
-            app_settings.CPI_INDEX_ID, today
-        )
+        proxy = self.cpi_index_repository.latest_on_or_before(series.series_id, today)
         if proxy is None:
             return []
         min_amount, min_percent = _cpi_thresholds(settings)
@@ -291,7 +294,9 @@ class NotificationEngine:
                 continue
 
             old_amount = years[current].get("amount")
-            estimate = self._estimate_repriced_amount(r, years, current, nxt, proxy, today)
+            estimate = self._estimate_repriced_amount(
+                r, years, current, nxt, proxy, today, series.series_id
+            )
             if estimate is None or old_amount is None:
                 continue
             if not cpi.is_material(old_amount, estimate, min_amount, min_percent):
@@ -320,7 +325,14 @@ class NotificationEngine:
         return out
 
     def _estimate_repriced_amount(
-        self, renter, years: list[dict], current: int, nxt: int, proxy: float, today: date
+        self,
+        renter,
+        years: list[dict],
+        current: int,
+        nxt: int,
+        proxy: float,
+        today: date,
+        index_id: int,
     ) -> float | None:
         """What the next lease year would come to if the index stopped moving today.
 
@@ -341,7 +353,7 @@ class NotificationEngine:
         if prev_amount is None:
             return None
         prev_index = self.cpi_index_repository.latest_on_or_before(
-            app_settings.CPI_INDEX_ID,
+            index_id,
             cpi.anniversary_of(renter.lease_start, years, current),
         )
         return compute_chained_cpi_amount(prev_amount, prev_index, proxy)

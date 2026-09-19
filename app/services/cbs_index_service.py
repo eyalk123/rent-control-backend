@@ -16,7 +16,7 @@ Response shape (id=120010):
 """
 import logging
 
-from app.services.index_source import at_or_after_floor, fetch_json
+from app.services.index_source import HISTORY_FLOOR, at_or_after_floor, fetch_json
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,15 @@ _MAX_PAGES = 50  # safety bound (full general-CPI history is ~9 pages)
 class CbsIndexService:
     name = "cbs"
 
-    def __init__(self, base_url: str, index_id: int):
+    def __init__(
+        self,
+        base_url: str,
+        index_id: int,
+        history_floor: tuple[int, int] = HISTORY_FLOOR,
+    ):
         self.base_url = base_url.rstrip("/")
         self.index_id = index_id
+        self.history_floor = history_floor
 
     def fetch_all(self) -> list[tuple[int, int, float]]:
         """History back to :data:`HISTORY_FLOOR` — used to backfill an empty cache. Follows
@@ -56,7 +62,7 @@ class CbsIndexService:
             if data is None:
                 break
             page = self._parse(data)
-            kept = at_or_after_floor(page)
+            kept = at_or_after_floor(page, self.history_floor)
             rows.extend(kept)
             if page and not kept:
                 break  # walked past the floor; everything beyond is older still

@@ -215,7 +215,7 @@ live in `.claude/docs/architectural_patterns.md`.
 | `EXPO_ACCESS_TOKEN` | No | Expo Push; only needed with Expo "Enhanced Security" |
 | `REMINDER_CRON_SECRET` | No | Guards the `/internal/*` endpoints via the `X-Cron-Secret` header. **Empty disables them** |
 | `CBS_API_BASE_URL` | No | Primary CPI source. Default `https://api.cbs.gov.il`. Keyless |
-| `CPI_INDEX_ID` | No | Default `120010` (general CPI) |
+| `CPI_INDEX_ID` | No | **Override** for Israel's configured series id, not the source of truth — the series each country is linked to lives in `app/countries/config.py` (`IndexSeries`). Unset leaves it at Israel's `120010` (general CPI) |
 | `BOI_API_BASE_URL` | No | Fallback CPI source (Bank of Israel SDMX). Default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2`. Keyless |
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — the same series as `CPI_INDEX_ID` 120010 |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`. How far behind the newest published month the cache may fall before `run-cpi-indexing` returns 503 |

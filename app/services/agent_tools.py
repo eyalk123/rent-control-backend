@@ -39,7 +39,6 @@ from app.services.lease_periods import (
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.repositories.cpi_index_repository import CpiIndexRepository, reference_period
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.owner_repository import OwnerRepository
@@ -928,10 +927,15 @@ class AgentTools:
             result["note"] = "For the CPI calculation (base index, floor, projected vs finalized) call explain_cpi."
         return result
 
-    def _index_reading(self, d: date) -> tuple[Optional[dict], Optional[tuple[int, int]]]:
-        """The CPI reading actually applied for date ``d``: ({value, month}, (year, month))
-        or (None, None) if none is cached."""
-        row = self.cpi_index_repository.reading_on_or_before(settings.CPI_INDEX_ID, d)
+    def _index_reading(
+        self, d: date, index_id: int
+    ) -> tuple[Optional[dict], Optional[tuple[int, int]]]:
+        """The index reading actually applied for date ``d``: ({value, month}, (year, month))
+        or (None, None) if none is cached.
+
+        Takes the series the lease is linked to rather than a deployment-wide one, so the
+        explanation cites the same reading the amount was computed from."""
+        row = self.cpi_index_repository.reading_on_or_before(index_id, d)
         if row is None:
             return None, None
         return {"value": row.value, "month": f"{row.year:04d}-{row.month:02d}"}, (row.year, row.month)
@@ -969,6 +973,12 @@ class AgentTools:
             "year_starts": _iso(anniversary),
         }
 
+        # The series the lease is actually linked to. The tool is capability-gated, so a
+        # country with no index never reaches here — but resolving it rather than assuming
+        # is what keeps the explanation true the day a second market exists.
+        series = self.renter_service.index_series_for_lease(r.property_id, owner_id)
+        index_id = series.series_id if series else None
+
         year_is_cpi = mode == "cpi" or (rule is not None and rule.get("mode") == "cpi")
         if not year_is_cpi:
             result["cpi_linked"] = False
@@ -980,7 +990,9 @@ class AgentTools:
             )
             return result
 
-        known_dict, known_period = self._index_reading(anniversary)
+        if index_id is None:
+            return {"error": "this lease's country has no index behind it"}
+        known_dict, known_period = self._index_reading(anniversary, index_id)
         known_index = known_dict["value"] if known_dict else None
         # A year is finalized once the exact known-index month for its anniversary is
         # published; until then an older reading stands in and the amount is a projection.
@@ -1026,7 +1038,9 @@ class AgentTools:
             # Chained (custom per-year rule): measured against the PREVIOUS year's amount and index.
             prev_idx = max(idx - 1, 0)
             prev_amount = years[prev_idx].get("amount") if idx > 0 else round(base_rent)
-            prev_dict, _ = self._index_reading(period_start(r.lease_start, years, prev_idx))
+            prev_dict, _ = self._index_reading(
+                period_start(r.lease_start, years, prev_idx), index_id
+            )
             prev_index = prev_dict["value"] if prev_dict else None
             amount = compute_chained_cpi_amount(prev_amount, prev_index, known_index)
             ratio = (known_index / prev_index) if (prev_index and known_index) else None

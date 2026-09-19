@@ -289,20 +289,23 @@ class TestPerRenterExpiryMute:
 class TestOpenEndedRejectsScheduleShapedModes:
     """The same enforcement rule, one feature over.
 
-    Both clients hide `custom` and `cpi` when the open-ended switch is on, so the API has to
-    refuse them too — a hidden control with a live endpoint behind it is a bug, not a feature
-    flag. The reason they cannot work is structural rather than regional: `custom` gives every
-    period its own rule and `cpi` needs an index reading per period, and neither can be
-    written for a period the generator has not appended yet.
+    Both clients hide `custom` when the open-ended switch is on, so the API has to refuse it
+    too — a hidden control with a live endpoint behind it is a bug, not a feature flag. The
+    reason it cannot work is structural rather than regional: `custom` gives every period its
+    own rule, and a rule cannot be written for a period the generator has not appended yet.
+
+    `cpi` is **not** refused. Whole-lease index linkage prices every period from the base
+    frozen at signing and never asks where the schedule ends, so an index-linked holdover is
+    an ordinary tenancy. `_guard_index_linkage` still refuses it where the country has no
+    index, which is what the rest of this module covers.
     """
 
-    @pytest.mark.parametrize("mode", ["custom", "cpi"])
-    def test_rejected_on_create(self, client, db_session, mode):
+    def test_rejected_on_create(self, client, db_session):
         _owner(db_session, "IL")  # Israel, so the index guard cannot be what rejects it
         prop = _property(db_session, "IL")
         r = client.post(
             "/renters",
-            json=_renter_payload(prop.id, rent_escalation_mode=mode, open_ended=True),
+            json=_renter_payload(prop.id, rent_escalation_mode="custom", open_ended=True),
         )
         assert r.status_code == 422
         assert "open-ended" in r.json()["detail"]
@@ -323,11 +326,30 @@ class TestOpenEndedRejectsScheduleShapedModes:
         _owner(db_session, "IL")
         prop = _property(db_session, "IL")
         created = client.post(
-            "/renters", json=_renter_payload(prop.id, rent_escalation_mode="cpi")
+            "/renters", json=_renter_payload(prop.id, rent_escalation_mode="custom")
         )
         assert created.status_code == 201
         r = client.patch(f"/renters/{created.json()['id']}", json={"open_ended": True})
         assert r.status_code == 422
+
+    def test_an_index_linked_lease_may_be_open_ended(self, client, db_session):
+        """The case the switch exists for in Israel: a tenant who stayed on month to month
+        under a rent the contract ties to the index."""
+        _owner(db_session, "IL")
+        prop = _property(db_session, "IL")
+        created = client.post(
+            "/renters",
+            json=_renter_payload(prop.id, rent_escalation_mode="cpi", open_ended=True),
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["open_ended"] is True
+
+        # And from the other direction — turning the switch on over an existing one.
+        existing = client.post(
+            "/renters", json=_renter_payload(prop.id, rent_escalation_mode="cpi")
+        )
+        r = client.patch(f"/renters/{existing.json()['id']}", json={"open_ended": True})
+        assert r.status_code == 200, r.text
 
     def test_rejected_when_an_edit_changes_the_mode_under_the_switch(self, client, db_session):
         _owner(db_session, "IL")

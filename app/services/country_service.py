@@ -14,8 +14,17 @@ to be migrated. Call ``COUNTRIES[owner.country]`` at the call site and it does.
 """
 from dataclasses import dataclass
 
+from dataclasses import replace as _replace
+
+from app.config import settings
 from app.countries import currencies
-from app.countries.config import COUNTRIES, DEFAULT_COUNTRY, Capabilities, CountryConfig
+from app.countries.config import (
+    COUNTRIES,
+    DEFAULT_COUNTRY,
+    Capabilities,
+    CountryConfig,
+    IndexSeries,
+)
 
 # What an unrecognised code resolves to. Deliberately *not* Israel: an unknown country
 # must never be handed the Israeli feature set, because there is no index data behind it.
@@ -133,8 +142,60 @@ def countries_with_index_linkage() -> list[str]:
     is one flag rather than a list someone has to remember to update. Today this is Israel
     alone; the day an INE or INSEE adapter lands, flipping that country's flag scopes the
     job to it automatically.
+
+    The flag and the series are two halves of one statement, so this reads both: a country
+    whose flag is on but whose series is missing would scope the job to a country the job
+    then has nothing to fetch for. ``test_regression_gates`` asserts they never disagree;
+    this makes the failure inert rather than a crash mid-run if they ever do.
     """
-    return [code for code, cfg in COUNTRIES.items() if cfg.capabilities.cpi_linkage]
+    return [
+        code
+        for code, cfg in COUNTRIES.items()
+        if cfg.capabilities.cpi_linkage and cfg.index_series is not None
+    ]
+
+
+def index_series_for(country_code: str | None) -> IndexSeries | None:
+    """Which index a country's leases are linked to, or ``None`` where there is none.
+
+    The resolution point for everything that used to read ``settings.CPI_INDEX_ID``: the
+    series belongs to the country the property is in, not to the deployment. Never raises —
+    an unknown code falls back the same way ``config_for`` does, which means no series, which
+    means index linkage is refused rather than silently served Israel's readings.
+    """
+    return _with_overrides(config_for(country_code).index_series, country_code)
+
+
+def index_series_by_country() -> dict[str, IndexSeries]:
+    """Every live series, keyed by country — what the refresh job iterates.
+
+    Several countries can share one series id (a currency union publishing a common index is
+    the obvious case), so the job de-duplicates on ``series_id`` rather than on the country.
+    """
+    return {
+        code: _with_overrides(cfg.index_series, code)
+        for code, cfg in COUNTRIES.items()
+        if cfg.capabilities.cpi_linkage and cfg.index_series is not None
+    }
+
+
+def _with_overrides(series: IndexSeries | None, country_code: str | None) -> IndexSeries | None:
+    """Apply the one env-var escape hatch that predates the table.
+
+    ``CPI_INDEX_ID`` was the deployment-wide series id before the series moved into the
+    country table, and it is still honoured — but only for the default country, which is the
+    only one it could ever have described. Leaving it live means a deployment that pins the
+    series (a CBS renumbering, a staging environment pointed at a test series) keeps working
+    without an emergency release; scoping it to one country means it cannot silently
+    repoint a second market's index at Israel's.
+    """
+    if series is None:
+        return None
+    if normalize(country_code) not in (None, DEFAULT_COUNTRY):
+        return series
+    if settings.CPI_INDEX_ID == series.series_id:
+        return series
+    return _replace(series, series_id=settings.CPI_INDEX_ID)
 
 
 def all_countries() -> list[CountryConfig]:

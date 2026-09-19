@@ -61,6 +61,39 @@ class Capabilities:
 
 
 @dataclass(frozen=True)
+class IndexSeries:
+    """The statistics series a country's index-linked leases are priced against.
+
+    One per country that has index linkage at all, and the reason ``cpi_linkage`` can stay a
+    plain boolean: the flag says *whether* rent may be tied to an index here, this says
+    *which* index and *who publishes it*. Israel is the only row today.
+
+    Adding a second market is this dataclass plus one ``IndexSource`` implementation named in
+    ``sources``. Nothing else moves: ``cpi_index`` is already keyed ``(index_id, year,
+    month)``, the precedence rules in ``upsert_many`` are already per-source, and the refresh
+    job already scopes itself to the countries the flag is on for.
+
+    ``label_key`` and ``note_key`` are **i18n keys**, for the reason at the top of this file:
+    every country's clause is "the official index", but Israel's is the מדד and Spain's is
+    the IPC, and which one it is cannot be spelled by the language alone. Israel's keys point
+    at the copy the clients already ship, so the Israeli rendering path is untouched code.
+    """
+
+    #: ``cpi_index.index_id`` — the publisher's own series id.
+    series_id: int
+    #: ``IndexSource.name``, in order of authority. The first that answers wins; a
+    #: lower-ranked one never overwrites a higher-ranked reading (``_SOURCE_RANK``).
+    sources: tuple[str, ...]
+    #: Oldest period worth caching, as ``(year, month)``. Per series because "how far back
+    #: does a lease in this market plausibly start" is not a global question.
+    history_floor: tuple[int, int]
+    #: i18n key for the escalation mode's label in the rent-change picker.
+    label_key: str
+    #: i18n key for the one-line explainer under it.
+    note_key: str
+
+
+@dataclass(frozen=True)
 class CountryConfig:
     country_code: str
     name: str
@@ -92,6 +125,12 @@ class CountryConfig:
     # i18n keys, never display strings. None == use the client's own translation files.
     registry_key_1: str | None = None
     registry_key_2: str | None = None
+
+    # The index rent may be linked to here, or None where there is none. Must be set for
+    # exactly the countries whose `capabilities.cpi_linkage` is on — a flag with no series
+    # behind it is a live endpoint with no data source, which is the failure mode the
+    # capability system exists to prevent. `test_regression_gates` asserts the pairing.
+    index_series: IndexSeries | None = None
 
     capabilities: Capabilities = field(default_factory=Capabilities)
 
@@ -534,6 +573,18 @@ def _build() -> dict[str, CountryConfig]:
         out["IL"],
         tier="native",
         locale="he",
+        # The general Consumer Price Index, published by the Central Bureau of Statistics and
+        # republished by the Bank of Israel — the two feeds `get_index_sources` already wires
+        # up, in that order, because CBS is the publisher escalation clauses reference. The
+        # floor is November 2019 rather than January for the reason `index_source` gives: the
+        # known-index rule reaches two months back, so a January 2020 lease needs it.
+        index_series=IndexSeries(
+            series_id=120010,
+            sources=("cbs", "boi"),
+            history_floor=(2019, 11),
+            label_key="renter.rentChangeCpi",
+            note_key="renter.rentChangeCpiNote",
+        ),
         capabilities=Capabilities(
             cpi_linkage=True,
             tax_tracks=True,

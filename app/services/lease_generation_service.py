@@ -20,6 +20,14 @@ own, and a period that has already started is never touched. The contrast with
 `cpi_indexing_service`, which recomputes existing periods against a published index and needs
 `is_frozen` to know when to stop, is deliberate: nothing here can rewrite history, so nothing
 here needs a freeze.
+
+**An index-linked lease is topped up here and priced there.** This file owns no index cache
+and is not going to grow one — it is pure arithmetic, which is what makes it testable without
+a database. So a `cpi` lease gets its new period appended at the previous period's amount, as
+a placeholder, and `run-cpi-indexing` resolves it against the index within the hour: the
+scheduler runs this at 02:00 UTC and indexing at 03:00, and `run-reminders` performs the two
+catch-ups in that same order. A placeholder that survives to a screen is the previous year's
+rent, which is also what an unpublished index month falls back to.
 """
 import json
 import logging
@@ -40,11 +48,15 @@ logger = logging.getLogger(__name__)
 #: ends at the fifth one.
 HORIZON_PERIODS = 5
 
-#: Modes this job can extend. `custom` gives each period its own rule and `cpi` needs an index
-#: reading per period — neither can be written for a period that does not exist yet, which is
-#: why the API refuses to pair them with the switch (`renter_service._guard_open_ended_mode`).
-#: Listed here as well so a row that predates that guard is skipped rather than mispriced.
-GENERATABLE_MODES = {None, "none", "percent", "fixed"}
+#: Modes this job can extend. Everything but `custom`, which gives each period its own rule
+#: and so cannot describe a period that does not exist yet — which is why the API refuses to
+#: pair it with the switch (`renter_service._guard_open_ended_mode`). Listed here as well so a
+#: row that predates that guard is skipped rather than mispriced.
+#:
+#: `cpi` belongs here: whole-lease index linkage prices every period from the base frozen at
+#: signing, and never asks where the schedule ends. See the placeholder note in the module
+#: docstring for how its appended periods get their real amount.
+GENERATABLE_MODES = {None, "none", "percent", "fixed", "cpi"}
 
 
 def remaining_periods(lease_start: date, lease_years: list[dict], today: date) -> int:
@@ -83,7 +95,12 @@ def extend_to_horizon(
     if missing <= 0:
         return lease_years
 
+    # `cpi` is deliberately not handed to `apply_year_rule` as a rule: whole-lease index
+    # linkage is fixed-base, not chained, so the rule engine would answer the wrong question
+    # even though it happens to return the same placeholder. Saying "hold at the previous
+    # amount until indexing runs" outright is what the code actually means.
     rule = {"mode": mode or "none", "value": escalation_value or 0}
+    indexed = mode == "cpi"
     extended = list(lease_years)
     for _ in range(missing):
         previous = extended[-1]["amount"]
@@ -93,7 +110,11 @@ def extend_to_horizon(
                 # The difference only shows once an amount has been corrected by hand — and
                 # then it is the whole point, because chaining carries the correction forward
                 # and the closed form silently discards it.
-                "amount": apply_year_rule(previous, previous, rule, None, None),
+                "amount": (
+                    round(previous)
+                    if indexed
+                    else apply_year_rule(previous, previous, rule, None, None)
+                ),
                 # `contract`, not `option`. An option period is one the tenant may decline,
                 # and the app asks the owner to decide about it; there is no such decision
                 # here. It also keeps `contract_end` moving with the horizon, which is what

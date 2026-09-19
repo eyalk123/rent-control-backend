@@ -487,6 +487,42 @@ def test_run_cpi_indexing_freezes_base_index_when_missing(db_session):
     assert [y["amount"] for y in json.loads(renter.lease_years)] == [5000, 5500]
 
 
+def test_run_cpi_indexing_prices_an_open_ended_lease_and_keeps_the_auto_flag(db_session):
+    """The two open-ended jobs in sequence: `run-lease-generation` appends a period at a
+    placeholder amount, this one resolves it against the index.
+
+    The flag has to survive that, because `materialize_cpi_amounts` rebuilds every period
+    dict from scratch — and a period silently relabelled from Auto to Contract is a term
+    the app claims somebody agreed to.
+    """
+    CpiIndexRepository(db_session).upsert_many(
+        INDEX_ID, [(2022, 11, 100.0), (2023, 11, 110.0)], source="cbs"
+    )
+    renter = make_renter(
+        db_session,
+        rent_escalation_mode="cpi",
+        lease_start=date(2023, 1, 1),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        open_ended=True,
+        lease_years=[
+            {"amount": 5000.0, "type": "contract"},
+            # What the generation job leaves behind: the previous amount, flagged.
+            {"amount": 5000.0, "type": "contract", "generated": True},
+        ],
+    )
+
+    summary = CpiIndexingService(
+        RenterRepository(db_session), CpiIndexRepository(db_session), [FakeCbs()]
+    ).run_cpi_indexing()
+
+    assert summary["renters_updated"] == 1
+    db_session.refresh(renter)
+    stored = json.loads(renter.lease_years)
+    assert [y["amount"] for y in stored] == [5000, 5500]
+    assert stored[1]["generated"] is True
+
+
 def test_run_cpi_indexing_picks_up_custom_lease_with_a_cpi_year(db_session):
     CpiIndexRepository(db_session).upsert_many(
         INDEX_ID, [(2022, 11, 100.0), (2023, 11, 110.0)], source="cbs"

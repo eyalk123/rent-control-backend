@@ -56,6 +56,12 @@ class LeaseYear(BaseModel):
     # short — a partial period in the middle of a lease is not a thing that happens, and
     # the form cannot express one.
     months: Optional[int] = None
+    # Written by `run-lease-generation` when it appends a period to an open-ended lease,
+    # and read by both clients to badge it **Auto** rather than as Contract or Option.
+    # **Server-owned**: a client that posts it is ignored — `renter_service` carries the
+    # stored value forward instead — but it has to be declared here or the serializer
+    # below would never emit it and the flag would never leave the database.
+    generated: Optional[bool] = None
 
     @field_validator("months")
     @classmethod
@@ -66,14 +72,16 @@ class LeaseYear(BaseModel):
 
     @model_serializer
     def serialize(self) -> dict:
-        """Drop `rule` and `months` entirely when there isn't one, rather than emitting
-        nulls. Keeps both the stored JSON blob and the API response byte-identical to
-        their earlier shape for every lease that uses neither."""
+        """Drop `rule`, `months` and `generated` entirely when there isn't one, rather than
+        emitting nulls. Keeps both the stored JSON blob and the API response byte-identical
+        to their earlier shape for every lease that uses none of them."""
         data: dict = {"amount": self.amount, "type": self.type.value}
         if self.rule is not None:
             data["rule"] = self.rule.model_dump(exclude_none=True)
         if self.months is not None:
             data["months"] = self.months
+        if self.generated:
+            data["generated"] = True
         return data
 
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CapabilitiesRead(BaseModel):
@@ -48,9 +48,39 @@ class CountryRead(BaseModel):
     registry_key_1: str | None
     registry_key_2: str | None
 
+    #: i18n keys for the index-linked escalation mode — its label in the rent-change picker
+    #: and the one-line note under it. Keys for the same reason the registry ones are: every
+    #: market's clause is "the official index", but Israel's is the מדד and Spain's is the
+    #: IPC, and the language alone cannot say which. ``None`` where the country has no index,
+    #: which is also where ``capabilities.cpi_linkage`` is off.
+    #:
+    #: The series id, its sources and its history floor are deliberately **not** here. They
+    #: are how the server fetches a number; a client has no use for them and publishing them
+    #: would invite one.
+    index_label_key: str | None = None
+    index_note_key: str | None = None
+
     capabilities: CapabilitiesRead
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flatten_index_series(cls, data):
+        """Lift the two i18n keys out of ``CountryConfig.index_series``.
+
+        Here rather than in the routers so every path that serialises a country — the list,
+        the single lookup, anything added later — gets them without remembering to.
+        """
+        if isinstance(data, dict):
+            return data
+        values = {
+            field: getattr(data, field) for field in cls.model_fields if hasattr(data, field)
+        }
+        series = getattr(data, "index_series", None)
+        values["index_label_key"] = series.label_key if series else None
+        values["index_note_key"] = series.note_key if series else None
+        return values
 
 
 class CountryUpdate(BaseModel):

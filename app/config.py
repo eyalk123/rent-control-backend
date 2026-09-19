@@ -87,7 +87,15 @@ class Settings(BaseSettings):
     #
     # CBS (Central Bureau of Statistics) is the *contractual* publisher — Israeli lease
     # escalation clauses reference the index as CBS publishes it — so it is always tried
-    # first and its readings always win. CPI_INDEX_ID 120010 is the general CPI.
+    # first and its readings always win.
+    #
+    # Which *series* each country's leases are linked to lives in the country table
+    # (`app/countries/config.py`, `IndexSeries`), not here — it is a property of the market,
+    # not of the deployment. CPI_INDEX_ID predates that and is kept as an **override**: set
+    # it and Israel's series id changes, which is the escape hatch for a CBS renumbering or
+    # a staging environment pointed at a test series, without a release. It is scoped to the
+    # default country so it cannot repoint a second market's index at Israel's. Israel's
+    # configured id is 120010, the general CPI, so leaving this unset changes nothing.
     CBS_API_BASE_URL: str = "https://api.cbs.gov.il"
     CPI_INDEX_ID: int = 120010
     # Bank of Israel republishes the identical CBS series over SDMX. Fallback only: it
