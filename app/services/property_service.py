@@ -34,11 +34,33 @@ class PropertyService:
         # Israel — today's behaviour exactly.
         self.owner_repository = owner_repository
 
+    def _mark_locked(self, owner_id: str, properties: list):
+        """Tag each property with whether the plan still allows writing to it.
+
+        Resolved once per request and applied to every row, rather than asked per
+        property — the gate runs two queries and doing that per item would turn a list of
+        twenty into forty.
+
+        `locked` is set on the ORM instance but is not a mapped column, so it travels to
+        the response schema and is never written back to the database.
+        """
+        if self.entitlement_gate is None:
+            return properties
+        locked_ids = set(self.entitlement_gate.state_for(owner_id).locked_property_ids)
+        for property in properties:
+            property.locked = property.id in locked_ids
+        return properties
+
     def list_properties(self, owner_id: str):
-        return self.property_repository.get_all_by_owner(owner_id)
+        return self._mark_locked(
+            owner_id, self.property_repository.get_all_by_owner(owner_id)
+        )
 
     def get_property(self, property_id: int, owner_id: str):
-        return self.property_repository.get_by_id(property_id, owner_id)
+        property = self.property_repository.get_by_id(property_id, owner_id)
+        if property is None:
+            return None
+        return self._mark_locked(owner_id, [property])[0]
 
     def _owner_country_and_currency(self, owner_id: str) -> tuple[str | None, str | None]:
         """The account's country and chosen currency, or None each — never raises.

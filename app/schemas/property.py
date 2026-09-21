@@ -155,6 +155,14 @@ class PropertyRead(BaseModel):
     plot: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
+    # Over the plan's property ceiling: readable and exportable, never writable. Set by
+    # PropertyService from the entitlement gate, not stored — it is a fact about the
+    # account's plan today, not about the property.
+    #
+    # Carried on the property rather than left for clients to derive from a separate list
+    # of locked ids: both clients then read one field, the list and the detail screens
+    # cannot disagree, and there is no window where one of them is stale.
+    locked: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

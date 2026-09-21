@@ -17,6 +17,7 @@ small plan must not lose capacity for paying, and a lapsed subscription must not
 grant that was never conditional on payment in the first place.
 """
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -26,6 +27,22 @@ from app.config import settings
 from app.models.property import Property
 from app.services import entitlement_service as ent
 from app.services.entitlement_service import PlanLimits
+
+def _month_start() -> datetime:
+    """00:00 UTC on the first of the current month — when the scan allowance resets."""
+    now = datetime.now(tz=timezone.utc)
+    return datetime(now.year, now.month, 1)
+
+
+def _next_month_start() -> datetime:
+    """00:00 UTC on the first of next month, so a client can say when the quota returns."""
+    start = _month_start()
+    return (
+        datetime(start.year + 1, 1, 1)
+        if start.month == 12
+        else datetime(start.year, start.month + 1, 1)
+    )
+
 
 #: Returned instead of 403 so clients can tell "you must pay" apart from "you may not
 #: touch this". 402 Payment Required is the one status that means exactly this, and the
@@ -49,6 +66,9 @@ class EntitlementState:
     #: False while ENTITLEMENT_ENFORCED is off: the answer is computed and reported, but
     #: nothing is refused.
     enforced: bool
+    #: Whether the client should show the one-time "why are some properties locked"
+    #: explanation. See `EntitlementGate.acknowledge_lock_notice`.
+    show_lock_notice: bool = False
 
     @property
     def over_limit(self) -> bool:
@@ -118,6 +138,13 @@ class EntitlementGate:
 
         writable, locked = ent.split_by_allowance(ordered_ids, plan)
 
+        # Show the explanation when properties are actually locked and this landlord has
+        # not been told about *this* plan yet. Comparing the plan rather than a boolean is
+        # what makes a second downgrade — to a different band, with a different number of
+        # locked properties — explain itself again.
+        acknowledged = owner.lock_notice_ack_plan if owner is not None else None
+        show_notice = bool(locked) and acknowledged != plan.plan
+
         return EntitlementState(
             plan=plan,
             property_count=len(ordered_ids),
@@ -125,6 +152,7 @@ class EntitlementGate:
             locked_property_ids=locked,
             granted=not plan.is_free,
             enforced=settings.ENTITLEMENT_ENFORCED,
+            show_lock_notice=show_notice,
         )
 
     # ── Enforcement ──────────────────────────────────────────────────────────
@@ -169,3 +197,78 @@ class EntitlementGate:
             body["error"] = "property_locked"
             body["property_id"] = property_id
             raise HTTPException(status_code=PAYMENT_REQUIRED, detail=body)
+
+    def acknowledge_lock_notice(self, owner_id: str) -> None:
+        """Record that the over-limit explanation has been shown for the current plan.
+
+        Stores the plan rather than a flag, so the notice returns if the landlord later
+        lands in a *different* restricted plan — a second downgrade locks a different set
+        of properties and deserves saying so again.
+
+        Idempotent, and harmless to call when nothing is locked: acknowledging a notice
+        that was not shown simply records the current plan.
+        """
+        from app.repositories.owner_repository import OwnerRepository
+
+        state = self.state_for(owner_id)
+        OwnerRepository(self.session).set_lock_notice_ack(owner_id, state.plan.plan)
+
+    # ── Feature gates ────────────────────────────────────────────────────────
+
+    def require_lease_scan(self, owner_id: str) -> None:
+        """Refuse a lease scan once the plan's monthly allowance is spent.
+
+        Checked *before* the file reaches Anthropic, not after: the quota exists to bound
+        what a free account can spend, and a check that runs after the model call has
+        already spent it.
+
+        The month is a calendar month in UTC, because "3 scans a month" is what the
+        pricing page says — a rolling 30-day window is a different promise, and a
+        local-calendar boundary would move the reset by the host's offset.
+
+        Only successful scans count. A scan that failed on an unreadable file cost the
+        landlord nothing and burning a third of their monthly allowance on it would be
+        indefensible.
+        """
+        from app.repositories.subscription_repository import SubscriptionRepository
+
+        state = self.state_for(owner_id)
+        if not state.enforced:
+            return
+        allowance = state.plan.monthly_lease_scans
+        if allowance is None:
+            return
+
+        used = SubscriptionRepository(self.session).count_lease_scans_since(
+            owner_id, _month_start()
+        )
+        if used < allowance:
+            return
+
+        raise HTTPException(
+            status_code=PAYMENT_REQUIRED,
+            detail={
+                "error": "scan_limit_reached",
+                "current_plan": state.plan.plan,
+                "limit": allowance,
+                "used": used,
+                "required_plan": ent.PLANS[1].plan,
+                "resets_at": _next_month_start().isoformat(),
+            },
+        )
+
+    def require_agent(self, owner_id: str) -> None:
+        """Refuse the chat assistant on a plan that does not include it."""
+        state = self.state_for(owner_id)
+        if not state.enforced:
+            return
+        if state.plan.agent:
+            return
+        raise HTTPException(
+            status_code=PAYMENT_REQUIRED,
+            detail={
+                "error": "agent_not_included",
+                "current_plan": state.plan.plan,
+                "required_plan": ent.PLANS[1].plan,
+            },
+        )

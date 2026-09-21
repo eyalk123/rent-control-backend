@@ -13,7 +13,15 @@ class AgentChatRequest(BaseModel):
 
 
 class AgentStatusResponse(BaseModel):
+    #: Is an Anthropic key configured on this deployment. Unchanged meaning — a client
+    #: that only understands this field keeps working.
     enabled: bool
+    #: Does this account's plan include the assistant. Separate from `enabled` on
+    #: purpose: folding them into one flag would hide the feature from free accounts
+    #: entirely, and a feature nobody can see is a feature nobody upgrades for.
+    entitled: bool = True
+    #: The cheapest plan that includes it, when this account's does not.
+    required_plan: Optional[str] = None
 
 
 class ConversationRead(BaseModel):

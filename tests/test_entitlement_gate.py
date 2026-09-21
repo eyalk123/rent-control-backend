@@ -249,3 +249,92 @@ def test_a_grandfathered_account_is_never_refused(db_session, enforced):
 
     gate.require_can_add_property(OWNER_A)
     gate.require_property_writable(OWNER_A, props[-1].id)
+
+
+# ── Feature gates: lease scans and the assistant ─────────────────────────────
+
+
+def _scan(db_session, status_value, when=None):
+    from app.models.document_extraction_log import DocumentExtractionLog
+
+    db_session.add(
+        DocumentExtractionLog(
+            owner_id=OWNER_A,
+            status=status_value,
+            created_at=when or datetime.utcnow(),
+        )
+    )
+    db_session.commit()
+
+
+def test_the_free_plan_allows_three_scans_then_refuses(db_session, enforced):
+    from fastapi import HTTPException
+
+    _owner(db_session, granted_plan=None)
+    gate = EntitlementGate(db_session)
+
+    for _ in range(3):
+        gate.require_lease_scan(OWNER_A)  # no raise while allowance remains
+        _scan(db_session, "success")
+
+    with pytest.raises(HTTPException) as raised:
+        gate.require_lease_scan(OWNER_A)
+
+    assert raised.value.status_code == 402
+    assert raised.value.detail["error"] == "scan_limit_reached"
+    assert raised.value.detail["limit"] == 3
+    assert raised.value.detail["used"] == 3
+    # The client needs to be able to say when it comes back.
+    assert raised.value.detail["resets_at"]
+
+
+def test_failed_scans_do_not_burn_the_allowance(db_session, enforced):
+    """A scan that failed on an unreadable file cost the landlord nothing. Charging a
+    third of a monthly allowance for it would be indefensible."""
+    _owner(db_session, granted_plan=None)
+    for _ in range(5):
+        _scan(db_session, "error")
+    for _ in range(3):
+        _scan(db_session, "unsupported")
+
+    EntitlementGate(db_session).require_lease_scan(OWNER_A)  # does not raise
+
+
+def test_last_months_scans_do_not_count(db_session, enforced):
+    _owner(db_session, granted_plan=None)
+    for _ in range(9):
+        _scan(db_session, "success", datetime.utcnow() - timedelta(days=45))
+
+    EntitlementGate(db_session).require_lease_scan(OWNER_A)  # does not raise
+
+
+def test_a_paid_plan_has_no_scan_ceiling(db_session, enforced):
+    _owner(db_session, granted_plan=ent.PLAN_TIER_3_8)
+    for _ in range(50):
+        _scan(db_session, "success")
+
+    EntitlementGate(db_session).require_lease_scan(OWNER_A)  # does not raise
+
+
+def test_the_assistant_is_refused_on_free_and_allowed_on_paid(db_session, enforced):
+    from fastapi import HTTPException
+
+    _owner(db_session, granted_plan=None)
+    with pytest.raises(HTTPException) as raised:
+        EntitlementGate(db_session).require_agent(OWNER_A)
+    assert raised.value.status_code == 402
+    assert raised.value.detail["error"] == "agent_not_included"
+    assert raised.value.detail["required_plan"] == ent.PLAN_TIER_3_8
+
+    _owner(db_session, granted_plan=ent.PLAN_TIER_3_8)
+    EntitlementGate(db_session).require_agent(OWNER_A)  # does not raise
+
+
+def test_neither_feature_gate_fires_while_enforcement_is_off(db_session):
+    _owner(db_session, granted_plan=None)
+    for _ in range(20):
+        _scan(db_session, "success")
+    gate = EntitlementGate(db_session)
+
+    gate.require_lease_scan(OWNER_A)
+    gate.require_agent(OWNER_A)

@@ -8,6 +8,7 @@ from app.api.dependencies import (
     get_current_user,
     get_document_extraction_log_repository,
     get_document_extraction_service,
+    get_entitlement_gate,
     get_owner_repository,
 )
 from app.models.document_extraction_log import DocumentExtractionLog
@@ -15,6 +16,7 @@ from app.repositories.owner_repository import OwnerRepository
 from app.repositories.document_extraction_log_repository import (
     DocumentExtractionLogRepository,
 )
+from app.services.entitlement_gate import EntitlementGate
 from app.schemas.document_extraction import (
     ExtractionLogUpdate,
     LeaseExtractionResponse,
@@ -30,6 +32,7 @@ async def extract_lease(
     service: Annotated[DocumentExtractionService, Depends(get_document_extraction_service)],
     log_repo: Annotated[DocumentExtractionLogRepository, Depends(get_document_extraction_log_repository)],
     owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
     file: Annotated[UploadFile, File()],
 ):
     """Extract a property + renter draft from an uploaded lease (PDF / DOCX / image).
@@ -39,6 +42,11 @@ async def extract_lease(
     policy. An audit-log row is written for the call (telemetry only — filename, size,
     model, cost); the user updates it on submit via PATCH.
     """
+    # Before the file is read, and long before it reaches Anthropic: the free plan's
+    # monthly allowance exists to bound spend, and a check that runs after the model call
+    # has already spent it. 402 with the reset date, so a client can say when it returns.
+    entitlement_gate.require_lease_scan(current_user["user_id"])
+
     file_bytes = await file.read()
     started = time.monotonic()
 

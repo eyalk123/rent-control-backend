@@ -14,7 +14,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import get_agent_service, get_current_user
+from app.api.dependencies import (
+    get_agent_service,
+    get_current_user,
+    get_entitlement_gate,
+)
+from app.services import entitlement_service as ent
+from app.services.entitlement_gate import EntitlementGate
 from app.schemas.agent import AgentChatRequest, AgentStatusResponse, ConversationRead
 from app.services.agent_service import AgentService
 
@@ -27,8 +33,29 @@ def _sse(event: dict) -> str:
 
 
 @router.get("/status", response_model=AgentStatusResponse)
-def agent_status(service: Annotated[AgentService, Depends(get_agent_service)]):
-    return AgentStatusResponse(enabled=service.enabled)
+def agent_status(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    service: Annotated[AgentService, Depends(get_agent_service)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
+):
+    """Whether the agent is available to this account, and why not if it isn't.
+
+    `enabled` keeps its original meaning — is an Anthropic key configured on this
+    deployment — and `entitled` is the separate, per-account question of whether the plan
+    includes it. Two fields rather than one AND: folding them together would hide the
+    assistant from free accounts entirely, and a feature nobody can see is a feature
+    nobody upgrades for. Clients show it locked instead.
+    """
+    state = entitlement_gate.state_for(current_user["user_id"])
+    # While enforcement is off nobody is restricted, so nobody is told to upgrade —
+    # `required_plan` must follow `entitled`, not the plan, or a client would render an
+    # upgrade prompt for a restriction that is not being applied.
+    entitled = state.plan.agent or not state.enforced
+    return AgentStatusResponse(
+        enabled=service.enabled,
+        entitled=entitled,
+        required_plan=None if entitled else ent.PLANS[1].plan,
+    )
 
 
 @router.post("/chat")
@@ -36,12 +63,16 @@ def chat(
     request: AgentChatRequest,
     current_user: Annotated[dict, Depends(get_current_user)],
     service: Annotated[AgentService, Depends(get_agent_service)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
 ):
     """Ask the agent a question. The answer streams back as text/event-stream with
     ``conversation`` / ``tool`` / ``text`` / ``done`` / ``error`` events."""
     owner_id = current_user["user_id"]
     if not service.enabled:
         raise HTTPException(status_code=503, detail="The portfolio agent is not configured.")
+    # Enforced here as well as hidden in the clients: a hidden button is a courtesy, not
+    # a gate, and this endpoint costs real money per call.
+    entitlement_gate.require_agent(owner_id)
 
     # start() reserves the turn's budget, enforces the daily limits (message count + per-owner
     # and global cost caps → 429), persists the user turn, and validates access — all

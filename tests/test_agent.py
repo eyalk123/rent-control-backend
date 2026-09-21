@@ -36,12 +36,20 @@ def _parse_sse(body: str) -> list[str]:
 
 def test_status_reports_enabled(client, db_session):
     _use_agent(db_session, api_key="test-key")
-    assert client.get("/agent/status").json() == {"enabled": True}
+    assert client.get("/agent/status").json() == {
+        "enabled": True,
+        "entitled": True,
+        "required_plan": None,
+    }
 
 
 def test_status_reports_disabled_without_key(client, db_session):
     _use_agent(db_session, api_key="")  # no key, no injected client
-    assert client.get("/agent/status").json() == {"enabled": False}
+    assert client.get("/agent/status").json() == {
+        "enabled": False,
+        "entitled": True,
+        "required_plan": None,
+    }
 
 
 def test_chat_streams_sse(client, db_session):

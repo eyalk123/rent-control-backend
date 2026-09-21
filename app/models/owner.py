@@ -51,6 +51,15 @@ class Owner(Base):
     # Entitlement takes whichever of the two permits more — see
     # `entitlement_service.better_plan`.
     granted_plan = Column(String, nullable=True)
+    # The plan the landlord last acknowledged the "some properties are locked" notice
+    # for. NULL means never acknowledged.
+    #
+    # It stores the *plan*, not a boolean, so the notice reappears when the situation
+    # genuinely changes. Someone who acknowledges on the free plan, upgrades, then later
+    # downgrades to a different band is in a new situation with a different number of
+    # locked properties, and a "seen it once" flag would leave them to work that out
+    # unaided.
+    lock_notice_ack_plan = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
     last_seen_at = Column(DateTime, nullable=True)

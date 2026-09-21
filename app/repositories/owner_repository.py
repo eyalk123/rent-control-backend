@@ -115,6 +115,21 @@ class OwnerRepository:
 
     # ── currency and language ──────────────────────────────────────────────
 
+    def set_lock_notice_ack(self, uid: str, plan: str) -> Owner | None:
+        """Record that this owner has been shown the over-limit explanation for `plan`.
+
+        A missing owner row is not an error: the row is written best-effort on first
+        authenticated request, so a brand-new account can acknowledge a notice before it
+        exists. There is nothing to remember for an account with no properties anyway.
+        """
+        owner = self.get(uid)
+        if owner is None:
+            return None
+        owner.lock_notice_ack_plan = plan
+        self.session.commit()
+        self.session.refresh(owner)
+        return owner
+
     def set_preferences(
         self,
         uid: str,
