@@ -18,6 +18,7 @@ from app.schemas.renter import (
     RenterUpdate,
 )
 from app.services import country_service
+from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
 from app.services.cpi_indexing_service import (
     IndexReading,
@@ -125,7 +126,13 @@ class RenterService:
         cpi_index_repository: CpiIndexRepository | None = None,
         activity_log_repository: ActivityLogRepository | None = None,
         owner_repository: OwnerRepository | None = None,
+        entitlement_gate: EntitlementGate | None = None,
     ):
+        # A renter belongs to a property, so a locked property's leases are locked too —
+        # a property that still accepted lease edits would not be locked in any sense a
+        # landlord would recognise. Optional, so call sites predating billing are
+        # unaffected.
+        self.entitlement_gate = entitlement_gate
         self.renter_repository = renter_repository
         self.property_repository = property_repository
         self.cpi_index_repository = cpi_index_repository
@@ -321,6 +328,8 @@ class RenterService:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
             if property is None:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
+            if self.entitlement_gate is not None:
+                self.entitlement_gate.require_property_writable(owner_id, data.property_id)
         mode = data.rent_escalation_mode.value if data.rent_escalation_mode else None
         lease_years_payload = _lease_years_to_dicts(data.lease_years)
         self._guard_index_linkage(mode, lease_years_payload, data.property_id, owner_id)
@@ -375,6 +384,9 @@ class RenterService:
         if renter is None:
             return None
         self._check_renter_access(renter, owner_id)
+        # The lease may already sit on a locked property without the payload naming it.
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_writable(owner_id, renter.property_id)
         update_dict = data.model_dump(exclude_unset=True)
         sent = set(update_dict)
         if "property_id" in update_dict and update_dict["property_id"] is not None:
@@ -383,6 +395,10 @@ class RenterService:
             )
             if property is None:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
+            if self.entitlement_gate is not None:
+                self.entitlement_gate.require_property_writable(
+                    owner_id, update_dict["property_id"]
+                )
         if "extra_contacts" in update_dict and update_dict["extra_contacts"] is not None:
             update_dict["extra_contacts"] = [c.model_dump() for c in data.extra_contacts]
 

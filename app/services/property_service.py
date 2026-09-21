@@ -9,6 +9,7 @@ from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyUpdate
 from app.schemas.renter import PropertyRenterSummary
 from app.services import country_service
+from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
 
 
@@ -19,10 +20,15 @@ class PropertyService:
         renter_repository: RenterRepository,
         activity_log_repository: ActivityLogRepository | None = None,
         owner_repository: OwnerRepository | None = None,
+        entitlement_gate: "EntitlementGate | None" = None,
     ):
         self.property_repository = property_repository
         self.renter_repository = renter_repository
         self.activity_log_repository = activity_log_repository
+        # Optional for the same reason as owner_repository below: call sites that predate
+        # subscriptions keep working, and a missing gate means "no plan limits", which is
+        # exactly the behaviour every account had before billing existed.
+        self.entitlement_gate = entitlement_gate
         # Optional so existing call sites (the test suite included) keep working; without
         # it a new property simply inherits no country, which `config_for` resolves to
         # Israel — today's behaviour exactly.
@@ -53,6 +59,10 @@ class PropertyService:
         return owner.country, owner.currency
 
     def create_property(self, data: PropertyCreate, owner_id: str):
+        # Before any work: a plan that cannot hold another property refuses here with 402
+        # and a body naming the plan that can. No-op while ENTITLEMENT_ENFORCED is off.
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_can_add_property(owner_id)
         property_type = PropertyTypeEnum(data.type.value)
         country, owner_currency = self._owner_country_and_currency(owner_id)
         parking_numbers_str = (
@@ -101,6 +111,11 @@ class PropertyService:
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
+        # A property over the plan's ceiling is readable but not writable. Checked after
+        # the ownership lookup so a property belonging to someone else still answers 404
+        # rather than leaking its existence through a 402.
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_writable(owner_id, property_id)
         update_dict = data.model_dump(exclude_unset=True)
         if "type" in update_dict and update_dict["type"] is not None:
             update_dict["type"] = PropertyTypeEnum(update_dict["type"].value)

@@ -40,6 +40,17 @@ class Owner(Base):
     # `localStorage` / `AsyncStorage`, so it did not survive signing in on a second device.
     # NULL means "not chosen", which falls back to the device's own language.
     language = Column(String(5), nullable=True)
+    # A plan granted outright, independent of anything ever being paid. NULL is the
+    # normal case; every account that existed before billing was introduced carries the
+    # top tier here, permanently, because they built their portfolio on a product that
+    # made no such demand and it would be a breach of that to start now.
+    #
+    # Separate from the `subscriptions` row on purpose. Writing the grant there would put
+    # it in the path of webhook upserts, and a grandfathered landlord who subscribed and
+    # later cancelled would silently lose a grant that was never conditional on payment.
+    # Entitlement takes whichever of the two permits more — see
+    # `entitlement_service.better_plan`.
+    granted_plan = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
     last_seen_at = Column(DateTime, nullable=True)

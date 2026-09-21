@@ -15,6 +15,7 @@ from app.api.routers import (
     currencies,
     device_tokens,
     document_extraction,
+    webhooks,
     expense_categories,
     internal,
     notification_preferences,
@@ -108,6 +109,9 @@ app.include_router(notification_preferences.router, tags=["notification-preferen
 app.include_router(countries.router, prefix="/countries", tags=["countries"])
 app.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
+# No _owner_refresh: RevenueCat has no Firebase user. The endpoint verifies an HMAC
+# signature over the raw body instead — see app/api/routers/webhooks.py.
+app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(document_extraction.router, prefix="/extract", tags=["extract"], dependencies=_owner_refresh)
 app.include_router(agent.router, prefix="/agent", tags=["agent"], dependencies=_owner_refresh)
 # No _owner_refresh: admin.py does its own token check and answers 404 for every

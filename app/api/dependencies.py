@@ -48,6 +48,7 @@ from app.services.expense_category_service import ExpenseCategoryService
 from app.services.index_source import IndexSource
 from app.services.notification_engine import NotificationEngine
 from app.services.notification_preferences_service import NotificationPreferencesService
+from app.services.entitlement_gate import EntitlementGate
 from app.services.property_service import PropertyService
 from app.services.push_service import PushService
 from app.services.reminder_service import ReminderService
@@ -191,6 +192,10 @@ def get_retention_service(db: Annotated[Session, Depends(get_db)]) -> RetentionS
     return RetentionService(db)
 
 
+def get_entitlement_gate(db: Annotated[Session, Depends(get_db)]) -> EntitlementGate:
+    return EntitlementGate(db)
+
+
 def get_property_service(
     property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
@@ -198,9 +203,14 @@ def get_property_service(
         ActivityLogRepository, Depends(get_activity_log_repository)
     ],
     owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
 ) -> PropertyService:
     return PropertyService(
-        property_repository, renter_repository, activity_log_repository, owner_repository
+        property_repository,
+        renter_repository,
+        activity_log_repository,
+        owner_repository,
+        entitlement_gate,
     )
 
 
@@ -212,6 +222,7 @@ def get_renter_service(
         ActivityLogRepository, Depends(get_activity_log_repository)
     ],
     owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
 ) -> RenterService:
     return RenterService(
         renter_repository,
@@ -219,6 +230,7 @@ def get_renter_service(
         cpi_index_repository,
         activity_log_repository,
         owner_repository,
+        entitlement_gate,
     )
 
 
@@ -318,6 +330,7 @@ def get_transaction_service(
     activity_log_repository: Annotated[
         ActivityLogRepository, Depends(get_activity_log_repository)
     ],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
 ) -> TransactionService:
     return TransactionService(
         transaction_repository=transaction_repository,
@@ -326,6 +339,7 @@ def get_transaction_service(
         expense_category_repository=expense_category_repository,
         supplier_repository=supplier_repository,
         activity_log_repository=activity_log_repository,
+        entitlement_gate=entitlement_gate,
     )
 
 

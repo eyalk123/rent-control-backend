@@ -26,6 +26,7 @@ from app.schemas.transaction import (
     TransactionUpdateRevenue,
 )
 from app.services.activity_diff import changed_fields
+from app.services.entitlement_gate import EntitlementGate
 from app.services.lease_periods import rent_for_month
 
 # Snapshots the service maintains itself — the address and the renter's name follow their
@@ -62,8 +63,12 @@ class TransactionService:
         expense_category_repository: ExpenseCategoryRepository,
         supplier_repository: SupplierRepository,
         activity_log_repository: ActivityLogRepository | None = None,
+        entitlement_gate: EntitlementGate | None = None,
     ):
         self.activity_log_repository = activity_log_repository
+        # Money recorded against a locked property is still a write to that property.
+        # Optional, so call sites predating billing are unaffected.
+        self.entitlement_gate = entitlement_gate
         self.transaction_repository = transaction_repository
         self.property_repository = property_repository
         self.renter_repository = renter_repository
@@ -149,6 +154,8 @@ class TransactionService:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_writable(owner_id, data.property_id)
         renter = None
         if data.renter_id is not None:
             renter = self.renter_repository.get_by_id(data.renter_id)
@@ -247,6 +254,12 @@ class TransactionService:
 
     def update_revenue(self, transaction_id: int, data: TransactionUpdateRevenue, owner_id: str) -> TransactionRead | None:
         existing = self.transaction_repository.get_by_id(transaction_id, owner_id)
+        if existing is not None and self.entitlement_gate is not None:
+            # The row it sits on now, and the one it is being moved to — both must be
+            # writable, or a locked property could be emptied or filled by reassignment.
+            self.entitlement_gate.require_property_writable(owner_id, existing.property_id)
+            if data.property_id is not None:
+                self.entitlement_gate.require_property_writable(owner_id, data.property_id)
         fields: dict = {}
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
@@ -298,6 +311,12 @@ class TransactionService:
 
     def update_expense(self, transaction_id: int, data: TransactionUpdateExpense, owner_id: str) -> TransactionRead | None:
         existing = self.transaction_repository.get_by_id(transaction_id, owner_id)
+        if existing is not None and self.entitlement_gate is not None:
+            # The row it sits on now, and the one it is being moved to — both must be
+            # writable, or a locked property could be emptied or filled by reassignment.
+            self.entitlement_gate.require_property_writable(owner_id, existing.property_id)
+            if data.property_id is not None:
+                self.entitlement_gate.require_property_writable(owner_id, data.property_id)
         fields: dict = {}
         new_categories = None
         if data.property_id is not None:
@@ -432,6 +451,8 @@ class TransactionService:
         property = self.property_repository.get_by_id(data.property_id, owner_id)
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_writable(owner_id, data.property_id)
         category_objects = []
         for cid in data.category_ids:
             cat = self.expense_category_repository.get_by_id(cid)

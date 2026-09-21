@@ -37,6 +37,33 @@ class Settings(BaseSettings):
     EXTRACTION_MODEL: str = "claude-sonnet-4-6"
     # --- Portfolio Chat Agent ("Ask Rent Control", POST /agent/chat) ---
     # Reuses ANTHROPIC_API_KEY above: empty key disables the agent (503), same as
+    # ── Subscriptions ────────────────────────────────────────────────────────
+    # Whether plan limits are *enforced*. Off by default, and deliberately so: the
+    # entitlement service computes and reports the answer either way, but nothing is
+    # refused while this is false.
+    #
+    # It exists because the gate becomes correct long before it becomes fair. Until
+    # checkout works — which is blocked on Paddle domain approval — a new account that
+    # reaches three properties would be told to upgrade to a plan it cannot buy. Turning
+    # this on is the launch switch, not a code change.
+    ENTITLEMENT_ENFORCED: bool = False
+    # HMAC secret for `POST /webhooks/revenuecat`, shown once in the RevenueCat dashboard
+    # when signing is enabled. Empty makes the endpoint answer 503 rather than accepting
+    # anything: an unauthenticated write path into billing state is worse than a broken
+    # one, so a missing secret should be loud.
+    REVENUECAT_WEBHOOK_SECRET: str = ""
+    # The optional static `Authorization` header RevenueCat can be configured to send,
+    # as an alternative to (or alongside) HMAC signing. Whatever string is typed into the
+    # dashboard arrives verbatim — there is no `Bearer` scheme unless you type one.
+    #
+    # Weaker than the signature on its own: it proves the sender knew a string, not that
+    # the body arrived unaltered. Supported because which of the two a RevenueCat project
+    # offers varies, and a half-configured webhook is worth failing loudly over.
+    #
+    # Whichever of the two is configured is REQUIRED; configure both and both must pass.
+    # Neither configured is a 503 — see `verify_request`.
+    REVENUECAT_WEBHOOK_AUTH: str = ""
+
     # extraction. Model is configurable independently of EXTRACTION_MODEL.
     AGENT_MODEL: str = "claude-sonnet-4-6"
     # Cap on tokens Claude may emit per reply (cost + latency guard).
