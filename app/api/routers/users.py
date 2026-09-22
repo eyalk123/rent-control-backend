@@ -232,7 +232,7 @@ def export_my_data(
             detail="Export failed. Please try again.",
         )
 
-    filename = f"rent-control-export-{date.today().isoformat()}.zip"
+    filename = f"rentvance-export-{date.today().isoformat()}.zip"
     return Response(
         content=content,
         media_type="application/zip",

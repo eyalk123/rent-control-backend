@@ -113,7 +113,7 @@ def _diagnostics(entry: SupportMessage, submitter_email: str | None) -> str:
     ]
     width = max(len(label) for label, _ in plain)
     lines = [f"{label.ljust(width)}  {value}" for label, value in plain]
-    return "Rent Control — support message diagnostics\n\n" + "\n".join(lines) + "\n"
+    return "RentVance — support message diagnostics\n\n" + "\n".join(lines) + "\n"
 
 
 def _attachments(

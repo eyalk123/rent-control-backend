@@ -1,4 +1,4 @@
-# Rent Control Backend
+# RentVance Backend
 
 Property management API for tracking rental properties, renters, and financial transactions.
 Multi-tenant: all data is scoped to an authenticated owner via a verified Firebase ID token.

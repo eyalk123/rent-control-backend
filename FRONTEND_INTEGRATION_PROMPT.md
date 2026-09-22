@@ -1,6 +1,6 @@
-# Rent Control Backend – Frontend Integration Guide
+# RentVance Backend – Frontend Integration Guide
 
-Use this document as a prompt or reference when building or integrating the frontend with the Rent Control property management API.
+Use this document as a prompt or reference when building or integrating the frontend with the RentVance property management API.
 
 ---
 

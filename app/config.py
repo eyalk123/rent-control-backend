@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Claude model used for lease extraction. Sonnet is the cost/accuracy default;
     # switch to "claude-opus-4-8" if extraction accuracy on hard scans isn't enough.
     EXTRACTION_MODEL: str = "claude-sonnet-4-6"
-    # --- Portfolio Chat Agent ("Ask Rent Control", POST /agent/chat) ---
+    # --- Portfolio Chat Agent ("Ask RentVance", POST /agent/chat) ---
     # Reuses ANTHROPIC_API_KEY above: empty key disables the agent (503), same as
     # ── Subscriptions ────────────────────────────────────────────────────────
     # Whether plan limits are *enforced*. Off by default, and deliberately so: the

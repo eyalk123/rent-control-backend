@@ -156,10 +156,10 @@ def test_export_returns_a_zip_of_the_owners_data(client, db_session, monkeypatch
 
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/zip"
-    assert "rent-control-export-" in resp.headers["content-disposition"]
+    assert "rentvance-export-" in resp.headers["content-disposition"]
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
-        wb = load_workbook(io.BytesIO(archive.read("rent-control-data.xlsx")))
+        wb = load_workbook(io.BytesIO(archive.read("rentvance-data.xlsx")))
         addresses = [row[1] for row in wb["Properties"].values][1:]
         assert addresses == ["1 Export Way"]
 
@@ -175,7 +175,7 @@ def test_export_is_scoped_to_the_caller(client_factory, db_session, monkeypatch)
     resp = client_factory(OWNER_A).get("/users/me/export")
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
-        wb = load_workbook(io.BytesIO(archive.read("rent-control-data.xlsx")))
+        wb = load_workbook(io.BytesIO(archive.read("rentvance-data.xlsx")))
         blob = "\n".join(
             str(v) for s in wb.sheetnames for row in wb[s].values for v in row if v is not None
         )

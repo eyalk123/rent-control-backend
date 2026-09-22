@@ -1,4 +1,4 @@
-# Rent Control
+# RentVance
 
 Property-management software for landlords. Track properties, renters, leases, income and
 expenses; get reminders before things fall due; export reports. Built for the Israeli rental
@@ -6,7 +6,7 @@ market — Hebrew (RTL) and English throughout, shekel-denominated by default, w
 escalation linked to the official Consumer Price Index.
 
 This repository is the **backend API**, and it is also the **hub for the whole system** — if you
-are new to Rent Control, start here. The two client apps are separate repositories and link back
+are new to RentVance, start here. The two client apps are separate repositories and link back
 to this document.
 
 ---
@@ -27,7 +27,7 @@ to this document.
 
 ## What it does
 
-Rent Control is **multi-tenant**: every record belongs to an owner (a landlord), and all data is
+RentVance is **multi-tenant**: every record belongs to an owner (a landlord), and all data is
 scoped to that owner via a verified Firebase ID token. One landlord can never see another's data.
 
 > This README covers the API and how to run it. A separate **product manual** — every feature, how
@@ -51,7 +51,7 @@ trusted — a field that looks wrong is dropped, not guessed. Every extraction i
 token-cost estimate. Requires `ANTHROPIC_API_KEY`; without it the endpoint returns 503 and the
 rest of the app is unaffected.
 
-**Portfolio chat agent ("Ask Rent Control").** `POST /agent/chat` streams an answer to a
+**Portfolio chat agent ("Ask RentVance").** `POST /agent/chat` streams an answer to a
 plain-language question about the owner's own data — who is overdue, what a year earned, when a
 lease ends. Claude is given **ten read-only tools** (`app/services/agent_tools.py`) and nothing
 else: it can query and aggregate, and it cannot create, update or delete anything. Answers cite
@@ -368,7 +368,7 @@ flag in each app's `src/features/onboarding/flags.ts`. Turning it on is configur
 change:
 
 - **Web** — set `VITE_ONBOARDING_TOURS=on` as a Railway variable on the web service. The
-  `Dockerfile` forwards it into the build. `rentControlTours(true)` in the browser console is a
+  `Dockerfile` forwards it into the build. `rentvanceTours(true)` in the browser console is a
   per-browser override that outranks it, for checking a deployed build without switching it on for
   everyone.
 - **Mobile** — `EXPO_PUBLIC_ONBOARDING_TOURS=on`. The `preview` and `simulator` EAS profiles
