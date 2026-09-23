@@ -1,15 +1,23 @@
 import logging
+import re
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
 
-def _blob_path_from_url(url: str) -> str | None:
-    """Extract the GCS blob path from a Firebase Storage download URL.
+# A bare storage path in the client upload shape (see ENTITY_TYPES below).
+_STORAGE_PATH = re.compile(r"^(properties|renters|transactions)/[^/]+/[^/]+/.+")
 
-    Firebase download URLs look like:
+
+def _blob_path_from_url(url: str) -> str | None:
+    """Extract the GCS blob path from a stored file value.
+
+    Accepts a bare storage path — what the columns will hold once download tokens are
+    retired (PLATFORM.md §18) — or a Firebase Storage download URL, which looks like:
     https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{encoded%2Fpath}?alt=media&token=...
     """
+    if _STORAGE_PATH.match(url):
+        return url
     try:
         path = urlparse(url).path  # /v0/b/{bucket}/o/{encoded_path}
         _, encoded = path.split("/o/", 1)

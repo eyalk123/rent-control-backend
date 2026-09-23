@@ -169,3 +169,13 @@ def test_another_accounts_file_is_never_deleted(client, db_session, bucket):
 
     assert client.delete(f"/properties/{prop.id}").status_code == 204
     assert bucket.deleted == []
+
+
+def test_a_bare_storage_path_is_released_like_a_url(client, db_session, bucket):
+    """Once download tokens are retired the columns hold bare paths; cleanup must not
+    depend on the URL shape."""
+    prop = make_property(db_session)
+    renter = make_renter(db_session, property_id=prop.id, full_contract_url=f"renters/{OWNER_A}/u1/lease.pdf")
+
+    assert client.delete(f"/renters/{renter.id}").status_code == 204
+    assert bucket.deleted == [f"renters/{OWNER_A}/u1/lease.pdf"]

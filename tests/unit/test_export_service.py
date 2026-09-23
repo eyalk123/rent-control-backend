@@ -218,3 +218,32 @@ class TestFloorAreaHeaderNamesItsUnit:
     def test_no_owner_row_still_produces_a_workbook(self, db_session):
         """The owners row is written best-effort, so it can be missing for a valid request."""
         assert "floor_area_m2" in self._headers(db_session, "nobody")
+
+class TestFileColumnsNameTheArchiveCopy:
+    """A download URL opens its file for anyone holding it, with no sign-in and no expiry.
+    The workbook must not hand those out; the archive already holds the files."""
+
+    URL = (
+        "https://firebasestorage.googleapis.com/v0/b/bkt/o/"
+        "renters%2Fowner-a%2Fu1%2Flease.pdf?alt=media&token=secret"
+    )
+
+    def test_a_download_url_becomes_the_archive_path(self, db_session):
+        prop = make_property(db_session)
+        make_renter(db_session, property_id=prop.id, full_contract_url=self.URL)
+
+        row = _rows(_sheets(build_workbook(db_session, OWNER_A))["Renters"])[0]
+        assert row["full_contract_url"] == "files/renters/u1/lease.pdf"
+        assert "token" not in json.dumps(row, default=str)
+
+    def test_a_bare_storage_path_becomes_the_archive_path(self, db_session):
+        make_property(db_session, basic_contract_url="properties/owner-a/u2/deed.pdf")
+
+        row = _rows(_sheets(build_workbook(db_session, OWNER_A))["Properties"])[0]
+        assert row["basic_contract_url"] == "files/properties/u2/deed.pdf"
+
+    def test_a_house_preset_passes_through(self, db_session):
+        make_property(db_session, image_url="rc-house:villa")
+
+        row = _rows(_sheets(build_workbook(db_session, OWNER_A))["Properties"])[0]
+        assert row["image_url"] == "rc-house:villa"

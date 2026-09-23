@@ -64,6 +64,23 @@ def _names(items) -> str:
     return ", ".join(sorted(c.name for c in items if getattr(c, "name", None)))
 
 
+def _archive_file(value: str | None) -> str | None:
+    """Where a stored file sits inside this archive, in place of its download URL.
+
+    A download URL carries a token that opens the file for anyone holding it, with no
+    sign-in and no expiry — a workbook listing them hands out every lease in it. The
+    archive already holds the files, so the cell names the copy beside it. Anything
+    that is not one of our files (a house preset) passes through unchanged.
+    """
+    if not value:
+        return value
+    path = firebase_storage._blob_path_from_url(value)
+    if not path or not firebase_storage._STORAGE_PATH.match(path):
+        return value
+    entity_type, _owner, rest = path.split("/", 2)
+    return f"files/{entity_type}/{rest}"
+
+
 # Each sheet is (title, [(header, extractor)]). Explicit rather than reflected: it fixes the
 # column order, keeps owner_id out of every row, and lets related names sit next to their id.
 _PROPERTY_COLUMNS: list[tuple[str, Callable]] = [
@@ -92,9 +109,9 @@ _PROPERTY_COLUMNS: list[tuple[str, Callable]] = [
     ("water_account_number", lambda p: p.water_account_number),
     ("inventory_notes", lambda p: p.inventory_notes),
     ("currency_code", lambda p: p.currency_code),
-    ("image_url", lambda p: p.image_url),
-    ("basic_contract_url", lambda p: p.basic_contract_url),
-    ("land_registry_url", lambda p: p.land_registry_url),
+    ("image_url", lambda p: _archive_file(p.image_url)),
+    ("basic_contract_url", lambda p: _archive_file(p.basic_contract_url)),
+    ("land_registry_url", lambda p: _archive_file(p.land_registry_url)),
     ("created_at", lambda p: p.created_at),
     ("updated_at", lambda p: p.updated_at),
 ]
@@ -128,8 +145,8 @@ _RENTER_COLUMNS: list[tuple[str, Callable]] = [
     ("insurance_type", lambda r: r.insurance_type),
     ("insurance_amount", lambda r: r.insurance_amount),
     ("extra_contacts", lambda r: r.extra_contacts),
-    ("full_contract_url", lambda r: r.full_contract_url),
-    ("id_image_url", lambda r: r.id_image_url),
+    ("full_contract_url", lambda r: _archive_file(r.full_contract_url)),
+    ("id_image_url", lambda r: _archive_file(r.id_image_url)),
     ("created_at", lambda r: r.created_at),
     ("updated_at", lambda r: r.updated_at),
 ]
@@ -151,7 +168,7 @@ _TRANSACTION_COLUMNS: list[tuple[str, Callable]] = [
     ("supplier_name", lambda t: t.supplier.name if t.supplier else None),
     ("payment_method", lambda t: t.payment_method),
     ("notes", lambda t: t.notes),
-    ("receipt_image_url", lambda t: t.receipt_image_url),
+    ("receipt_image_url", lambda t: _archive_file(t.receipt_image_url)),
     ("created_at", lambda t: t.created_at),
     ("updated_at", lambda t: t.updated_at),
 ]
