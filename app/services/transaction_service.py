@@ -27,6 +27,7 @@ from app.schemas.transaction import (
 )
 from app.services.activity_diff import changed_fields
 from app.services.entitlement_gate import EntitlementGate
+from app.services.firebase_storage import release_file_urls
 from app.services.lease_periods import rent_for_month
 
 # Snapshots the service maintains itself — the address and the renter's name follow their
@@ -383,9 +384,13 @@ class TransactionService:
             ignore=_DERIVED_TRANSACTION_FIELDS | {"category_id"},
             also_changed=categories_changed,
         )
+        # Read before the update: `existing` is the same row the repository mutates.
+        old_receipt = existing.receipt_image_url if existing is not None else None
         updated = self.transaction_repository.update(transaction_id, owner_id, fields, new_categories=new_categories)
         if updated is None:
             return None
+        if old_receipt != updated.receipt_image_url:
+            release_file_urls(self.transaction_repository.session, owner_id, [old_receipt])
         return self._transaction_to_read(updated)
 
     def _log_update(
@@ -424,10 +429,11 @@ class TransactionService:
         )
 
     def delete_transaction(self, transaction_id: int, owner_id: str) -> bool:
+        # Read it first: the repository deletes and commits, after which there is nothing
+        # left to describe, and no receipt URL left to clean up.
+        transaction = self.transaction_repository.get_by_id(transaction_id, owner_id)
+        receipt = transaction.receipt_image_url if transaction is not None else None
         if self.activity_log_repository is not None:
-            # Read it first: the repository deletes and commits, after which there is
-            # nothing left to describe.
-            transaction = self.transaction_repository.get_by_id(transaction_id, owner_id)
             if transaction is not None:
                 self.activity_log_repository.record_delete(
                     owner_id=owner_id,
@@ -445,7 +451,10 @@ class TransactionService:
                         "renter_name": transaction.renter_name,
                     },
                 )
-        return self.transaction_repository.delete(transaction_id, owner_id)
+        deleted = self.transaction_repository.delete(transaction_id, owner_id)
+        if deleted:
+            release_file_urls(self.transaction_repository.session, owner_id, [receipt])
+        return deleted
 
     def create_expense(self, data: TransactionCreateExpense, owner_id: str) -> TransactionRead:
         property = self.property_repository.get_by_id(data.property_id, owner_id)

@@ -268,7 +268,7 @@ def build_export_zip(db: Session, owner_id: str) -> bytes:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(WORKBOOK_NAME, workbook)
 
-        prefix = f"{owner_id}/"
+        prefixes = tuple(firebase_storage.owner_prefixes(owner_id))
         try:
             blobs = firebase_storage.list_owner_blobs(owner_id)
         except Exception as exc:
@@ -277,10 +277,14 @@ def build_export_zip(db: Session, owner_id: str) -> bytes:
 
         for blob in blobs:
             name = getattr(blob, "name", "") or ""
-            if not name.startswith(prefix) or name.endswith("/"):
-                continue  # folder placeholder, or a blob outside this owner's prefix
+            if not name.startswith(prefixes) or name.endswith("/"):
+                continue  # folder placeholder, or a blob outside this owner's prefixes
+            # `properties/{owner}/{uuid}/lease.pdf` → `files/properties/{uuid}/lease.pdf`: the
+            # owner segment says nothing inside their own archive, the uuid keeps two
+            # uploads of the same file name apart.
+            entity_type, _owner, rest = name.split("/", 2)
             try:
-                archive.writestr(f"files/{name[len(prefix):]}", blob.download_as_bytes())
+                archive.writestr(f"files/{entity_type}/{rest}", blob.download_as_bytes())
             except Exception as exc:
                 logger.warning("Skipping file %s in export for %s: %s", name, owner_id, exc)
 

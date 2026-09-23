@@ -7,6 +7,7 @@ from app.repositories.property_file_repository import PropertyFileRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
 from app.schemas.property_file import PropertyFileCreate, PropertyFileRead
 from app.schemas.renter import PropertyRenterSummary
+from app.services.firebase_storage import release_file_urls
 from app.services.property_service import PropertyService
 
 router = APIRouter()
@@ -128,5 +129,7 @@ def delete_property_file(
     file = file_repo.get_by_id(file_id, property_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    url = file.url
     file_repo.delete(file)
+    release_file_urls(file_repo.session, current_user["user_id"], [url])
     return None

@@ -119,12 +119,12 @@ class UserService:
 
     def _delete_firebase_storage(self, owner_id: str) -> None:
         try:
-            from app.services.firebase_storage import _get_bucket
+            from app.services.firebase_storage import _get_bucket, owner_blobs
             bucket = _get_bucket()
             if bucket is None:
                 logger.info("FIREBASE_STORAGE_BUCKET not set — skipping Storage cleanup for %s", owner_id)
                 return
-            blobs = list(bucket.list_blobs(prefix=f"{owner_id}/"))
+            blobs = owner_blobs(bucket, owner_id)
             for blob in blobs:
                 blob.delete()
             logger.info("Deleted %d Storage files for user %s", len(blobs), owner_id)

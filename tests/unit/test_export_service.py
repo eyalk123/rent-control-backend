@@ -137,17 +137,17 @@ def test_zip_holds_the_workbook_and_the_owners_files(db_session, seeded, monkeyp
         export_service.firebase_storage,
         "list_owner_blobs",
         lambda owner_id: [
-            FakeBlob(f"{owner_id}/", b""),  # folder placeholder — skipped
-            FakeBlob(f"{owner_id}/leases/lease.pdf", b"%PDF-1.4 lease"),
-            FakeBlob("someone-else/private.pdf", b"nope"),  # outside the prefix — skipped
+            FakeBlob(f"renters/{owner_id}/", b""),  # folder placeholder — skipped
+            FakeBlob(f"renters/{owner_id}/u1/lease.pdf", b"%PDF-1.4 lease"),
+            FakeBlob("renters/someone-else/u2/private.pdf", b"nope"),  # another owner — skipped
         ],
     )
 
     with zipfile.ZipFile(io.BytesIO(build_export_zip(db_session, OWNER_A))) as archive:
         names = archive.namelist()
         assert WORKBOOK_NAME in names
-        assert names.count("files/leases/lease.pdf") == 1
-        assert archive.read("files/leases/lease.pdf") == b"%PDF-1.4 lease"
+        assert names.count("files/renters/u1/lease.pdf") == 1
+        assert archive.read("files/renters/u1/lease.pdf") == b"%PDF-1.4 lease"
         assert not any("private.pdf" in n for n in names)
         assert _sheets(archive.read(WORKBOOK_NAME)).sheetnames == SHEETS
 
@@ -178,12 +178,12 @@ def test_a_single_file_failing_does_not_lose_the_others(db_session, seeded, monk
     monkeypatch.setattr(
         export_service.firebase_storage,
         "list_owner_blobs",
-        lambda owner_id: [Blob(f"{owner_id}/broken.pdf"), Blob(f"{owner_id}/ok.pdf", b"ok")],
+        lambda owner_id: [Blob(f"transactions/{owner_id}/u1/broken.pdf"), Blob(f"transactions/{owner_id}/u2/ok.pdf", b"ok")],
     )
 
     with zipfile.ZipFile(io.BytesIO(build_export_zip(db_session, OWNER_A))) as archive:
-        assert "files/ok.pdf" in archive.namelist()
-        assert "files/broken.pdf" not in archive.namelist()
+        assert "files/transactions/u2/ok.pdf" in archive.namelist()
+        assert "files/transactions/u1/broken.pdf" not in archive.namelist()
 
 
 class TestFloorAreaHeaderNamesItsUnit:

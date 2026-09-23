@@ -11,7 +11,7 @@ found again in six months, in a file whose job is properties.
 **The store is not the source of truth.** Apple, Google and Paddle each report their own
 product identifiers, and RevenueCat normalises them into an entitlement name. What that
 entitlement *permits* is ours, and it must survive changing billing provider — see
-``rent-control-subscriptions-plan.md`` §4.
+``docs/rent-control-subscriptions-plan.md`` §4.
 
 **This is a second capability axis, not an extension of the first.**
 ``country_service.capabilities_for(country)`` answers "does this feature exist where the

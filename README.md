@@ -341,6 +341,28 @@ Railway cron service in [`ops/backup/`](ops/backup/README.md) — deliberately s
 logging or job-tracking with this app, so it can still report a failure caused by the database
 being unreachable. That README covers the bucket, the variables, and the restore drill.
 
+### Orphaned Storage files
+
+Clients upload to `{entity_type}/{owner_id}/{uuid}/{filename}` (`storage.rules` in the web repo).
+Every server-side cleanup goes through `app/services/firebase_storage.py`: account deletion and
+the export list the owner's files with `owner_prefixes`, and a replaced or deleted document is
+removed by `release_file_urls` once its record's change has committed — skipping any file another
+record still points at, and any path outside the caller's own prefixes.
+
+Until that was in place, account deletion listed a `{owner_id}/` prefix no upload used and so
+deleted nothing, the export shipped no files, and replaced documents, deleted receipts and
+deleted property attachments stayed in the bucket. Those files are still there. To find them,
+and then remove them:
+
+```bash
+railway run python ops/storage_orphan_sweep.py           # report only
+railway run python ops/storage_orphan_sweep.py --apply   # delete what it reported
+```
+
+It reports two groups: files whose owner no longer exists (deleted accounts), and files of live
+owners that no record references. Files younger than 48 hours are skipped, since a client uploads
+before it saves the record.
+
 ### The nightly rollup
 
 A job that is never called writes no row and raises nothing, so only a monitor with an expected

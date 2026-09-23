@@ -30,6 +30,10 @@ from app.services.lease_periods import (
     rent_for_month,
     schedule_end,
 )
+from app.services.firebase_storage import release_file_urls
+
+# Columns holding a Storage download URL.
+_FILE_FIELDS = ("full_contract_url", "id_image_url")
 
 
 def _lease_end_dates(lease_start: date | None, lease_years: list[dict]) -> dict:
@@ -516,7 +520,14 @@ class RenterService:
                     details={"fields": changed},
                 )
 
-        return self.renter_repository.update(renter, update_dict)
+        replaced = [
+            getattr(renter, f)
+            for f in _FILE_FIELDS
+            if f in update_dict and update_dict[f] != getattr(renter, f)
+        ]
+        updated = self.renter_repository.update(renter, update_dict)
+        release_file_urls(self.renter_repository.session, owner_id, replaced)
+        return updated
 
     def terminate_lease(self, renter_id: int, data: RenterTerminate, owner_id: str):
         """Close a lease before its end date.
@@ -684,8 +695,7 @@ class RenterService:
         if renter is None:
             return False
         self._check_renter_access(renter, owner_id)
-        from app.services.firebase_storage import delete_file_urls
-        delete_file_urls([renter.full_contract_url, renter.id_image_url])
+        urls = [getattr(renter, f) for f in _FILE_FIELDS]
 
         if self.activity_log_repository is not None:
             self.activity_log_repository.record_delete(
@@ -697,4 +707,5 @@ class RenterService:
             )
 
         self.renter_repository.delete_obj(renter)
+        release_file_urls(self.renter_repository.session, owner_id, urls)
         return True

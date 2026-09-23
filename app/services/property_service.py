@@ -11,6 +11,10 @@ from app.schemas.renter import PropertyRenterSummary
 from app.services import country_service
 from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
+from app.services.firebase_storage import release_file_urls
+
+# Columns holding a Storage download URL.
+_FILE_FIELDS = ("image_url", "basic_contract_url", "land_registry_url")
 
 
 class PropertyService:
@@ -161,15 +165,21 @@ class PropertyService:
                     label=", ".join(p for p in (property.address, property.city) if p),
                     details={"fields": changed},
                 )
+        replaced = [
+            getattr(property, f)
+            for f in _FILE_FIELDS
+            if f in update_dict and update_dict[f] != getattr(property, f)
+        ]
         self.property_repository.update(property, update_dict)
+        release_file_urls(self.property_repository.session, owner_id, replaced)
         return self.property_repository.get_by_id(property_id, owner_id)
 
     def delete_property(self, property_id: int, owner_id: str) -> bool:
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return False
-        from app.services.firebase_storage import delete_file_urls
-        delete_file_urls([property.image_url, property.basic_contract_url, property.land_registry_url])
+        # Read before the delete: `property_files` rows go with it (ON DELETE CASCADE).
+        urls = [getattr(property, f) for f in _FILE_FIELDS] + [f.url for f in property.files]
 
         if self.activity_log_repository is not None:
             # Recorded before the delete so the address is still readable.
@@ -182,6 +192,7 @@ class PropertyService:
             )
 
         self.property_repository.delete_obj(property)
+        release_file_urls(self.property_repository.session, owner_id, urls)
         return True
 
     def get_property_renters(self, property_id: int, owner_id: str, include_ended: bool = False):
