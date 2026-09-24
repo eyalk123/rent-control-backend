@@ -10,7 +10,8 @@ from app.models.subscription import Subscription
 class SubscriptionRepository:
     """Reads and writes the local billing record.
 
-    ``upsert`` is the only write. Webhooks are the sole caller, they retry, and they can
+    ``upsert`` is the main write (``move`` only reassigns a row on TRANSFER). Webhooks are
+    the sole caller, they retry, and they can
     arrive out of order — so the write has to be a statement of current state rather than
     an edit, and it has to be safe to apply twice.
     """
@@ -64,6 +65,30 @@ class SubscriptionRepository:
         subscription.price_currency = price_currency
         subscription.last_event_at = last_event_at
 
+        self.session.commit()
+        self.session.refresh(subscription)
+        return subscription
+
+    def move(
+        self, from_owner_id: str, to_owner_id: str, last_event_at: datetime | None
+    ) -> Subscription | None:
+        """Reassign ``from_owner_id``'s subscription to ``to_owner_id``.
+
+        Returns None, changing nothing, when the source has no subscription. Any row the
+        target already holds is replaced: a transfer states that the purchase now belongs
+        to the target, and ``owner_id`` is unique, so there can only be one.
+        """
+        subscription = self.get_for_owner(from_owner_id)
+        if subscription is None:
+            return None
+
+        existing = self.get_for_owner(to_owner_id)
+        if existing is not None:
+            self.session.delete(existing)
+            self.session.flush()
+
+        subscription.owner_id = to_owner_id
+        subscription.last_event_at = last_event_at
         self.session.commit()
         self.session.refresh(subscription)
         return subscription

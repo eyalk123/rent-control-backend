@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # Whichever of the two is configured is REQUIRED; configure both and both must pass.
     # Neither configured is a 503 — see `verify_request`.
     REVENUECAT_WEBHOOK_AUTH: str = ""
+    # Whether RevenueCat events marked `environment: SANDBOX` change anyone's plan. Off by
+    # default: this backend is production, and a test purchase must never grant a real
+    # account a plan. Sandbox events are still recorded in `subscription_events`. Turn it
+    # on only for a backend that serves test accounts.
+    REVENUECAT_APPLY_SANDBOX: bool = False
 
     # extraction. Model is configurable independently of EXTRACTION_MODEL.
     AGENT_MODEL: str = "claude-sonnet-4-6"

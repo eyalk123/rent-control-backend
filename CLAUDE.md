@@ -72,6 +72,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `EXTRACTION_MODEL` | No | Lease extraction model; default `claude-sonnet-4-6` |
 | `REVENUECAT_WEBHOOK_SECRET` | No | HMAC secret for `POST /webhooks/revenuecat`, shown once when signing is enabled in the RevenueCat dashboard. Header `X-RevenueCat-Webhook-Signature: t=<unix>,v1=<hex>` over `"<t>.<raw body>"`, HMAC-SHA256 |
 | `REVENUECAT_WEBHOOK_AUTH` | No | The alternative static `Authorization` header RevenueCat can send, verbatim as typed (no `Bearer` scheme implied). **Whichever of these two is set is required; set both and both must pass; set neither and the endpoint answers 503 rather than accepting anything** |
+| `REVENUECAT_APPLY_SANDBOX` | No | Default `false`. Whether RevenueCat events marked `environment: SANDBOX` change anyone's plan. Off in production: sandbox events are recorded in `subscription_events` but never applied. The product → plan map is `app/services/billing_catalog.py`, the only place a store product id is mapped |
 | `ENTITLEMENT_ENFORCED` | No | Default `false`. Whether subscription plan limits are *enforced*. The entitlement service computes and reports the answer either way; while this is off nothing is refused. It is the launch switch — until checkout works, a new account reaching three properties would be told to buy a plan that cannot be bought. See `app/services/entitlement_gate.py` |
 | `PORT` | No | Set by Railway automatically |
 

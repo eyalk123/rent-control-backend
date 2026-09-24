@@ -36,7 +36,7 @@ from fastapi import HTTPException, status
 
 from app.clock import utc_now_naive
 from app.config import settings
-from app.services import entitlement_service as ent
+from app.services.billing_catalog import PRODUCT_PLANS
 
 logger = logging.getLogger(__name__)
 
@@ -70,24 +70,15 @@ def _source_for_store(store: str | None) -> str:
     return _STORE_TO_SOURCE.get(key, "unknown")
 
 
-# ── Product mapping ──────────────────────────────────────────────────────────
-#
-# Store product identifiers are created by hand in App Store Connect, Play Console and
-# Paddle, so this map is the seam where three consoles meet one codebase. It is explicit
-# rather than parsed out of the identifier string: a convention silently broken in a
-# console would otherwise resolve to a plausible-looking wrong plan, where an explicit
-# table fails loudly as `unmapped` and changes nothing.
-#
-# The identifiers are not final — the catalog is not built yet (see the subscriptions
-# plan §5 Phase 0). Filling this in is what connects it.
-PRODUCT_PLANS: dict[str, tuple[str, str]] = {
-    "rc_tier_3_8_monthly": (ent.PLAN_TIER_3_8, "monthly"),
-    "rc_tier_3_8_yearly": (ent.PLAN_TIER_3_8, "yearly"),
-    "rc_tier_9_15_monthly": (ent.PLAN_TIER_9_15, "monthly"),
-    "rc_tier_9_15_yearly": (ent.PLAN_TIER_9_15, "yearly"),
-    "rc_tier_16_plus_monthly": (ent.PLAN_TIER_16_PLUS, "monthly"),
-    "rc_tier_16_plus_yearly": (ent.PLAN_TIER_16_PLUS, "yearly"),
-}
+#: RevenueCat's prefix for an id it generated itself. Every account here is a Firebase
+#: UID, so an anonymous id means a purchase that did not start in the app (a Paddle
+#: checkout opened elsewhere) and belongs to no account. Applying it would create a
+#: subscription row nobody can see; ignoring it leaves a record to reassign by hand.
+_ANONYMOUS_PREFIX = "$RCAnonymousID:"
+
+
+def _is_account(app_user_id) -> bool:
+    return bool(app_user_id) and not str(app_user_id).startswith(_ANONYMOUS_PREFIX)
 
 
 # ── Event semantics ──────────────────────────────────────────────────────────
@@ -113,6 +104,9 @@ EVENT_STATUS: dict[str, str] = {
     "BILLING_ISSUE": "past_due",
     "SUBSCRIPTION_PAUSED": "paused",
 }
+#
+# TRANSFER is handled on its own (`_transfer`): it changes *whose* subscription it is,
+# not its status, and it names two sets of users instead of one `app_user_id`.
 
 
 @dataclass(frozen=True)
@@ -259,13 +253,27 @@ class RevenueCatService:
         if event_type == "TEST":
             return IngestResult("ignored", "test_event", owner_id)
 
+        environment = (event.get("environment") or "").strip().upper()
+        if environment == "SANDBOX" and not settings.REVENUECAT_APPLY_SANDBOX:
+            # A test purchase must never grant a real account a plan. Recorded, so a
+            # sandbox run can still be followed end to end in `subscription_events`.
+            return IngestResult("ignored", "sandbox", owner_id)
+
+        if event_type == "TRANSFER":
+            return self._transfer(event, occurred_at)
+
         status_value = EVENT_STATUS.get(event_type)
         if status_value is None:
+            logger.info("RevenueCat event type %s has no entitlement meaning", event_type)
             return IngestResult("ignored", "no_entitlement_meaning", owner_id)
 
         if not owner_id:
             logger.warning("RevenueCat %s event carries no app_user_id", event_type)
             return IngestResult("ignored", "no_app_user_id", None)
+
+        if not _is_account(owner_id):
+            logger.warning("RevenueCat %s event for an anonymous app user id", event_type)
+            return IngestResult("ignored", "anonymous_user", None)
 
         existing = self.subscription_repository.get_for_owner(owner_id)
         if (
@@ -307,6 +315,30 @@ class RevenueCatService:
             last_event_at=occurred_at,
         )
         return IngestResult("applied", event_type, owner_id)
+
+    def _transfer(self, event, occurred_at) -> IngestResult:
+        """Move a subscription from one account to another.
+
+        RevenueCat sends this when a purchase already owned by one app user id is restored
+        under another — the same Apple ID signed into a second RentVance account, say. The
+        subscription follows the purchase, so the old account loses it and the new one
+        gains it; leaving it on both would sell one subscription twice.
+
+        Anonymous ids on either side are skipped: they are not accounts here.
+        """
+        sources = [u for u in event.get("transferred_from") or [] if _is_account(u)]
+        targets = [u for u in event.get("transferred_to") or [] if _is_account(u)]
+        if not targets:
+            return IngestResult("ignored", "transfer_without_account", None)
+        target = targets[0]
+
+        for source in sources:
+            if source == target:
+                continue
+            moved = self.subscription_repository.move(source, target, occurred_at)
+            if moved:
+                return IngestResult("applied", "TRANSFER", target)
+        return IngestResult("ignored", "transfer_nothing_to_move", target)
 
 
 def parse_body(raw_body: bytes) -> dict:
