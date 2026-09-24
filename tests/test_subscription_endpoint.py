@@ -265,3 +265,34 @@ def test_writing_to_a_locked_property_is_refused_through_the_api(
     refused = client.patch(f"/properties/{props[3].id}", json={"city": "Newville"})
     assert refused.status_code == 402
     assert refused.json()["detail"]["error"] == "property_locked"
+
+
+# ── The plan a picker recommends ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "count,expected",
+    [
+        (0, ent.PLAN_FREE),
+        (2, ent.PLAN_FREE),
+        (3, ent.PLAN_TIER_3_8),
+        (9, ent.PLAN_TIER_9_15),
+        (16, ent.PLAN_TIER_16_PLUS),
+    ],
+)
+def test_required_plan_is_the_cheapest_that_covers_the_portfolio(
+    client, db_session, count, expected
+):
+    _owner(db_session)
+    _properties(db_session, count)
+    assert client.get("/subscription").json()["required_plan"] == expected
+
+
+def test_required_plan_ignores_what_the_account_already_has(client, db_session):
+    """A grandfathered account with 4 properties still needs 3–8, not 16+. The field
+    answers "what covers this portfolio", not "what does this account hold"."""
+    _owner(db_session, granted_plan=ent.PLAN_TIER_16_PLUS)
+    _properties(db_session, 4)
+    body = client.get("/subscription").json()
+    assert body["plan"] == ent.PLAN_TIER_16_PLUS
+    assert body["required_plan"] == ent.PLAN_TIER_3_8

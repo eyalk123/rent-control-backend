@@ -18,6 +18,10 @@ class SubscriptionRead(BaseModel):
     #: Inclusive property ceiling. `null` means unlimited, not zero.
     limit: Optional[int] = None
     property_count: int
+    #: The cheapest plan that covers `property_count`. What a plan picker highlights.
+    #: Sent rather than derived because the mobile client has no band boundaries at all,
+    #: and should not: they would be one more copy to fall out of step with the gate.
+    required_plan: str
 
     #: Properties over the ceiling: readable, not writable. Clients badge these.
     locked_property_ids: list[int] = []

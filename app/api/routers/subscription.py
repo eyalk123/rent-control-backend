@@ -16,6 +16,7 @@ from app.api.dependencies import get_current_user, get_entitlement_gate
 from app.database import get_db
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.schemas.subscription import SubscriptionRead
+from app.services import entitlement_service as ent
 from app.services.entitlement_gate import EntitlementGate
 
 router = APIRouter()
@@ -50,6 +51,7 @@ def get_subscription(
         plan=state.plan.plan,
         limit=state.plan.max_properties,
         property_count=state.property_count,
+        required_plan=ent.required_plan_for(state.property_count).plan,
         locked_property_ids=state.locked_property_ids,
         show_lock_notice=state.show_lock_notice,
         enforced=state.enforced,
