@@ -189,7 +189,7 @@ def test_nothing_is_refused_while_the_switch_is_off(db_session):
     assert state.enforced is False
 
     gate.require_can_add_property(OWNER_A)  # does not raise
-    gate.require_property_writable(OWNER_A, props[-1].id)  # does not raise
+    gate.require_property_unlocked(OWNER_A, props[-1].id)  # does not raise
 
 
 def test_adding_past_the_ceiling_is_refused_with_402(db_session, enforced):
@@ -225,11 +225,11 @@ def test_writing_to_a_locked_property_is_refused_and_to_a_kept_one_is_not(
 
     from fastapi import HTTPException
 
-    gate.require_property_writable(OWNER_A, props[0].id)  # oldest — still writable
-    gate.require_property_writable(OWNER_A, props[1].id)
+    gate.require_property_unlocked(OWNER_A, props[0].id)  # oldest — still writable
+    gate.require_property_unlocked(OWNER_A, props[1].id)
 
     with pytest.raises(HTTPException) as raised:
-        gate.require_property_writable(OWNER_A, props[3].id)
+        gate.require_property_unlocked(OWNER_A, props[3].id)
     assert raised.value.status_code == 402
     assert raised.value.detail["error"] == "property_locked"
     assert raised.value.detail["property_id"] == props[3].id
@@ -238,7 +238,7 @@ def test_writing_to_a_locked_property_is_refused_and_to_a_kept_one_is_not(
 def test_a_record_attached_to_no_property_is_never_gated(db_session, enforced):
     _owner(db_session, granted_plan=None)
     _properties(db_session, 9)
-    EntitlementGate(db_session).require_property_writable(OWNER_A, None)  # no raise
+    EntitlementGate(db_session).require_property_unlocked(OWNER_A, None)  # no raise
 
 
 def test_a_grandfathered_account_is_never_refused(db_session, enforced):
@@ -248,7 +248,7 @@ def test_a_grandfathered_account_is_never_refused(db_session, enforced):
     gate = EntitlementGate(db_session)
 
     gate.require_can_add_property(OWNER_A)
-    gate.require_property_writable(OWNER_A, props[-1].id)
+    gate.require_property_unlocked(OWNER_A, props[-1].id)
 
 
 # ── Feature gates: lease scans and the assistant ─────────────────────────────

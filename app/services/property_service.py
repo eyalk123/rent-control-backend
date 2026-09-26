@@ -6,7 +6,7 @@ from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.schemas.property import PropertyCreate, PropertyUpdate
+from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
 from app.schemas.renter import PropertyRenterSummary
 from app.services import country_service
 from app.services.entitlement_gate import EntitlementGate
@@ -55,15 +55,52 @@ class PropertyService:
             property.locked = property.id in locked_ids
         return properties
 
-    def list_properties(self, owner_id: str):
-        return self._mark_locked(
+    @staticmethod
+    def _stub(property) -> PropertyRead:
+        """What the list may say about a locked property: enough to recognise it, nothing more.
+
+        The list is the one place a locked property still appears, so the owner can see what
+        is locked and delete one to get back under the limit. Built from an allowlist
+        rather than by blanking fields on the full row, so a column added later stays out
+        of the stub until someone decides it belongs there.
+        """
+        return PropertyRead(
+            id=property.id,
+            owner_id=property.owner_id,
+            address=property.address,
+            city=property.city,
+            type=property.type.value if hasattr(property.type, "value") else property.type,
+            floor=property.floor,
+            apartment=property.apartment,
+            locked=True,
+        )
+
+    def list_properties(self, owner_id: str, include_locked: bool = True):
+        """Every property, with locked ones reduced to a stub.
+
+        ``include_locked=False`` drops them instead — for callers such as the assistant
+        that have no use for a stub and would otherwise have to tell one apart from a row.
+        """
+        properties = self._mark_locked(
             owner_id, self.property_repository.get_all_by_owner(owner_id)
         )
+        if self.entitlement_gate is None:
+            return properties
+        hidden = self.entitlement_gate.hidden_property_ids(owner_id)
+        if not hidden:
+            return properties
+        if not include_locked:
+            return [p for p in properties if p.id not in hidden]
+        return [self._stub(p) if p.id in hidden else p for p in properties]
 
     def get_property(self, property_id: int, owner_id: str):
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
+        # After the ownership lookup, so another owner's id still answers 404 rather than
+        # confirming it exists through a 402.
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_unlocked(owner_id, property_id)
         return self._mark_locked(owner_id, [property])[0]
 
     def _owner_country_and_currency(self, owner_id: str) -> tuple[str | None, str | None]:
@@ -137,11 +174,11 @@ class PropertyService:
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
-        # A property over the plan's ceiling is readable but not writable. Checked after
-        # the ownership lookup so a property belonging to someone else still answers 404
-        # rather than leaking its existence through a 402.
+        # A property over the plan's ceiling is closed to edits as well as reads. Checked
+        # after the ownership lookup so a property belonging to someone else still answers
+        # 404 rather than leaking its existence through a 402.
         if self.entitlement_gate is not None:
-            self.entitlement_gate.require_property_writable(owner_id, property_id)
+            self.entitlement_gate.require_property_unlocked(owner_id, property_id)
         update_dict = data.model_dump(exclude_unset=True)
         if "type" in update_dict and update_dict["type"] is not None:
             update_dict["type"] = PropertyTypeEnum(update_dict["type"].value)
@@ -207,6 +244,8 @@ class PropertyService:
         property = self.property_repository.get_by_id(property_id, owner_id)
         if property is None:
             return None
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_unlocked(owner_id, property_id)
         renters = self.renter_repository.get_by_property_id(
             property_id=property_id,
             owner_id=owner_id,

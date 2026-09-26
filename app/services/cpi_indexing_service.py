@@ -23,7 +23,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 from dateutil.relativedelta import relativedelta
 
@@ -46,6 +46,9 @@ from app.services import cpi_rent_change as cpi
 from app.services.index_source import IndexSource
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.services.entitlement_gate import EntitlementGate
 
 
 @dataclass(frozen=True)
@@ -310,8 +313,13 @@ class CpiIndexingService:
         max_stale_months: int | None = None,
         notification_repository: NotificationRepository | None = None,
         settings_repository: NotificationSettingsRepository | None = None,
+        entitlement_gate: "EntitlementGate | None" = None,
     ):
         self.renter_repository = renter_repository
+        # Optional: without it no property is locked, which is every account's behaviour
+        # before billing. With it, renters on a locked property are skipped — see
+        # `run_cpi_indexing`.
+        self.entitlement_gate = entitlement_gate
         self.cpi_index_repository = cpi_index_repository
         # Both optional: without them the job still does its real work and simply stays
         # silent, which keeps it constructible in tests that only care about the math.
@@ -574,11 +582,24 @@ class CpiIndexingService:
         #    CPI year — the latter still need the index even though their other years
         #    are percent/fixed/manual.
         lookups = {index_id: self._lookup(index_id) for index_id in series_by_id}
+        # Resolved once per owner, not per renter: the gate runs two queries, and this loop
+        # crosses every account.
+        hidden_by_owner: dict[str, frozenset[int]] = {}
         for renter, country in self.renter_repository.get_by_escalation_modes_with_country(
             ["cpi", "custom"], countries=list(series_by_country)
         ):
             if not renter.lease_start:
                 continue
+            # A locked property is not repriced and raises no alert. Nothing is lost: every
+            # run recomputes each linked lease from the cache, so it catches up on the first
+            # run after the property unlocks.
+            if self.entitlement_gate is not None and renter.property_id is not None:
+                if renter.owner_id not in hidden_by_owner:
+                    hidden_by_owner[renter.owner_id] = (
+                        self.entitlement_gate.hidden_property_ids(renter.owner_id)
+                    )
+                if renter.property_id in hidden_by_owner[renter.owner_id]:
+                    continue
             # The country comes back resolved by the query — property, then account, then
             # the default — so a renter is always priced against the index of the place its
             # building is in, never the deployment's.

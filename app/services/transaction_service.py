@@ -142,13 +142,22 @@ class TransactionService:
             to_date=to_date,
             limit=limit,
             offset=offset,
+            exclude_property_ids=self._hidden_property_ids(owner_id),
         )
         return [self._transaction_to_read(t) for t in rows]
+
+    def _hidden_property_ids(self, owner_id: str) -> frozenset[int]:
+        """Locked properties whose transactions every list and total leaves out."""
+        if self.entitlement_gate is None:
+            return frozenset()
+        return self.entitlement_gate.hidden_property_ids(owner_id)
 
     def get_transaction(self, transaction_id: int, owner_id: str) -> TransactionRead | None:
         t = self.transaction_repository.get_by_id(transaction_id, owner_id)
         if t is None:
             return None
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_unlocked(owner_id, t.property_id)
         return self._transaction_to_read(t)
 
     def create_revenue(self, data: TransactionCreateRevenue, owner_id: str) -> TransactionRead:
@@ -156,7 +165,7 @@ class TransactionService:
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
         if self.entitlement_gate is not None:
-            self.entitlement_gate.require_property_writable(owner_id, data.property_id)
+            self.entitlement_gate.require_property_unlocked(owner_id, data.property_id)
         renter = None
         if data.renter_id is not None:
             renter = self.renter_repository.get_by_id(data.renter_id)
@@ -201,7 +210,10 @@ class TransactionService:
             year -= 1
         from_date = date(year, month, 1)
 
-        rows = self.transaction_repository.get_monthly_summary(owner_id, from_date)
+        hidden = self._hidden_property_ids(owner_id)
+        rows = self.transaction_repository.get_monthly_summary(
+            owner_id, from_date, exclude_property_ids=hidden
+        )
         by_key = {
             f"{int(row.year):04d}-{int(row.month):02d}": row
             for row in rows
@@ -226,7 +238,7 @@ class TransactionService:
                 profit=revenue - expenses,
             ))
 
-        by_owner = self._get_ytd_by_owner(owner_id, date(today.year, 1, 1))
+        by_owner = self._get_ytd_by_owner(owner_id, date(today.year, 1, 1), hidden)
 
         return TransactionSummaryResponse(
             six_month_buckets=buckets,
@@ -235,12 +247,16 @@ class TransactionService:
             ytd_by_owner=by_owner,
         )
 
-    def _get_ytd_by_owner(self, owner_id: str, from_date: date) -> list[OwnerNetItem]:
+    def _get_ytd_by_owner(
+        self, owner_id: str, from_date: date, hidden: frozenset[int] = frozenset()
+    ) -> list[OwnerNetItem]:
         """Year-to-date net grouped by the free-text property owner, biggest net first."""
         # NULL (deleted property) and a blank owner string both mean "unattributed",
         # and the DB groups them separately — fold them into one bucket here.
         totals: dict[str | None, list[float]] = {}
-        for row in self.transaction_repository.get_ytd_by_owner(owner_id, from_date):
+        for row in self.transaction_repository.get_ytd_by_owner(
+            owner_id, from_date, exclude_property_ids=hidden
+        ):
             owner = (row.owner or "").strip() or None
             bucket = totals.setdefault(owner, [0.0, 0.0])
             bucket[0] += float(row.revenue or 0)
@@ -258,9 +274,9 @@ class TransactionService:
         if existing is not None and self.entitlement_gate is not None:
             # The row it sits on now, and the one it is being moved to — both must be
             # writable, or a locked property could be emptied or filled by reassignment.
-            self.entitlement_gate.require_property_writable(owner_id, existing.property_id)
+            self.entitlement_gate.require_property_unlocked(owner_id, existing.property_id)
             if data.property_id is not None:
-                self.entitlement_gate.require_property_writable(owner_id, data.property_id)
+                self.entitlement_gate.require_property_unlocked(owner_id, data.property_id)
         fields: dict = {}
         if data.property_id is not None:
             property = self.property_repository.get_by_id(data.property_id, owner_id)
@@ -315,9 +331,9 @@ class TransactionService:
         if existing is not None and self.entitlement_gate is not None:
             # The row it sits on now, and the one it is being moved to — both must be
             # writable, or a locked property could be emptied or filled by reassignment.
-            self.entitlement_gate.require_property_writable(owner_id, existing.property_id)
+            self.entitlement_gate.require_property_unlocked(owner_id, existing.property_id)
             if data.property_id is not None:
-                self.entitlement_gate.require_property_writable(owner_id, data.property_id)
+                self.entitlement_gate.require_property_unlocked(owner_id, data.property_id)
         fields: dict = {}
         new_categories = None
         if data.property_id is not None:
@@ -432,6 +448,8 @@ class TransactionService:
         # Read it first: the repository deletes and commits, after which there is nothing
         # left to describe, and no receipt URL left to clean up.
         transaction = self.transaction_repository.get_by_id(transaction_id, owner_id)
+        if transaction is not None and self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_unlocked(owner_id, transaction.property_id)
         receipt = transaction.receipt_image_url if transaction is not None else None
         if self.activity_log_repository is not None:
             if transaction is not None:
@@ -461,7 +479,7 @@ class TransactionService:
         if property is None:
             raise HTTPException(status_code=404, detail="Property not found")
         if self.entitlement_gate is not None:
-            self.entitlement_gate.require_property_writable(owner_id, data.property_id)
+            self.entitlement_gate.require_property_unlocked(owner_id, data.property_id)
         category_objects = []
         for cid in data.category_ids:
             cat = self.expense_category_repository.get_by_id(cid)

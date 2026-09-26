@@ -392,6 +392,7 @@ def get_cpi_indexing_service(
     notification_settings_repository: Annotated[
         NotificationSettingsRepository, Depends(get_notification_settings_repository)
     ],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
 ) -> CpiIndexingService:
     # Defined here rather than beside the other CPI factories because it needs the
     # notification repositories: the indexing job raises the confirmation half of the
@@ -402,6 +403,7 @@ def get_cpi_indexing_service(
         sources=sources,
         notification_repository=notification_repository,
         settings_repository=notification_settings_repository,
+        entitlement_gate=entitlement_gate,
     )
 
 
@@ -410,10 +412,21 @@ def get_notification_engine(
     settings_repository: Annotated[
         NotificationSettingsRepository, Depends(get_notification_settings_repository)
     ],
-    renter_service: Annotated[RenterService, Depends(get_renter_service)],
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
+    property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
     cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
+    owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
 ) -> NotificationEngine:
+    # Deliberately *without* the entitlement gate. The engine's candidates are what
+    # `ReminderService._dismiss_resolved` reconciles against, so a locked renter missing
+    # from them would read as "resolved" and have its alerts dismissed for good. The
+    # lock is applied after that, in ReminderService, where rows are created and listed.
+    renter_service = RenterService(
+        renter_repository,
+        property_repository,
+        cpi_index_repository,
+        owner_repository=owner_repository,
+    )
     return NotificationEngine(
         rule_repository=rule_repository,
         settings_repository=settings_repository,
@@ -465,6 +478,7 @@ def get_reminder_service(
         DeviceTokenRepository, Depends(get_device_token_repository)
     ],
     owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
 ) -> ReminderService:
     return ReminderService(
         engine=engine,
@@ -474,4 +488,5 @@ def get_reminder_service(
         push_service=push_service,
         device_token_repository=device_token_repository,
         owner_repository=owner_repository,
+        entitlement_gate=entitlement_gate,
     )

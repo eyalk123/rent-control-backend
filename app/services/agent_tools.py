@@ -49,6 +49,7 @@ from app.repositories.transaction_repository import TransactionRepository
 from app.services import report_service
 from app.services import country_service
 from app.services.cpi_indexing_service import compute_chained_cpi_amount, compute_cpi_amount
+from app.services.entitlement_gate import EntitlementGate
 from app.services.property_service import PropertyService
 from app.services.renter_service import RenterService
 from app.services.supplier_service import SupplierService
@@ -503,9 +504,20 @@ class AgentTools:
         category_repo = ExpenseCategoryRepository(db)
         supplier_repo = SupplierRepository(db)
 
+        # The same gate the API uses, so the assistant sees exactly what the app shows:
+        # renters, transactions and reports of a locked property are left out, and a
+        # direct lookup of one raises 402, which `dispatch` turns into "not found".
+        self.entitlement_gate = EntitlementGate(db)
         self.cpi_index_repository = CpiIndexRepository(db)
-        self.property_service = PropertyService(property_repo, renter_repo)
-        self.renter_service = RenterService(renter_repo, property_repo, self.cpi_index_repository)
+        self.property_service = PropertyService(
+            property_repo, renter_repo, entitlement_gate=self.entitlement_gate
+        )
+        self.renter_service = RenterService(
+            renter_repo,
+            property_repo,
+            self.cpi_index_repository,
+            entitlement_gate=self.entitlement_gate,
+        )
         self.supplier_service = SupplierService(supplier_repo, category_repo)
         self.transaction_service = TransactionService(
             transaction_repository=transaction_repo,
@@ -513,6 +525,7 @@ class AgentTools:
             renter_repository=renter_repo,
             expense_category_repository=category_repo,
             supplier_repository=supplier_repo,
+            entitlement_gate=self.entitlement_gate,
         )
 
     # -- dispatch -------------------------------------------------------------------
@@ -567,7 +580,7 @@ class AgentTools:
         """(properties, {property_id: [Renter, ...]}) — every linked renter, past ones
         included, since ``renter_count`` counts them the way the app's renters tab does.
         Occupancy is :meth:`_current_renters` over that list, not its length."""
-        properties = self.property_service.list_properties(owner_id)
+        properties = self.property_service.list_properties(owner_id, include_locked=False)
         by_prop: dict[int, list] = defaultdict(list)
         for r in self.renter_service.list_renters(owner_id):
             if r.property_id is not None:
@@ -1088,7 +1101,12 @@ class AgentTools:
         report_type = params.get("type")
         year = params.get("year") or date.today().year
         if report_type == "income_expense":
-            data = report_service.get_income_expense_data(self.db, owner_id, year)
+            data = report_service.get_income_expense_data(
+                self.db,
+                owner_id,
+                year,
+                exclude_property_ids=self.entitlement_gate.hidden_property_ids(owner_id),
+            )
             return {
                 "report": "income_expense",
                 "year": year,
@@ -1106,7 +1124,12 @@ class AgentTools:
                 ],
             }
         if report_type == "expense_log":
-            data = report_service.get_expense_log_data(self.db, owner_id, year)
+            data = report_service.get_expense_log_data(
+                self.db,
+                owner_id,
+                year,
+                exclude_property_ids=self.entitlement_gate.hidden_property_ids(owner_id),
+            )
             return {
                 "report": "expense_log",
                 "year": year,

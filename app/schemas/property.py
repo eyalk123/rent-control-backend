@@ -155,7 +155,8 @@ class PropertyRead(BaseModel):
     plot: Optional[str] = None
     renters: Optional[list[RenterRead]] = None
     hasRenters: Optional[bool] = None
-    # Over the plan's property ceiling: readable and exportable, never writable. Set by
+    # Over the plan's property ceiling. A locked property reaches the client only as a stub
+    # in the list (see PropertyService._stub); every other read of it is a 402. Set by
     # PropertyService from the entitlement gate, not stored — it is a fact about the
     # account's plan today, not about the property.
     #

@@ -23,7 +23,7 @@ class SubscriptionRead(BaseModel):
     #: and should not: they would be one more copy to fall out of step with the gate.
     required_plan: str
 
-    #: Properties over the ceiling: readable, not writable. Clients badge these.
+    #: Properties over the ceiling: shown only as stubs, otherwise inaccessible.
     locked_property_ids: list[int] = []
     #: Whether to show the one-time explanation of why some properties are locked.
     #: Clients POST to /subscription/lock-notice/ack once it has been shown.

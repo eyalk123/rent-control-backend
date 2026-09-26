@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Integer, case, func, or_, select
+from sqlalchemy import ColumnElement, Integer, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.expense_category import ExpenseCategory
@@ -14,6 +14,21 @@ from typing import Optional
 # The date a transaction belongs to for the user: the month rent was paid *for*
 # when there is one (revenue), otherwise the day the money moved (expenses).
 EFFECTIVE_DATE = func.coalesce(Transaction.month_for, Transaction.date_of_payment)
+
+
+def not_on_properties(property_ids) -> ColumnElement[bool] | None:
+    """A filter leaving out transactions on ``property_ids``, or ``None`` when there are none.
+
+    ``NOT IN`` alone would also drop every transaction with no property (a deleted
+    property sets it to NULL, and ``NULL NOT IN (...)`` is not true), so those are kept
+    explicitly: a transaction that belongs to no property belongs to no lock.
+    """
+    if not property_ids:
+        return None
+    return or_(
+        Transaction.property_id.is_(None),
+        Transaction.property_id.not_in(list(property_ids)),
+    )
 
 
 class TransactionRepository:
@@ -58,6 +73,7 @@ class TransactionRepository:
         to_date: date | None = None,
         limit: int = 100,
         offset: int = 0,
+        exclude_property_ids=None,
     ) -> list[Transaction]:
         stmt = (
             select(Transaction)
@@ -76,6 +92,8 @@ class TransactionRepository:
         )
         if type_filter is not None:
             stmt = stmt.where(Transaction.type == type_filter)
+        if (hidden := not_on_properties(exclude_property_ids)) is not None:
+            stmt = stmt.where(hidden)
         if property_id is not None:
             stmt = stmt.where(Transaction.property_id == property_id)
         if renter_id is not None:
@@ -107,7 +125,9 @@ class TransactionRepository:
         ).limit(limit).offset(offset)
         return list(self.session.scalars(stmt).all())
 
-    def get_monthly_summary(self, owner_id: str, from_date: date) -> list:
+    def get_monthly_summary(
+        self, owner_id: str, from_date: date, exclude_property_ids=None
+    ) -> list:
         # Bucketed by the effective date, so the chart's bars line up with the month
         # sections of the list below it (and with the income/expense report).
         year_col = func.extract('year', EFFECTIVE_DATE).cast(Integer)
@@ -130,9 +150,13 @@ class TransactionRepository:
             .group_by(year_col, month_col)
             .order_by(year_col, month_col)
         )
+        if (hidden := not_on_properties(exclude_property_ids)) is not None:
+            stmt = stmt.where(hidden)
         return list(self.session.execute(stmt).all())
 
-    def get_ytd_by_owner(self, owner_id: str, from_date: date) -> list:
+    def get_ytd_by_owner(
+        self, owner_id: str, from_date: date, exclude_property_ids=None
+    ) -> list:
         # Net per *property owner* (the free-text Property.property_owner), same
         # effective-date rule as the monthly summary so the sidebar card and the
         # income/expense report agree. Outer join: property_id is ON DELETE SET NULL,
@@ -154,6 +178,8 @@ class TransactionRepository:
             )
             .group_by(Property.property_owner)
         )
+        if (hidden := not_on_properties(exclude_property_ids)) is not None:
+            stmt = stmt.where(hidden)
         return list(self.session.execute(stmt).all())
 
     def update(self, transaction_id: int, owner_id: str, fields: dict, new_categories: Optional[list] = None) -> Transaction | None:

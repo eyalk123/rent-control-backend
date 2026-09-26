@@ -59,7 +59,8 @@ class EntitlementState:
     property_count: int
     #: Properties the account may write to, oldest first.
     writable_property_ids: list[int]
-    #: Properties over the plan's ceiling — readable and exportable, never writable.
+    #: Properties over the plan's ceiling — closed to everything but the properties list
+    #: (as a stub), deletion and the account export.
     locked_property_ids: list[int]
     #: Whether a paid grant or grandfather grant is what is providing the plan.
     granted: bool
@@ -175,17 +176,31 @@ class EntitlementGate:
         body["current_count"] = state.property_count
         raise HTTPException(status_code=PAYMENT_REQUIRED, detail=body)
 
-    def require_property_writable(self, owner_id: str, property_id: int | None) -> None:
-        """Refuse a write to a property over the plan's ceiling.
+    def hidden_property_ids(self, owner_id: str) -> frozenset[int]:
+        """Properties every read must leave out: the locked ones, while enforcement is on.
+
+        The single place read paths ask, so ``ENTITLEMENT_ENFORCED`` is honoured once rather
+        than at every list, summary, report and job that filters. Empty while enforcement
+        is off, which leaves every read exactly as it was.
+        """
+        state = self.state_for(owner_id)
+        if not state.enforced:
+            return frozenset()
+        return frozenset(state.locked_property_ids)
+
+    def require_property_unlocked(self, owner_id: str, property_id: int | None) -> None:
+        """Refuse any access — read or write — to a property over the plan's ceiling.
 
         ``property_id`` of ``None`` passes: a transaction or renter that belongs to no
         property is not gated by any property's lock.
 
-        This covers the property itself *and* its dependent records — a locked property
-        that still accepted rent entries and lease edits would not be locked in any sense
-        a landlord would recognise, and the half-locked version is harder to explain than
-        the whole one. Reads, reports and exports are never gated: nothing is hidden and
-        nothing is deleted, which is what the published refund policy promises.
+        This covers the property itself *and* its dependent records: its renters,
+        transactions and documents. A locked property is not a read-only one — a downgraded
+        account that could still browse every property it no longer pays for would have
+        lost almost nothing. Three things stay open on purpose, and none of them come
+        through here: the properties list shows it as a stub, deleting it is allowed (that
+        is how an account gets back under its limit), and the account export includes it
+        (it is the landlord's data, and paying must not be the only way to get it back).
         """
         if property_id is None:
             return

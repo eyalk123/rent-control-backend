@@ -66,8 +66,16 @@ def _lease_years_to_dicts(lease_years) -> list[dict]:
     return out
 
 
+def _rule_mode(year: dict) -> str | None:
+    rule = year.get("rule")
+    return rule.get("mode") if isinstance(rule, dict) else None
+
+
 def _carry_forward_server_fields(
-    incoming: list[dict], stored_raw: str | None, keep_readings: bool
+    incoming: list[dict],
+    stored_raw: str | None,
+    keep_readings: bool,
+    mode: str | None = None,
 ) -> list[dict]:
     """Re-attach the per-year fields the server owns and the client never sends.
 
@@ -80,6 +88,13 @@ def _carry_forward_server_fields(
       unfreezes years the tenant has already started paying. Carried only when
       ``keep_readings``, which is false while ``lease_start`` is changing: every
       anniversary moves, so the stored readings are for the wrong months.
+
+      Under ``custom`` it is carried only onto a year that was CPI and still is, and the
+      stored **amount** comes with it. The client cannot price a CPI year, so what it
+      sends there is a flat projection off the year before — and a frozen year keeps the
+      amount it is handed, so trusting the payload wrote that projection over a settled
+      rent on every save of the form. A year switched *away* from CPI gets no reading,
+      which is what lets its new rule price it instead of the freeze.
     - ``generated`` — whether ``run-lease-generation`` appended this period rather than the
       owner agreeing it. Carried unconditionally: moving the lease start does not turn a
       generated period into a negotiated one, and losing the flag is what makes the
@@ -98,7 +113,11 @@ def _carry_forward_server_fields(
         if i >= len(stored) or not isinstance(stored[i], dict):
             continue
         if keep_readings and "cpi_reading" in stored[i]:
-            year["cpi_reading"] = stored[i]["cpi_reading"]
+            if mode != "custom":
+                year["cpi_reading"] = stored[i]["cpi_reading"]
+            elif _rule_mode(year) == "cpi" and _rule_mode(stored[i]) == "cpi":
+                year["cpi_reading"] = stored[i]["cpi_reading"]
+                year["amount"] = stored[i]["amount"]
         if stored[i].get("generated"):
             year["generated"] = True
     return incoming
@@ -132,7 +151,7 @@ class RenterService:
         owner_repository: OwnerRepository | None = None,
         entitlement_gate: EntitlementGate | None = None,
     ):
-        # A renter belongs to a property, so a locked property's leases are locked too —
+        # A renter belongs to a property, so a locked property's leases are closed too —
         # a property that still accepted lease edits would not be locked in any sense a
         # landlord would recognise. Optional, so call sites predating billing are
         # unaffected.
@@ -245,8 +264,19 @@ class RenterService:
         )
         return materialized, base_index
 
+    def _hidden_property_ids(self, owner_id: str) -> frozenset[int]:
+        """Locked properties whose renters every list leaves out. Empty with no gate."""
+        if self.entitlement_gate is None:
+            return frozenset()
+        return self.entitlement_gate.hidden_property_ids(owner_id)
+
     def list_renters(self, owner_id: str):
-        return self.renter_repository.get_all(owner_id=owner_id)
+        renters = self.renter_repository.get_all(owner_id=owner_id)
+        hidden = self._hidden_property_ids(owner_id)
+        if not hidden:
+            return renters
+        # A renter with no property belongs to no lock and stays listed.
+        return [r for r in renters if r.property_id not in hidden]
 
     def get_renter(self, renter_id: int, owner_id: str):
         renter = self.renter_repository.get_by_id(renter_id)
@@ -258,6 +288,11 @@ class RenterService:
     def _check_renter_access(self, renter: Renter, owner_id: str) -> None:
         if renter.owner_id is not None and renter.owner_id != owner_id:
             raise HTTPException(status_code=403, detail="Access denied")
+        # Every single-renter path comes through here — read, edit, terminate, undo,
+        # delete — so a renter on a locked property is closed to all of them at once.
+        # After the ownership check, so another owner's renter is still a plain 403.
+        if self.entitlement_gate is not None:
+            self.entitlement_gate.require_property_unlocked(owner_id, renter.property_id)
 
     def _guard_index_linkage(
         self, mode: str | None, lease_years: list[dict], property_id: int | None, owner_id: str
@@ -333,7 +368,7 @@ class RenterService:
             if property is None:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
             if self.entitlement_gate is not None:
-                self.entitlement_gate.require_property_writable(owner_id, data.property_id)
+                self.entitlement_gate.require_property_unlocked(owner_id, data.property_id)
         mode = data.rent_escalation_mode.value if data.rent_escalation_mode else None
         lease_years_payload = _lease_years_to_dicts(data.lease_years)
         self._guard_index_linkage(mode, lease_years_payload, data.property_id, owner_id)
@@ -390,7 +425,7 @@ class RenterService:
         self._check_renter_access(renter, owner_id)
         # The lease may already sit on a locked property without the payload naming it.
         if self.entitlement_gate is not None:
-            self.entitlement_gate.require_property_writable(owner_id, renter.property_id)
+            self.entitlement_gate.require_property_unlocked(owner_id, renter.property_id)
         update_dict = data.model_dump(exclude_unset=True)
         sent = set(update_dict)
         if "property_id" in update_dict and update_dict["property_id"] is not None:
@@ -400,7 +435,7 @@ class RenterService:
             if property is None:
                 raise HTTPException(status_code=403, detail="Property not found or access denied")
             if self.entitlement_gate is not None:
-                self.entitlement_gate.require_property_writable(
+                self.entitlement_gate.require_property_unlocked(
                     owner_id, update_dict["property_id"]
                 )
         if "extra_contacts" in update_dict and update_dict["extra_contacts"] is not None:
@@ -453,6 +488,7 @@ class RenterService:
                     _lease_years_to_dicts(data.lease_years),
                     renter.lease_years,
                     keep_readings="lease_start" not in update_dict,
+                    mode=mode,
                 )
             else:
                 lease_years_dicts = json.loads(renter.lease_years) if renter.lease_years else []
@@ -623,8 +659,11 @@ class RenterService:
             renter_ids=renter_ids,
         )
 
+        hidden = self._hidden_property_ids(owner_id)
         result = []
         for r in renters:
+            if r.property_id in hidden:
+                continue
             interval = _payment_interval_months(r.number_of_payments)
             # Skip months where rent isn't due for this renter's cadence (e.g. the
             # off-months of a quarterly cycle, anchored on lease_start).
@@ -673,8 +712,11 @@ class RenterService:
             property_owners=property_owners,
             renter_ids=renter_ids,
         )
+        hidden = self._hidden_property_ids(owner_id)
         result = []
         for r in renters:
+            if r.property_id in hidden:
+                continue
             days_left = (r.contract_end - today).days
             prop = r.property
             result.append(ExpiringRenterRead(

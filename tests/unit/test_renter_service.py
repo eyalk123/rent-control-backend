@@ -4,12 +4,14 @@ from datetime import date, timedelta
 
 import pytest
 from fastapi import HTTPException
+from dateutil.relativedelta import relativedelta
 from freezegun import freeze_time
 
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from pydantic import ValidationError
 
+from app.repositories.cpi_index_repository import reference_period
 from app.schemas.renter import (
     ExtraContact,
     LeaseYear,
@@ -19,12 +21,14 @@ from app.schemas.renter import (
 )
 from app.services.renter_service import (
     RenterService,
+    _carry_forward_server_fields,
     _lease_end_dates,
     _payment_interval_months,
 )
 from tests.conftest import OWNER_A
 from tests.factories import make_property, make_renter, make_transaction
 from app.models.transaction import TransactionTypeEnum
+from app.services.cpi_indexing_service import IndexReading, materialize_ruled_lease_years
 
 
 def _service(db_session):
@@ -397,3 +401,98 @@ def test_read_schema_still_serialises_a_legacy_unsupported_cadence(db_session):
         lease_years=[{"amount": 5000, "type": "contract"}],
     )
     assert RenterRead.model_validate(renter).number_of_payments == 6
+
+
+
+# ── Saving a custom lease whose current year is CPI-linked and already started ─────
+#
+# The client cannot price a CPI year, so it sends last year's rent as a flat projection.
+# The stored schedule below has year three settled at 32,130 against its own index month.
+
+
+def _settled_custom_lease():
+    lease_start = date.today() - relativedelta(months=30)
+    by_year = {lease_start.year + i: 100 * 1.02**i for i in range(5)}
+    lookup = lambda d: IndexReading(*reference_period(d), by_year[d.year])  # noqa: E731
+    stored = materialize_ruled_lease_years(
+        [
+            {"amount": 30000, "type": "contract"},
+            {"amount": 0, "type": "contract", "rule": {"mode": "percent", "value": 5}},
+            {"amount": 0, "type": "option", "rule": {"mode": "cpi"}},
+            {"amount": 0, "type": "option", "rule": {"mode": "cpi"}},
+        ],
+        lease_start,
+        30000,
+        lookup,
+    )
+    return lease_start, lookup, stored
+
+
+def _resave(stored, incoming, lease_start, lookup):
+    carried = _carry_forward_server_fields(
+        incoming, json.dumps(stored), keep_readings=True, mode="custom"
+    )
+    return materialize_ruled_lease_years(carried, lease_start, 30000, lookup)
+
+
+def test_untouched_save_keeps_a_settled_cpi_year():
+    """Any save of the edit form sends the flat projection; it must not replace the
+    settled rent the tenant is already paying."""
+    lease_start, lookup, stored = _settled_custom_lease()
+    settled = stored[2]["amount"]
+    assert settled != 31500  # the fixture is only meaningful if the index moved it
+
+    out = _resave(
+        stored,
+        [
+            {"amount": 30000, "type": "contract"},
+            {"amount": 31500, "type": "contract", "rule": {"mode": "percent", "value": 5}},
+            {"amount": 31500, "type": "option", "rule": {"mode": "cpi"}},
+            {"amount": 31500, "type": "option", "rule": {"mode": "cpi"}},
+        ],
+        lease_start,
+        lookup,
+    )
+
+    assert [y["amount"] for y in out] == [y["amount"] for y in stored]
+
+
+def test_a_started_cpi_year_switched_to_manual_keeps_the_typed_amount():
+    lease_start, lookup, stored = _settled_custom_lease()
+
+    out = _resave(
+        stored,
+        [
+            {"amount": 30000, "type": "contract"},
+            {"amount": 31500, "type": "contract", "rule": {"mode": "percent", "value": 5}},
+            {"amount": 33000, "type": "option", "rule": {"mode": "manual"}},
+            {"amount": 33000, "type": "option", "rule": {"mode": "cpi"}},
+        ],
+        lease_start,
+        lookup,
+    )
+
+    assert out[2]["amount"] == 33000
+    # No longer index-linked, so it carries no reading and can't freeze.
+    assert "cpi_reading" not in out[2]
+
+
+def test_a_started_cpi_year_switched_to_percent_is_priced_by_its_rule():
+    """The freeze is for CPI years. Carrying the reading onto a percent year made the
+    server keep whatever amount the client sent, whatever the rule said."""
+    lease_start, lookup, stored = _settled_custom_lease()
+
+    out = _resave(
+        stored,
+        [
+            {"amount": 30000, "type": "contract"},
+            {"amount": 31500, "type": "contract", "rule": {"mode": "percent", "value": 5}},
+            {"amount": 99999, "type": "option", "rule": {"mode": "percent", "value": 3}},
+            {"amount": 31500, "type": "option", "rule": {"mode": "cpi"}},
+        ],
+        lease_start,
+        lookup,
+    )
+
+    assert out[2]["amount"] == round(31500 * 1.03)
+    assert "cpi_reading" not in out[2]

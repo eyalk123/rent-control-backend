@@ -18,6 +18,7 @@ CASH = "cash"
 SUPPORTED_BASES = (ACCRUAL, CASH)
 from app.services import country_service, money_format
 from app.models.transaction import Transaction, TransactionTypeEnum
+from app.repositories.transaction_repository import not_on_properties
 from app.schemas.report import (
     ExpenseLogReportResponse,
     ExpenseLogRow,
@@ -324,7 +325,11 @@ def _bidi_kwargs(kwargs: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def get_income_expense_data(
-    db: Session, owner_id: str, year: int, basis: str = ACCRUAL
+    db: Session,
+    owner_id: str,
+    year: int,
+    basis: str = ACCRUAL,
+    exclude_property_ids=None,
 ) -> IncomeExpenseReportResponse:
     """The income-and-expense figures for one year, on one revenue recognition basis.
 
@@ -369,6 +374,9 @@ def get_income_expense_data(
         )
         .options(selectinload(Transaction.property))
     )
+    # Locked properties are left out of reports entirely; see EntitlementGate.
+    if (hidden := not_on_properties(exclude_property_ids)) is not None:
+        stmt = stmt.where(hidden)
     filtered = list(db.scalars(stmt).all())
 
     # owner_name → property_address → month (1-12) → {revenue, expenses}
@@ -450,7 +458,11 @@ def get_income_expense_data(
 
 
 def get_expense_log_data(
-    db: Session, owner_id: str, year: int, lang: str = DEFAULT_LANG
+    db: Session,
+    owner_id: str,
+    year: int,
+    lang: str = DEFAULT_LANG,
+    exclude_property_ids=None,
 ) -> ExpenseLogReportResponse:
     stmt = (
         select(Transaction)
@@ -467,6 +479,8 @@ def get_expense_log_data(
         )
         .order_by(Transaction.date_of_payment)
     )
+    if (hidden := not_on_properties(exclude_property_ids)) is not None:
+        stmt = stmt.where(hidden)
     transactions = list(db.scalars(stmt).all())
 
     rows_out: list[ExpenseLogRow] = []

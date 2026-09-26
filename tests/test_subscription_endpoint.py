@@ -242,15 +242,15 @@ def test_nothing_is_marked_locked_for_a_grandfathered_account(client, db_session
     assert all(p["locked"] is False for p in client.get("/properties").json())
 
 
-def test_a_locked_property_still_reads_fully(client, db_session, enforced):
-    """Locked means read-only, never hidden. `/refunds` promises publicly that data is
-    never removed because of a plan change."""
+def test_a_locked_property_cannot_be_opened(client, db_session, enforced):
+    """Locked means inaccessible, not read-only: the detail is a 402 the clients render
+    as an upgrade screen. The full surface is in test_locked_property_access.py."""
     _owner(db_session)
     props = _properties(db_session, 4)
 
     response = client.get(f"/properties/{props[3].id}")
-    assert response.status_code == 200
-    assert response.json()["address"] == "4 Test St"
+    assert response.status_code == 402
+    assert response.json()["detail"]["error"] == "property_locked"
 
 
 def test_writing_to_a_locked_property_is_refused_through_the_api(

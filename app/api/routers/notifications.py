@@ -89,10 +89,14 @@ def list_notifications(
     live_data = reminder_service.live_data_by_group(generation.candidates)
 
     representatives = _collapse(notification_repository.list_for_owner(owner_id))
+    # Alerts about a renter on a locked property would open a 402. Hidden, not deleted.
+    hidden_renters = reminder_service.hidden_renter_ids(owner_id)
 
     result: list[NotificationRead] = []
     for n, group_read in representatives:
         if status == "unread" and group_read:
+            continue
+        if n.entity_id in hidden_renters:
             continue
         renter = renter_repository.get_by_id(n.entity_id)
         if renter is None:  # renter deleted — skip the dangling notification

@@ -39,6 +39,7 @@ from app.services.notification_messages import (
     render_overdue,
 )
 from app.models.notification import NotificationTypeEnum
+from app.services.entitlement_gate import EntitlementGate
 from app.services.push_service import PushService
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ class ReminderService:
         push_service: PushService,
         device_token_repository: DeviceTokenRepository,
         owner_repository: OwnerRepository | None = None,
+        entitlement_gate: EntitlementGate | None = None,
     ):
         self.engine = engine
         self.notification_repository = notification_repository
@@ -91,6 +93,27 @@ class ReminderService:
         # it the money in a push resolves to Israel, which is today's behaviour exactly.
         # Same shape as `PropertyService.__init__`.
         self.owner_repository = owner_repository
+        # Optional for the same reason: without it no property is locked, so every renter
+        # is reminded about, which is what every account had before billing existed.
+        self.entitlement_gate = entitlement_gate
+
+    def hidden_renter_ids(self, owner_id: str) -> set[int]:
+        """Renters on a locked property: nothing is generated, listed or pushed for them.
+
+        A reminder about a property the owner cannot open would lead to a 402, and a
+        locked property that kept sending rent alerts would still be doing its job. Rows
+        already stored are kept, not deleted, so they return if the property unlocks.
+        """
+        if self.entitlement_gate is None:
+            return set()
+        hidden = self.entitlement_gate.hidden_property_ids(owner_id)
+        if not hidden:
+            return set()
+        return {
+            r.id
+            for r in self.renter_repository.get_all(owner_id=owner_id)
+            if r.property_id in hidden
+        }
 
     def generate_for_owner(
         self, owner_id: str, today: date | None = None
@@ -107,7 +130,13 @@ class ReminderService:
         # per renter *per event type per offset*, so the old row-at-a-time check turned
         # a single feed read into ~one query per reminder on screen.
         already_generated = self.notification_repository.generated_keys(owner_id)
+        # Filtered only here, after `_dismiss_resolved` has seen every candidate: leaving a
+        # locked renter's candidates out of that would read as "resolved" and dismiss its
+        # live alerts, which should come back as they were if the property unlocks.
+        hidden_renters = self.hidden_renter_ids(owner_id)
         for cand in candidates:
+            if cand.renter_id in hidden_renters:
+                continue
             key = (cand.type, cand.renter_id, cand.period_key, cand.offset)
             if key in already_generated:
                 continue
@@ -190,6 +219,10 @@ class ReminderService:
             rows = self.notification_repository.list_unpushed_for_owner(
                 owner_id, not_before=cutoff
             )
+            # Rows stored before the property locked. Left unpushed rather than marked
+            # pushed, so nothing about them is settled while the owner cannot see them.
+            hidden_renters = self.hidden_renter_ids(owner_id)
+            rows = [r for r in rows if r.entity_id not in hidden_renters]
             if rows:
                 summary["pushed"] += self._push(owner_id, rows)
         logger.info("Daily reminders: %s", summary)

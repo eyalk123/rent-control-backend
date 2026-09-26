@@ -4,13 +4,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user, get_report_export_repository
+from app.api.dependencies import (
+    get_current_user,
+    get_entitlement_gate,
+    get_report_export_repository,
+)
 from app.database import get_db
 from app.services import country_service
 from app.models.report_export import ReportExport
 from app.repositories.owner_repository import OwnerRepository
 from app.repositories.report_export_repository import ReportExportRepository
 from app.schemas.report import ReportExportRead
+from app.services.entitlement_gate import EntitlementGate
 from app.services.report_service import (
     generate_expense_log_csv,
     generate_expense_log_pdf,
@@ -52,6 +57,7 @@ def income_expense_report(
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     repo: Annotated[ReportExportRepository, Depends(get_report_export_repository)],
+    gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
     lang: str = Query("en", pattern="^(en|he)$"),
@@ -60,7 +66,13 @@ def income_expense_report(
     # does not pass it gets exactly what this endpoint always returned.
     basis: str = Query("accrual", pattern="^(accrual|cash)$"),
 ):
-    data = get_income_expense_data(db, current_user["user_id"], year, basis)
+    data = get_income_expense_data(
+        db,
+        current_user["user_id"],
+        year,
+        basis,
+        exclude_property_ids=gate.hidden_property_ids(current_user["user_id"]),
+    )
 
     if format == "csv":
         content = generate_income_expense_csv(data, lang).encode("utf-8-sig")
@@ -85,11 +97,18 @@ def expense_log_report(
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     repo: Annotated[ReportExportRepository, Depends(get_report_export_repository)],
+    gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
     lang: str = Query("en", pattern="^(en|he)$"),
 ):
-    data = get_expense_log_data(db, current_user["user_id"], year, lang)
+    data = get_expense_log_data(
+        db,
+        current_user["user_id"],
+        year,
+        lang,
+        exclude_property_ids=gate.hidden_property_ids(current_user["user_id"]),
+    )
 
     if format == "csv":
         content = generate_expense_log_csv(data, lang).encode("utf-8-sig")
