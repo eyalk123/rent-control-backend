@@ -162,6 +162,7 @@ def _legal_status(repository: LegalAcceptanceRepository, owner_id: str) -> Legal
     return LegalStatusRead(
         terms=_read_or_none(latest.get(LegalDocumentEnum.TERMS)),
         privacy=_read_or_none(latest.get(LegalDocumentEnum.PRIVACY)),
+        ai_processing=_read_or_none(latest.get(LegalDocumentEnum.AI_PROCESSING)),
         required_terms_version=settings.CURRENT_TERMS_VERSION,
         required_privacy_version=settings.CURRENT_PRIVACY_VERSION,
     )

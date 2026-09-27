@@ -33,6 +33,10 @@ from app.models.device_token import DevicePlatformEnum
 class LegalDocumentEnum(str, enum.Enum):
     TERMS = "terms"
     PRIVACY = "privacy"
+    # Permission to send lease documents and assistant questions to Anthropic (App Store
+    # Guideline 5.1.2(i)). Not a document the app is gated on: the mobile app asks for it
+    # the first time a user scans a lease or messages the assistant.
+    AI_PROCESSING = "ai_processing"
 
 
 class LegalAcceptance(Base):

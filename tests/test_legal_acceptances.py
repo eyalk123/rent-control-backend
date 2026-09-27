@@ -193,3 +193,27 @@ def test_acceptances_are_scoped_to_the_owner(client_factory, db_session):
     body = client_factory(OWNER_B).get("/users/me/legal").json()
 
     assert body["terms"] is None, "one owner must not see another's acceptance"
+
+
+# --- AI processing consent -------------------------------------------------------
+
+def test_ai_processing_consent_is_recorded_and_reported_separately(client):
+    _accept_both(client)
+    response = client.post(
+        "/users/me/legal",
+        json={
+            "platform": "ios",
+            "acceptances": [{"document": "ai_processing", "version": V1, "locale": "he"}],
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["ai_processing"]["version"] == V1
+    assert body["ai_processing"]["locale"] == "he"
+    assert body["terms"]["version"] == V1, "consenting to AI must not disturb the Terms record"
+
+
+def test_ai_processing_is_absent_until_given(client):
+    _accept_both(client)
+    assert client.get("/users/me/legal").json()["ai_processing"] is None

@@ -43,5 +43,6 @@ class LegalStatusRead(BaseModel):
 
     terms: LegalAcceptanceRead | None = None
     privacy: LegalAcceptanceRead | None = None
+    ai_processing: LegalAcceptanceRead | None = None
     required_terms_version: str
     required_privacy_version: str
