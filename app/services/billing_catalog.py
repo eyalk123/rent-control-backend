@@ -23,11 +23,27 @@ Identifier formats per store, for when the mobile products exist:
 from app.services import entitlement_service as ent
 
 PRODUCT_PLANS: dict[str, tuple[str, str]] = {
-    # Paddle (live). Prices: $15/$150, $20/$200, $25/$250.
+    # Paddle (live). Base prices $15/$135, $20/$180, $25/$225 (yearly = 9 × monthly), with
+    # local prices in EUR (eurozone) and ILS (Israel); the stores are priced to match.
     "pri_01m39bzfjqd489x258g3srtg9v": (ent.PLAN_TIER_3_8, "monthly"),
     "pri_01m39c0e8mx96spd6sagf972ny": (ent.PLAN_TIER_3_8, "yearly"),
     "pri_01m39c1sm362n1j2jvd7jhxs32": (ent.PLAN_TIER_9_15, "monthly"),
     "pri_01m39c2j8af8j4vd49n2t5hsm6": (ent.PLAN_TIER_9_15, "yearly"),
     "pri_01m39c3qa4597sp255tbbhes17": (ent.PLAN_TIER_16_PLUS, "monthly"),
     "pri_01m39c45cxf0jwj12gb7aq6b7h": (ent.PLAN_TIER_16_PLUS, "yearly"),
+    # App Store (docs/APP_STORE_SUBSCRIPTIONS_PROMPT.md).
+    "rentvance.tier_3_8.monthly": (ent.PLAN_TIER_3_8, "monthly"),
+    "rentvance.tier_3_8.yearly": (ent.PLAN_TIER_3_8, "yearly"),
+    "rentvance.tier_9_15.monthly": (ent.PLAN_TIER_9_15, "monthly"),
+    "rentvance.tier_9_15.yearly": (ent.PLAN_TIER_9_15, "yearly"),
+    "rentvance.tier_16_plus.monthly": (ent.PLAN_TIER_16_PLUS, "monthly"),
+    "rentvance.tier_16_plus.yearly": (ent.PLAN_TIER_16_PLUS, "yearly"),
+    # Google Play, as RevenueCat reports it: `subscriptionId:basePlanId`
+    # (docs/PLAY_SUBSCRIPTIONS_PROMPT.md).
+    "tier_3_8:monthly": (ent.PLAN_TIER_3_8, "monthly"),
+    "tier_3_8:yearly": (ent.PLAN_TIER_3_8, "yearly"),
+    "tier_9_15:monthly": (ent.PLAN_TIER_9_15, "monthly"),
+    "tier_9_15:yearly": (ent.PLAN_TIER_9_15, "yearly"),
+    "tier_16_plus:monthly": (ent.PLAN_TIER_16_PLUS, "monthly"),
+    "tier_16_plus:yearly": (ent.PLAN_TIER_16_PLUS, "yearly"),
 }

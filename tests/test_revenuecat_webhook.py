@@ -370,6 +370,33 @@ def test_each_paddle_price_grants_its_band_and_period(
     assert (subscription.plan, subscription.period) == (plan, period)
 
 
+@pytest.mark.parametrize(
+    "product_id,plan,period",
+    [
+        ("rentvance.tier_3_8.monthly", ent.PLAN_TIER_3_8, "monthly"),
+        ("rentvance.tier_3_8.yearly", ent.PLAN_TIER_3_8, "yearly"),
+        ("rentvance.tier_9_15.monthly", ent.PLAN_TIER_9_15, "monthly"),
+        ("rentvance.tier_9_15.yearly", ent.PLAN_TIER_9_15, "yearly"),
+        ("rentvance.tier_16_plus.monthly", ent.PLAN_TIER_16_PLUS, "monthly"),
+        ("rentvance.tier_16_plus.yearly", ent.PLAN_TIER_16_PLUS, "yearly"),
+        # Play products arrive as `subscriptionId:basePlanId`.
+        ("tier_3_8:monthly", ent.PLAN_TIER_3_8, "monthly"),
+        ("tier_3_8:yearly", ent.PLAN_TIER_3_8, "yearly"),
+        ("tier_9_15:monthly", ent.PLAN_TIER_9_15, "monthly"),
+        ("tier_9_15:yearly", ent.PLAN_TIER_9_15, "yearly"),
+        ("tier_16_plus:monthly", ent.PLAN_TIER_16_PLUS, "monthly"),
+        ("tier_16_plus:yearly", ent.PLAN_TIER_16_PLUS, "yearly"),
+    ],
+)
+def test_each_store_product_grants_its_band_and_period(
+    client, signing, db_session, product_id, plan, period
+):
+    store = "PLAY_STORE" if ":" in product_id else "APP_STORE"
+    _post(client, _event(event_id=f"evt_{product_id}", product_id=product_id, store=store))
+    subscription = SubscriptionRepository(db_session).get_for_owner(OWNER_A)
+    assert (subscription.plan, subscription.period) == (plan, period)
+
+
 def test_every_mapped_plan_is_a_paid_plan():
     """A typo in the catalog must not map a price to a plan the rules don't know."""
     paid = {ent.PLAN_TIER_3_8, ent.PLAN_TIER_9_15, ent.PLAN_TIER_16_PLUS}
