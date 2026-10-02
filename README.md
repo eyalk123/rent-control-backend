@@ -385,16 +385,16 @@ means the catch-up never fires.
 
 ### Switching the onboarding tour on
 
-The guided tour (PLATFORM.md §3) is finished on both clients but ships **off**, behind a master
-flag in each app's `src/features/onboarding/flags.ts`. Turning it on is configuration, not a code
-change:
+The guided tour (PLATFORM.md §3) is finished on both clients and ships **on** in every build, for
+every account, via the master flag in each app's `src/features/onboarding/flags.ts`. Switching it
+off again is configuration, not a code change:
 
-- **Web** — set `VITE_ONBOARDING_TOURS=on` as a Railway variable on the web service. The
-  `Dockerfile` forwards it into the build. `rentvanceTours(true)` in the browser console is a
-  per-browser override that outranks it, for checking a deployed build without switching it on for
-  everyone.
-- **Mobile** — `EXPO_PUBLIC_ONBOARDING_TOURS=on`. The `preview` and `simulator` EAS profiles
-  already set it; `production` deliberately does not.
+- **Web** — set `VITE_ONBOARDING_TOURS=off` as a Railway variable on the web service. The
+  `Dockerfile` forwards it into the build. `rentvanceTours(false|true)` in the browser console is a
+  per-browser override that outranks it.
+- **Mobile** — `EXPO_PUBLIC_ONBOARDING_TOURS=off` in the build profile's `env`. Mobile builds
+  already in the stores keep whatever they were built with; the change reaches users with the next
+  store build.
 
 **Run this once, before the first switch-on:**
 
