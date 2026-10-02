@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -38,6 +39,22 @@ _LOWEST_OFFSET_WINS = (
     NotificationTypeEnum.LEASE_EXPIRING,
     NotificationTypeEnum.CPI_RENT_CHANGE,
 )
+
+
+def _lapsed(n: Notification, today: date) -> bool:
+    """A lease-expiring row whose lease has already reached its end.
+
+    Reconciliation normally dismisses these once the engine stops producing them, but it
+    skips muted or disabled events, so such a row can outlive its lease. With no live
+    candidate its ``days_until_expiry`` stays frozen, and a client reading that as
+    "N days from today" invents an end date in the future. Same cut-off as the engine
+    (``contract_end > today``)."""
+    if n.type != NotificationTypeEnum.LEASE_EXPIRING:
+        return False
+    try:
+        return date.fromisoformat(n.period_key) <= today
+    except ValueError:
+        return False
 
 
 def _collapse(rows: list[Notification]) -> list[tuple[Notification, bool]]:
@@ -83,6 +100,13 @@ def list_notifications(
     rent-due offsets [0, 3] — are collapsed to a single, most-urgent item so the
     feed reads as a to-handle list. Push (the cron path) still fires per offset."""
     owner_id = current_user["user_id"]
+    # Off means off: with notifications disabled nothing is generated or reconciled, so
+    # the stored rows are frozen and would go stale. They are kept, not dismissed — on
+    # the first read after switching back on, generation and reconciliation run here and
+    # the feed comes back current, without waiting for the daily cron.
+    settings = reminder_service.settings_repository.get(owner_id)
+    if settings is not None and not settings.master_enabled:
+        return []
     generation = reminder_service.generate_for_owner(owner_id)
     # A row's stored counts (days overdue / until expiry) are frozen at creation;
     # refresh them from the live candidate so the feed never shows a stale count.
@@ -92,9 +116,12 @@ def list_notifications(
     # Alerts about a renter on a locked property would open a 402. Hidden, not deleted.
     hidden_renters = reminder_service.hidden_renter_ids(owner_id)
 
+    today = date.today()
     result: list[NotificationRead] = []
     for n, group_read in representatives:
         if status == "unread" and group_read:
+            continue
+        if _lapsed(n, today):
             continue
         if n.entity_id in hidden_renters:
             continue

@@ -353,11 +353,49 @@ def test_feed_does_not_dismiss_when_notifications_disabled(client, db_session):
 
     assert _types(client.get("/notifications")) == ["overdue"]
 
-    db_session.add(NotificationSettings(owner_id=OWNER_A, master_enabled=False))
+    settings_row = NotificationSettings(owner_id=OWNER_A, master_enabled=False)
+    db_session.add(settings_row)
     db_session.commit()
 
-    # Still surfaced (the feed itself ignores settings); crucially, not dismissed.
+    # Hidden while off...
+    assert _types(client.get("/notifications")) == []
+
+    # ...but not dismissed: switching back on brings it straight back.
+    settings_row.master_enabled = True
+    db_session.commit()
     assert _types(client.get("/notifications")) == ["overdue"]
+
+
+def test_feed_is_current_on_the_first_read_after_switching_back_on(client, db_session):
+    """Rows frozen while notifications were off are reconciled on the first feed read
+    after re-enabling — a lease that ended meanwhile is gone, and one that came into
+    the window meanwhile appears — without waiting for the daily cron."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session, property_id=prop.id,
+        lease_start=date(2025, 9, 4), lease_end=date(2026, 9, 4),
+        payment_day_of_month=28,
+    )
+    later = make_renter(
+        db_session, property_id=prop.id,
+        lease_start=date(2025, 12, 1), lease_end=date(2026, 12, 1),
+        payment_day_of_month=28,
+    )
+
+    with freeze_time("2026-06-17"):
+        assert _types(client.get("/notifications")) == ["lease_expiring"]
+
+    settings_row = NotificationSettings(owner_id=OWNER_A, master_enabled=False)
+    db_session.add(settings_row)
+    db_session.commit()
+
+    with freeze_time("2026-10-01"):
+        assert client.get("/notifications").json() == []
+        settings_row.master_enabled = True
+        db_session.commit()
+        feed = client.get("/notifications").json()
+        assert [(n["type"], n["renter_id"]) for n in feed] == [("lease_expiring", later.id)]
+        assert feed[0]["data"]["days_until_expiry"] == 61
 
 
 def test_feed_refreshes_overdue_days_across_reads(client, db_session):
@@ -421,6 +459,31 @@ def test_feed_does_not_dismiss_muted_event(client, db_session):
     db_session.commit()
 
     assert _types(client.get("/notifications")) == ["overdue"]
+
+
+def test_feed_hides_lease_expiring_once_the_lease_has_ended(client, db_session):
+    """With the event muted, reconciliation leaves the row alone, so it outlives the
+    lease with a frozen days_until_expiry. The feed must stop showing it once the end
+    date arrives, rather than let a client read the stale count as a future date."""
+    prop = make_property(db_session)
+    make_renter(
+        db_session, property_id=prop.id,
+        lease_start=date(2025, 9, 4), lease_end=date(2026, 9, 4),
+        payment_day_of_month=28,  # not yet due -> isolates lease_expiring
+    )
+
+    with freeze_time("2026-06-17"):
+        assert _types(client.get("/notifications")) == ["lease_expiring"]
+
+    db_session.add(NotificationSettings(owner_id=OWNER_A, muted_events='["lease_expiring"]'))
+    db_session.commit()
+
+    with freeze_time("2026-09-03"):
+        assert _types(client.get("/notifications")) == ["lease_expiring"]
+    with freeze_time("2026-09-04"):
+        assert _types(client.get("/notifications")) == []
+    with freeze_time("2026-10-01"):
+        assert _types(client.get("/notifications")) == []
 
 
 # --- CPI rent change in the feed ---------------------------------------------
