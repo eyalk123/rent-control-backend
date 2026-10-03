@@ -120,7 +120,7 @@ Property fields:
   * Do NOT use any address from the parties block / signature area (the "בין ___ לבין ___" part). There each party's name is followed by "ת.ז ___" and "מרחוב ___" / "מ___" — those are the LANDLORD's and the TENANT's OWN home/mailing addresses. They are commonly the FIRST addresses in the document; taking one of them by mistake is the single most common error — do not.
   * If several street addresses appear, choose the one tied to המושכר/הדירה/הנכס, not the one tied to a person's name or ת.ז. If still unsure, pick the most likely property address and add a `notes` entry for `address` with its source_text.
   * `address` is the STREET NAME AND HOUSE NUMBER ONLY — never the apartment/unit number, and never the floor. The apartment number, when present, goes in `apartment` (below), NOT in `address`.
-- type: one of apartment, house, commercial, garden_apartment, housing_unit.
+- type: one of apartment, house, commercial, garden_apartment, housing_unit, penthouse (פנטהאוז).
 - number_of_rooms, floor: room count and floor number.
 - apartment: the apartment/unit number. In Hebrew leases this is very often written right after the street, frequently in parentheses — e.g. "ברח' בלפור 51 (דירה מס' 3)" → `address` = "בלפור 51", `apartment` = "3". Also handles forms like "דירה 3", "דירה מס' 3", "apt 3", "יח' 3". Extract just the number/identifier into `apartment` and keep it OUT of `address`.
 - property_owner: the landlord/owner's name.

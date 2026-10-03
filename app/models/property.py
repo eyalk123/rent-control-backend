@@ -22,6 +22,7 @@ class PropertyTypeEnum(str, enum.Enum):
     GARDEN_APARTMENT = "garden_apartment"  # Israel only
     HOUSING_UNIT = "housing_unit"  # Israel only
     CONDO_TOWNHOUSE = "condo_townhouse"
+    PENTHOUSE = "penthouse"
     ROOM = "room"
     OTHER = "other"
 

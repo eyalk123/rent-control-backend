@@ -13,6 +13,7 @@ class PropertyType(str, Enum):
     GardenApartment = "garden_apartment"  # Israel only
     HousingUnit = "housing_unit"  # Israel only
     CondoTownhouse = "condo_townhouse"
+    Penthouse = "penthouse"
     Room = "room"
     Other = "other"
 
