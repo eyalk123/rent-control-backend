@@ -11,6 +11,7 @@ from app.api.dependencies import get_current_owner
 from app.api.routers import (
     admin,
     agent,
+    app_version,
     countries,
     currencies,
     device_tokens,
@@ -110,6 +111,8 @@ app.include_router(notification_preferences.router, tags=["notification-preferen
 # gate runs before there is an account worth refreshing.
 app.include_router(countries.router, prefix="/countries", tags=["countries"])
 app.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
+# No _owner_refresh: an outdated app must learn it is outdated even when it cannot sign in.
+app.include_router(app_version.router, prefix="/app-version", tags=["app-version"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 # No _owner_refresh: RevenueCat has no Firebase user. The endpoint verifies an HMAC
 # signature over the raw body instead — see app/api/routers/webhooks.py.

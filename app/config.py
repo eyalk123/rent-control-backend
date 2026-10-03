@@ -153,6 +153,17 @@ class Settings(BaseSettings):
     CURRENT_TERMS_VERSION: str = "2026-06-09"
     CURRENT_PRIVACY_VERSION: str = "2026-06-09"
 
+    # --- Mobile app update prompt (GET /app-version) ---
+    # The newest store version per platform, and the oldest one still allowed to run.
+    # Below LATEST the app offers an update it can dismiss; below MINIMUM it offers one
+    # it cannot. Empty disables that half of the prompt, which is the default: bump these
+    # only once the release is actually live in that store, or users are sent to a store
+    # page that still shows the old build.
+    MOBILE_LATEST_VERSION_IOS: str = ""
+    MOBILE_LATEST_VERSION_ANDROID: str = ""
+    MOBILE_MIN_VERSION_IOS: str = ""
+    MOBILE_MIN_VERSION_ANDROID: str = ""
+
     # --- Internal analytics dashboard ---
     # Comma-separated Firebase UIDs allowed to reach /admin/*. Empty (the default) disables
     # the dashboard entirely: with no one on the list, every request 404s, which is the safe
