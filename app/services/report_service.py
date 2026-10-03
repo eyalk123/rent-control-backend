@@ -160,12 +160,14 @@ CATEGORY_LABELS = {
 PAYMENT_METHOD_LABELS = {
     "en": {
         "bit": "Bit",
+        "paybox": "PayBox",
         "cash": "Cash",
         "bank_transfer": "Bank transfer",
         "check": "Check",
     },
     "he": {
         "bit": "ביט",
+        "paybox": "פייבוקס",
         "cash": "מזומן",
         "bank_transfer": "העברה בנקאית",
         "check": "צ'ק",

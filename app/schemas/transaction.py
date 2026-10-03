@@ -13,6 +13,7 @@ class TransactionType(str, Enum):
 
 class PaymentMethod(str, Enum):
     bit = "bit"
+    paybox = "paybox"
     cash = "cash"
     bank_transfer = "bank_transfer"
     check = "check"
