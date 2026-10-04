@@ -47,6 +47,8 @@ class DocumentExtractionLogRepository:
             log.created_property_id = created_id
         elif entity_type == "renter" and created_id is not None:
             log.created_renter_id = created_id
+        elif entity_type == "transaction" and created_id is not None:
+            log.created_transaction_id = created_id
         if contract_url:
             log.contract_url = contract_url
         self.session.commit()

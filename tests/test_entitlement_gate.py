@@ -254,12 +254,13 @@ def test_a_grandfathered_account_is_never_refused(db_session, enforced):
 # ── Feature gates: lease scans and the assistant ─────────────────────────────
 
 
-def _scan(db_session, status_value, when=None):
+def _scan(db_session, status_value, when=None, kind="lease"):
     from app.models.document_extraction_log import DocumentExtractionLog
 
     db_session.add(
         DocumentExtractionLog(
             owner_id=OWNER_A,
+            kind=kind,
             status=status_value,
             created_at=when or datetime.utcnow(),
         )
@@ -286,6 +287,37 @@ def test_the_free_plan_allows_three_scans_then_refuses(db_session, enforced):
     assert raised.value.detail["used"] == 3
     # The client needs to be able to say when it comes back.
     assert raised.value.detail["resets_at"]
+
+
+def test_receipt_and_lease_scans_have_separate_allowances(db_session, enforced):
+    """Three receipts spend the receipt allowance only — the lease scans are untouched,
+    and the other way round."""
+    from fastapi import HTTPException
+
+    _owner(db_session, granted_plan=None)
+    gate = EntitlementGate(db_session)
+    for _ in range(3):
+        _scan(db_session, "success", kind="receipt")
+
+    with pytest.raises(HTTPException) as raised:
+        gate.require_receipt_scan(OWNER_A)
+    assert raised.value.status_code == 402
+    assert raised.value.detail["error"] == "receipt_scan_limit_reached"
+    assert raised.value.detail["limit"] == 3
+    gate.require_lease_scan(OWNER_A)  # does not raise
+
+    for _ in range(3):
+        _scan(db_session, "success", kind="lease")
+    with pytest.raises(HTTPException):
+        gate.require_lease_scan(OWNER_A)
+
+
+def test_a_paid_plan_has_no_receipt_scan_ceiling(db_session, enforced):
+    _owner(db_session, granted_plan=ent.PLAN_TIER_3_8)
+    for _ in range(50):
+        _scan(db_session, "success", kind="receipt")
+
+    EntitlementGate(db_session).require_receipt_scan(OWNER_A)  # does not raise
 
 
 def test_failed_scans_do_not_burn_the_allowance(db_session, enforced):

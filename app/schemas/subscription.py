@@ -51,4 +51,6 @@ class SubscriptionRead(BaseModel):
     # ── Feature limits, so a client can gate its own UI without a second call ─
     monthly_lease_scans: Optional[int] = None
     lease_scans_used: int = 0
+    monthly_receipt_scans: Optional[int] = None
+    receipt_scans_used: int = 0
     agent: bool = False

@@ -93,8 +93,10 @@ class SubscriptionRepository:
         self.session.refresh(subscription)
         return subscription
 
-    def count_lease_scans_since(self, owner_id: str, since: datetime) -> int:
-        """Successful lease extractions for this owner since ``since``.
+    def count_scans_since(self, owner_id: str, since: datetime, kind: str = "lease") -> int:
+        """Successful extractions of one ``kind`` (lease | receipt) for this owner since ``since``.
+
+        Each kind has its own allowance, so a receipt scan never spends a lease scan.
 
         Counts ``document_extraction_logs`` rather than keeping a counter, so the quota
         cannot drift from the thing it is counting, and so a refund or an investigation
@@ -110,6 +112,7 @@ class SubscriptionRepository:
                 .where(
                     DocumentExtractionLog.owner_id == owner_id,
                     DocumentExtractionLog.created_at >= since,
+                    DocumentExtractionLog.kind == kind,
                     DocumentExtractionLog.status == "success",
                 )
             )

@@ -1,12 +1,16 @@
-"""Router tests for /extract/lease + /extract/logs (auth, response shape, audit log)."""
+"""Router tests for /extract/lease, /extract/receipt + /extract/logs (auth, response shape, audit log)."""
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_current_user, get_document_extraction_service
 from app.database import get_db
 from app.main import app
 from app.models.document_extraction_log import DocumentExtractionLog
-from app.schemas.document_extraction import ExtractedRenter, LeaseExtraction
-from app.services.document_extraction_service import ExtractionMeta, ExtractionResult
+from app.schemas.document_extraction import ExtractedRenter, LeaseExtraction, ReceiptExtraction
+from app.services.document_extraction_service import (
+    ExtractionMeta,
+    ExtractionResult,
+    ReceiptExtractionResult,
+)
 from tests.conftest import OWNER_A, OWNER_B
 
 
@@ -137,3 +141,99 @@ def test_patch_log_rejects_other_owner(client_factory, db_session):
         json={"entity_type": "property", "created_id": 1, "fields_given_count": 0, "field_edits": []},
     )
     assert resp.status_code == 404
+
+
+# --- /extract/receipt ---
+
+
+class _StubReceiptService:
+    """Records the catalog the router built, returns a fixed draft."""
+
+    model_name = "claude-sonnet-4-6"
+
+    def __init__(self, draft):
+        self._result = ReceiptExtractionResult(extraction=draft, meta=_meta())
+        self.catalog = None
+
+    def extract_receipt(self, file_bytes, content_type, catalog, country=None):
+        self.catalog = catalog
+        return self._result
+
+
+def _post_receipt(client, stub, **data):
+    app.dependency_overrides[get_document_extraction_service] = lambda: stub
+    try:
+        return client.post(
+            "/extract/receipt",
+            files={"file": ("receipt.jpg", b"\xff\xd8 jpeg", "image/jpeg")},
+            data=data,
+        )
+    finally:
+        app.dependency_overrides.pop(get_document_extraction_service, None)
+
+
+def test_extract_receipt_matches_against_this_owners_active_records_only(client, db_session):
+    from tests.factories import make_expense_category, make_property, make_supplier
+
+    builtin = make_expense_category(db_session, owner_id=None, name=None, key="electricity")
+    mine = make_expense_category(db_session, name="Pool")
+    make_expense_category(db_session, owner_id=OWNER_B, name="Theirs")
+    supplier = make_supplier(db_session, name="Yossi", phone="0501234567", categories=[mine])
+    make_supplier(db_session, name="Retired", is_active=False, categories=[mine])
+    make_supplier(db_session, owner_id=OWNER_B, name="Not mine", categories=[builtin])
+    prop = make_property(db_session)
+    make_property(db_session, owner_id=OWNER_B)
+
+    stub = _StubReceiptService(ReceiptExtraction(amount=450, supplier_id=supplier.id))
+    resp = _post_receipt(client, stub)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["extraction"]["amount"] == 450
+    assert {c.label for c in stub.catalog.categories} == {"electricity", "Pool"}
+    assert [(s.id, s.name, s.category_ids) for s in stub.catalog.suppliers] == [
+        (supplier.id, "Yossi", (mine.id,))
+    ]
+    assert [p.id for p in stub.catalog.properties] == [prop.id]
+
+    log = db_session.get(DocumentExtractionLog, body["log_id"])
+    assert log.kind == "receipt"
+    assert log.status == "success"
+    assert log.filename == "receipt.jpg"
+
+
+def test_extract_receipt_skips_properties_when_the_client_already_has_one(client, db_session):
+    from tests.factories import make_property
+
+    make_property(db_session)
+    stub = _StubReceiptService(ReceiptExtraction())
+    resp = _post_receipt(client, stub, match_property="false")
+
+    assert resp.status_code == 200
+    assert stub.catalog.properties == ()
+
+
+def test_patch_log_records_the_created_expense(client, db_session):
+    from tests.factories import make_transaction
+
+    tx = make_transaction(db_session)
+    log = DocumentExtractionLog(owner_id=OWNER_A, kind="receipt", status="success")
+    db_session.add(log)
+    db_session.commit()
+    db_session.refresh(log)
+
+    resp = client.patch(
+        f"/extract/logs/{log.id}",
+        json={
+            "entity_type": "transaction",
+            "created_id": tx.id,
+            "fields_given_count": 3,
+            "field_edits": [
+                {"field": "transactions.amount", "prefilled_value": "450", "submitted_value": "480", "source_text": "48O"}
+            ],
+        },
+    )
+    assert resp.status_code == 204
+    db_session.refresh(log)
+    assert log.created_transaction_id == tx.id
+    assert log.fields_changed_count == 1

@@ -245,17 +245,36 @@ class EntitlementGate:
         landlord nothing and burning a third of their monthly allowance on it would be
         indefensible.
         """
+        state = self.state_for(owner_id)
+        self._require_scan(
+            owner_id, state, "lease", state.plan.monthly_lease_scans, "scan_limit_reached"
+        )
+
+    def require_receipt_scan(self, owner_id: str) -> None:
+        """Refuse a receipt scan once the plan's monthly receipt allowance is spent.
+
+        The same rules as :meth:`require_lease_scan`, against a separate allowance: the two
+        are counted apart, so a landlord who scans receipts still has their lease scans.
+        """
+        state = self.state_for(owner_id)
+        self._require_scan(
+            owner_id,
+            state,
+            "receipt",
+            state.plan.monthly_receipt_scans,
+            "receipt_scan_limit_reached",
+        )
+
+    def _require_scan(
+        self, owner_id: str, state, kind: str, allowance: int | None, error: str
+    ) -> None:
         from app.repositories.subscription_repository import SubscriptionRepository
 
-        state = self.state_for(owner_id)
-        if not state.enforced:
-            return
-        allowance = state.plan.monthly_lease_scans
-        if allowance is None:
+        if not state.enforced or allowance is None:
             return
 
-        used = SubscriptionRepository(self.session).count_lease_scans_since(
-            owner_id, _month_start()
+        used = SubscriptionRepository(self.session).count_scans_since(
+            owner_id, _month_start(), kind
         )
         if used < allowance:
             return
@@ -263,7 +282,7 @@ class EntitlementGate:
         raise HTTPException(
             status_code=PAYMENT_REQUIRED,
             detail={
-                "error": "scan_limit_reached",
+                "error": error,
                 "current_plan": state.plan.plan,
                 "limit": allowance,
                 "used": used,

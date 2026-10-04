@@ -1,0 +1,278 @@
+"""Receipt scanning: the prompt, the owner's catalog, and the post-model clean-up.
+
+The Anthropic call itself lives in :class:`DocumentExtractionService` with the lease scan,
+which shares its client, file handling and telemetry. What is receipt-specific is here.
+
+**The scanner never creates anything.** The owner's existing categories, suppliers and (when
+asked) properties are handed to the model as lists of ids, and the model may only pick from
+them. :func:`clean_receipt` then re-checks every id it returned against those same lists, so a
+made-up or out-of-scope id becomes an empty field rather than an error — or someone else's
+record. An empty field is the designed outcome when nothing matches.
+"""
+import io
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import Optional
+
+from fastapi import HTTPException, status
+
+from app.schemas.document_extraction import ReceiptExtraction, ReceiptFieldNote
+from app.services import country_service
+
+#: Longest edge a receipt photo is scaled down to before it is sent. Phone photos are 4000px
+#: and up, which is past the API's per-image byte limit and gains nothing — the model reads
+#: an image at a fixed resolution anyway. 2000px keeps handwriting legible after that.
+_MAX_IMAGE_EDGE = 2000
+
+
+@dataclass(frozen=True)
+class CategoryOption:
+    id: int
+    #: The built-in key ("electricity") or the name the owner typed for their own category.
+    label: str
+
+
+@dataclass(frozen=True)
+class SupplierOption:
+    id: int
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    category_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class PropertyOption:
+    id: int
+    label: str
+
+
+@dataclass(frozen=True)
+class ReceiptCatalog:
+    """What the scanner may pick from: the owner's active records, nothing else."""
+
+    categories: tuple[CategoryOption, ...] = ()
+    suppliers: tuple[SupplierOption, ...] = ()
+    #: Empty when the client already knows the property, which tells the model not to look.
+    properties: tuple[PropertyOption, ...] = field(default=())
+
+
+RECEIPT_TOOL_NAME = "record_receipt_extraction"
+RECEIPT_TOOL = {
+    "name": RECEIPT_TOOL_NAME,
+    "description": "Record the expense details read from the receipt.",
+    "input_schema": ReceiptExtraction.model_json_schema(),
+}
+
+# Byte-identical for every request so it can be prompt-cached; everything that varies per
+# account (country, the owner's lists) goes in later, uncached blocks.
+RECEIPT_SYSTEM_PROMPT = """You read a receipt, invoice or payment slip that a landlord paid, to pre-fill an expense form in a property-management app. Receipts are very often HANDWRITTEN — a receipt book filled in by hand (in Hebrew, פנקס קבלות), an amount scribbled onto a printed form, a rubber stamp — and are often photographed at an angle, in poor light, folded or crumpled. They may be in any language; many are Hebrew, where right-to-left text sits beside left-to-right numbers.
+
+Fill only what the receipt actually shows. Leave a field null when the receipt doesn't show it or you cannot read it. An empty field costs the user a few keystrokes; a wrong one can slip unnoticed into their books.
+
+Fields:
+- amount: the TOTAL actually paid (סה"כ, סה"כ לתשלום, Total), as a bare number — no currency symbol, no digit grouping. When the receipt shows items, a subtotal and VAT (מע"מ), take the final total including VAT. Add items up yourself only when no total is written at all, and then add a note.
+- date: the date of the receipt or payment, ISO YYYY-MM-DD. Handwritten dates often use a two-digit year ("3/9/26") — write the full year. Read slashed or dotted dates in the order given in the country block.
+- payment_method: exactly one of the values listed in the country block, and only when the receipt marks how it was paid — e.g. מזומן cash, המחאה / צ'ק / שיק check, העברה בנקאית bank_transfer, כרטיס אשראי card, ביט bit, פייבוקס paybox. Receipt books usually have a small table or checkboxes for this; read which one is filled in. A cheque number or bank/branch written in means check. Null if not shown.
+- supplier_name: the business or person who issued the receipt, exactly as written — usually printed or stamped at the top, sometimes only handwritten.
+- supplier_id: the id of the owner's supplier who issued the receipt, taken ONLY from the supplier list you are given. Match on the business name, allowing for spelling variants, abbreviations, Hebrew/English transliteration and suffixes such as בע"מ or Ltd — or on a phone number or email printed on the receipt. If no supplier on the list is clearly the same business, return null. Do not pick the nearest-sounding one, and never invent an id.
+- category_ids: ids from the category list you are given that describe what was paid for — usually exactly one. Decide from the items or description on the receipt, and from the matched supplier's own categories. If nothing on the list fits, return an empty list; do not fall back to a catch-all such as "other" just to fill the field. Never invent an id.
+- property_id: only when you are given a property list. The id of the property the work or purchase was for, ONLY if the receipt states an address that clearly matches one on the list. Otherwise null — never guess it from the supplier, the amount or anything else.
+
+READING HANDWRITING AND NUMBERS
+- Misread handwritten digits are the most common error. Look twice at 1/7, 4/9, 3/8, 5/6 and 0/6, and at whether a mark is a digit, a decimal point or a thousands separator.
+- When a receipt states the amount twice — in digits and in words (סכום במילים / the sum in words), or as a line and as a total — use each to check the other. If they disagree, take the one that reads more clearly and add a low-confidence note quoting both.
+- Thousands separators depend on the country convention given below. Output the bare value: "1.500" or "1,500" as one thousand five hundred → 1500; "1,234.56" → 1234.56.
+
+Confidence: for every field you are NOT highly confident about — hard to read, inferred, ambiguous, or a supplier/category match that rests on a guess — add one `notes` entry with its `field` (the exact field name above), `confidence` ("medium" or "low"), and `source_text` (the short text on the receipt you read it from, transcribed as you read it). No note for a field you are confident about, and never a note for a field you left empty.
+
+Return only the structured data."""
+
+RECEIPT_INSTRUCTION = "Extract the expense details from this receipt."
+
+#: Every value the transactions API accepts; narrowed per country in :func:`_allowed_methods`.
+_PAYMENT_METHODS = (
+    "cash", "bank_transfer", "check", "card", "mobile_payment", "other", "bit", "paybox",
+)
+#: The Israeli payment apps — offered only where the country has `bit_payments`.
+_BIT_LIKE = {"bit", "paybox"}
+_PAYMENT_ALIASES = {
+    "wire_transfer": "bank_transfer",
+    "credit_card": "card",
+    "cheque": "check",
+}
+
+_SEPARATOR_BRIEF = {
+    "1,234.56": "a comma groups thousands and a dot is the decimal point",
+    "1.234,56": 'a DOT groups thousands and a COMMA is the decimal point, so "1.500" is one thousand five hundred',
+    "1 234,56": "a space groups thousands and a comma is the decimal point",
+}
+_DATE_ORDER = {"DMY": "day before month", "MDY": "month before day", "YMD": "year first"}
+
+
+def _allowed_methods(country: str | None) -> list[str]:
+    config = country_service.config_for(country)
+    if config.capabilities.bit_payments:
+        return list(_PAYMENT_METHODS)
+    return [m for m in _PAYMENT_METHODS if m not in _BIT_LIKE]
+
+
+def country_brief(country: str | None) -> str:
+    """What this account's receipts are expected to look like, from the country table."""
+    config = country_service.config_for(country)
+    return "\n".join(
+        [
+            f"This account is in {config.name}. Unless the receipt itself clearly says "
+            f"otherwise, expect that:",
+            f"- Numbers are written so that {_SEPARATOR_BRIEF[config.number_format]}.",
+            f"- Amounts are in {config.currency}. Output the number alone, without a symbol.",
+            f"- A date written with slashes or dots puts the {_DATE_ORDER[config.date_format]}.",
+            "- `payment_method` must be one of: " + ", ".join(_allowed_methods(country)) + ".",
+        ]
+    )
+
+
+def catalog_text(catalog: ReceiptCatalog) -> str:
+    """The owner's lists, as the model sees them. Ids are what it must answer with."""
+    lines = ["Categories (id: name):"]
+    if catalog.categories:
+        lines += [f"- {c.id}: {c.label}" for c in catalog.categories]
+    else:
+        lines.append("- (none — category_ids is always empty)")
+
+    lines += ["", "Suppliers (id: name | phone | email | category ids):"]
+    if catalog.suppliers:
+        for s in catalog.suppliers:
+            cats = ", ".join(str(c) for c in s.category_ids) or "-"
+            lines.append(f"- {s.id}: {s.name} | {s.phone or '-'} | {s.email or '-'} | {cats}")
+    else:
+        lines.append("- (none — supplier_id is always null)")
+
+    if catalog.properties:
+        lines += ["", "Properties (id: address):"]
+        lines += [f"- {p.id}: {p.label}" for p in catalog.properties]
+    else:
+        lines += ["", "No property list is given: property_id is always null."]
+    return "\n".join(lines)
+
+
+def normalize_receipt_image(file_bytes: bytes) -> bytes:
+    """Upright, size-capped JPEG of a receipt photo.
+
+    Phones store a portrait photo as landscape pixels plus an EXIF "rotate me" flag. The flag
+    is applied here because a receipt read sideways is a receipt read badly, and nothing
+    downstream of this honours it. The size cap is explained at ``_MAX_IMAGE_EDGE``.
+    """
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            img = ImageOps.exif_transpose(img)
+            img = img.convert("RGB")
+            img.thumbnail((_MAX_IMAGE_EDGE, _MAX_IMAGE_EDGE))
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=90)
+            return out.getvalue()
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The image could not be read.",
+        )
+
+
+def clean_receipt(
+    extraction: ReceiptExtraction,
+    catalog: ReceiptCatalog,
+    country: str | None = None,
+    discarded: Optional[list[str]] = None,
+) -> ReceiptExtraction:
+    """Drop every value the form could not hold, then every note left about nothing.
+
+    The ids are the point: each is checked against the catalog the model was given, so
+    nothing outside the owner's own active records can reach the form. ``discarded`` is an
+    optional out-param naming what was thrown away, for the log.
+    """
+    def _drop(name: str) -> None:
+        if discarded is not None:
+            discarded.append(f"{name}={getattr(extraction, name)!r}")
+        setattr(extraction, name, [] if name == "category_ids" else None)
+
+    if extraction.amount is not None and extraction.amount <= 0:
+        _drop("amount")
+
+    if extraction.date is not None:
+        try:
+            parsed = date.fromisoformat(extraction.date)
+        except (ValueError, TypeError):
+            _drop("date")
+        else:
+            # A future date is far likelier a misread digit than a real receipt. It is kept
+            # and flagged rather than dropped: the user can see it and fix one digit.
+            if parsed > date.today() + timedelta(days=1):
+                _add_note(extraction, "date", f"{extraction.date} is in the future — check the year and month.")
+
+    if extraction.payment_method is not None:
+        method = _PAYMENT_ALIASES.get(extraction.payment_method, extraction.payment_method)
+        if method in _allowed_methods(country):
+            extraction.payment_method = method
+        else:
+            _drop("payment_method")
+
+    known_categories = {c.id for c in catalog.categories}
+    kept = list(dict.fromkeys(c for c in extraction.category_ids if c in known_categories))
+    if kept != extraction.category_ids:
+        if discarded is not None:
+            discarded.append(f"category_ids={extraction.category_ids!r}")
+        extraction.category_ids = kept
+
+    suppliers = {s.id: s for s in catalog.suppliers}
+    if extraction.supplier_id is not None:
+        supplier = suppliers.get(extraction.supplier_id)
+        if supplier is None:
+            _drop("supplier_id")
+        elif extraction.category_ids:
+            # The form only lets a supplier sit on an expense in one of their categories,
+            # and the API refuses the pair otherwise. The category is the better-supported
+            # reading of the two (it comes from what was bought), so it is the one kept.
+            if not set(supplier.category_ids) & set(extraction.category_ids):
+                _drop("supplier_id")
+        elif len(supplier.category_ids) == 1:
+            # A supplier who works in one category settles the category too.
+            extraction.category_ids = [supplier.category_ids[0]]
+        else:
+            # Several categories and no way to choose: the supplier could not be shown on
+            # the form anyway. `supplier_name` still tells the user who it was.
+            _drop("supplier_id")
+
+    if extraction.property_id is not None and extraction.property_id not in {
+        p.id for p in catalog.properties
+    }:
+        _drop("property_id")
+
+    if extraction.supplier_name is not None:
+        extraction.supplier_name = extraction.supplier_name.strip() or None
+
+    extraction.notes = [n for n in extraction.notes if _is_populated(extraction, n.field)]
+    return extraction
+
+
+def _is_populated(extraction: ReceiptExtraction, name: str) -> bool:
+    if name not in ReceiptExtraction.model_fields or name == "notes":
+        return False
+    value = getattr(extraction, name)
+    return bool(value) if isinstance(value, list) else value is not None
+
+
+def _add_note(extraction: ReceiptExtraction, name: str, text: str) -> None:
+    if any(n.field == name for n in extraction.notes):
+        return  # the model already flagged it; don't say it twice
+    extraction.notes.append(ReceiptFieldNote(field=name, confidence="low", source_text=text))
+
+
+def field_stats(extraction: ReceiptExtraction) -> tuple[int, int, int]:
+    """Count populated fields, and low/medium-confidence counts from the notes."""
+    names = ("amount", "date", "payment_method", "category_ids", "supplier_id", "property_id")
+    extracted = sum(1 for n in names if _is_populated(extraction, n))
+    low = sum(1 for n in extraction.notes if n.confidence == "low")
+    medium = sum(1 for n in extraction.notes if n.confidence == "medium")
+    return extracted, low, medium

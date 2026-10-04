@@ -246,9 +246,9 @@ def test_scan_count_includes_only_this_owner_this_period_and_only_successes(db_s
     # Another owner entirely.
     _scan(db_session, OWNER_B, "success", NOW - timedelta(days=1))
 
-    assert repo.count_lease_scans_since(OWNER_A, window_start) == 2
+    assert repo.count_scans_since(OWNER_A, window_start) == 2
 
 
 def test_scan_count_is_zero_for_an_owner_who_has_never_scanned(db_session):
     repo = SubscriptionRepository(db_session)
-    assert repo.count_lease_scans_since(OWNER_A, NOW - timedelta(days=30)) == 0
+    assert repo.count_scans_since(OWNER_A, NOW - timedelta(days=30)) == 0

@@ -1,4 +1,4 @@
-"""Lease document extraction via Claude (vision + structured output).
+"""Lease and receipt extraction via Claude (vision + structured output).
 
 The service is the only place that talks to the Anthropic API. It receives the
 raw upload bytes, builds the right content blocks for the file type, and asks Claude
@@ -34,8 +34,10 @@ from app.schemas.document_extraction import (
     ExtractedRenter,
     FieldNote,
     LeaseExtraction,
+    ReceiptExtraction,
 )
 from app.services import country_service
+from app.services import receipt_extraction as receipt
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,12 @@ class ExtractionMeta:
 @dataclass
 class ExtractionResult:
     extraction: LeaseExtraction
+    meta: ExtractionMeta
+
+
+@dataclass
+class ReceiptExtractionResult:
+    extraction: ReceiptExtraction
     meta: ExtractionMeta
 
 # MIME types Claude reads natively as images.
@@ -264,14 +272,7 @@ class DocumentExtractionService:
         resolves to Israel, which is what every extraction did before this existed.
         """
         content_blocks = self._build_content_blocks(file_bytes, content_type)
-        client = self._client()
-
-        # Use a NON-strict tool (not structured-outputs / messages.parse): the strict
-        # grammar compiler rejects a schema this large ("compiled grammar is too large").
-        # The model fills the tool's schema best-effort and we validate it ourselves.
-        response = client.messages.create(
-            model=self._model,
-            max_tokens=8192,
+        response, tool_input = self._call_tool(
             system=[
                 {
                     "type": "text",
@@ -284,38 +285,18 @@ class DocumentExtractionService:
                 # cache into one entry per country.
                 {"type": "text", "text": _country_brief(country)},
             ],
-            tools=[_EXTRACTION_TOOL],
-            tool_choice={"type": "tool", "name": _TOOL_NAME},
-            messages=[
+            tool=_EXTRACTION_TOOL,
+            content=[
+                *content_blocks,
                 {
-                    "role": "user",
-                    "content": [
-                        *content_blocks,
-                        {
-                            "type": "text",
-                            "text": "Extract the property and renter details from this lease document.",
-                        },
-                    ],
-                }
+                    "type": "text",
+                    "text": "Extract the property and renter details from this lease document.",
+                },
             ],
+            max_tokens=8192,
         )
-
-        if response.stop_reason == "refusal":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="The document could not be processed.",
-            )
-        tool_block = next(
-            (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
-        )
-        if tool_block is None:
-            # e.g. stop_reason == "max_tokens" — no complete tool call returned.
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Could not extract structured data from the document.",
-            )
         try:
-            parsed = LeaseExtraction.model_validate(tool_block.input)
+            parsed = LeaseExtraction.model_validate(tool_input)
         except ValidationError:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -334,13 +315,121 @@ class DocumentExtractionService:
                 self._model,
                 "; ".join(discarded),
             )
-        extracted, low, medium = _field_stats(extraction)
+        return ExtractionResult(
+            extraction=extraction, meta=self._meta(response, *_field_stats(extraction))
+        )
+
+    def extract_receipt(
+        self,
+        file_bytes: bytes,
+        content_type: str,
+        catalog: receipt.ReceiptCatalog,
+        country: str | None = None,
+    ) -> ReceiptExtractionResult:
+        """Read an expense draft from a receipt photo or PDF, matched against ``catalog``.
+
+        Only images and PDFs are accepted — a receipt is not a Word document. Photos are
+        straightened and size-capped first (see ``receipt.normalize_receipt_image``).
+        """
+        media_type = (content_type or "").split(";")[0].strip().lower()
+        if media_type in _IMAGE_MEDIA_TYPES:
+            content_blocks = [{
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.standard_b64encode(
+                        receipt.normalize_receipt_image(file_bytes)
+                    ).decode(),
+                },
+            }]
+        elif media_type == _PDF_MEDIA_TYPE:
+            content_blocks = self._pdf_to_image_blocks(file_bytes)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Unsupported file type. Upload a photo (JPEG/PNG/GIF/WebP) or a PDF.",
+            )
+
+        response, tool_input = self._call_tool(
+            system=[
+                {
+                    "type": "text",
+                    "text": receipt.RECEIPT_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                # Per account, so uncached — see the same split in extract_lease.
+                {"type": "text", "text": receipt.country_brief(country)},
+            ],
+            tool=receipt.RECEIPT_TOOL,
+            content=[
+                {"type": "text", "text": receipt.catalog_text(catalog)},
+                *content_blocks,
+                {"type": "text", "text": receipt.RECEIPT_INSTRUCTION},
+            ],
+            max_tokens=2048,
+        )
+        try:
+            parsed = ReceiptExtraction.model_validate(tool_input)
+        except ValidationError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Could not extract structured data from the receipt.",
+            )
+
+        discarded: list[str] = []
+        extraction = receipt.clean_receipt(parsed, catalog, country, discarded)
+        if discarded:
+            # Ids, amounts, dates and method names only — never the supplier name.
+            logger.warning(
+                "Receipt extraction (model=%s) returned unusable values, discarded: %s",
+                self._model,
+                "; ".join(discarded),
+            )
+        return ReceiptExtractionResult(
+            extraction=extraction, meta=self._meta(response, *receipt.field_stats(extraction))
+        )
+
+    def _call_tool(
+        self, *, system: list[dict], tool: dict, content: list[dict], max_tokens: int
+    ) -> tuple[object, dict]:
+        """One forced tool call. Returns the response and the tool's raw input."""
+        client = self._client()
+        # Use a NON-strict tool (not structured-outputs / messages.parse): the strict
+        # grammar compiler rejects a schema this large ("compiled grammar is too large").
+        # The model fills the tool's schema best-effort and we validate it ourselves.
+        response = client.messages.create(
+            model=self._model,
+            max_tokens=max_tokens,
+            system=system,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool["name"]},
+            messages=[{"role": "user", "content": content}],
+        )
+
+        if response.stop_reason == "refusal":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The document could not be processed.",
+            )
+        tool_block = next(
+            (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
+        )
+        if tool_block is None:
+            # e.g. stop_reason == "max_tokens" — no complete tool call returned.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Could not extract structured data from the document.",
+            )
+        return response, tool_block.input
+
+    def _meta(self, response, extracted: int, low: int, medium: int) -> ExtractionMeta:
         usage = response.usage
         input_tokens = getattr(usage, "input_tokens", None)
         output_tokens = getattr(usage, "output_tokens", None)
         cache_read = getattr(usage, "cache_read_input_tokens", None)
         cache_creation = getattr(usage, "cache_creation_input_tokens", None)
-        meta = ExtractionMeta(
+        return ExtractionMeta(
             model=self._model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -353,7 +442,6 @@ class DocumentExtractionService:
             low_confidence_count=low,
             medium_confidence_count=medium,
         )
-        return ExtractionResult(extraction=extraction, meta=meta)
 
 
 def _is_iso_date(value: str) -> bool:

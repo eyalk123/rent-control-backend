@@ -1,8 +1,8 @@
 """The single accessor for what a subscription plan allows.
 
 Every gate in the product reads a field on ``PlanLimits`` from here. Nothing else knows
-that 8 is the top of the first paid band, that free accounts get three lease scans a
-month, or that the assistant is a paid feature. Three reasons that matters:
+that 8 is the top of the first paid band, that free accounts get three lease scans and
+three receipt scans a month, or that the assistant is a paid feature. Three reasons that matters:
 
 **Prices and bands will move.** They are provisional today and will be tuned against real
 conversion. A boundary written into ``property_service`` as ``if count > 8`` has to be
@@ -57,6 +57,9 @@ class PlanLimits:
     max_properties: int | None
     #: Successful AI lease extractions allowed per calendar month. `None` = unlimited.
     monthly_lease_scans: int | None
+    #: Successful AI receipt extractions allowed per calendar month — a separate allowance,
+    #: so scanning receipts never spends a lease scan. `None` = unlimited.
+    monthly_receipt_scans: int | None
     #: Whether the portfolio chat assistant is included.
     agent: bool
 
@@ -79,6 +82,7 @@ PLANS: tuple[PlanLimits, ...] = (
         min_properties=1,
         max_properties=2,
         monthly_lease_scans=3,
+        monthly_receipt_scans=3,
         agent=False,
     ),
     PlanLimits(
@@ -86,6 +90,7 @@ PLANS: tuple[PlanLimits, ...] = (
         min_properties=3,
         max_properties=8,
         monthly_lease_scans=UNLIMITED,
+        monthly_receipt_scans=UNLIMITED,
         agent=True,
     ),
     PlanLimits(
@@ -93,6 +98,7 @@ PLANS: tuple[PlanLimits, ...] = (
         min_properties=9,
         max_properties=15,
         monthly_lease_scans=UNLIMITED,
+        monthly_receipt_scans=UNLIMITED,
         agent=True,
     ),
     PlanLimits(
@@ -100,6 +106,7 @@ PLANS: tuple[PlanLimits, ...] = (
         min_properties=16,
         max_properties=None,
         monthly_lease_scans=UNLIMITED,
+        monthly_receipt_scans=UNLIMITED,
         agent=True,
     ),
 )

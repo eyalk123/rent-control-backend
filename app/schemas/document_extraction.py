@@ -145,6 +145,38 @@ class LeaseExtractionResponse(BaseModel):
     extraction: LeaseExtraction
 
 
+class ReceiptFieldNote(BaseModel):
+    """Uncertainty note for one receipt field — the receipt counterpart of :class:`FieldNote`."""
+
+    field: str  # amount | date | payment_method | category_ids | supplier_id | property_id
+    confidence: Confidence
+    source_text: Optional[str] = None
+
+
+class ReceiptExtraction(BaseModel):
+    """An expense draft read from a receipt (POST /extract/receipt).
+
+    Categories, supplier and property are **ids picked from the owner's existing records**,
+    never names: the scanner fills a match it finds and leaves the field empty otherwise. It
+    never proposes a new category or supplier. ``supplier_name`` is the name as written on
+    the receipt, so the form can show what was read when no supplier matched.
+    """
+
+    amount: Optional[float] = None
+    date: Optional[str] = None
+    payment_method: Optional[str] = None
+    category_ids: list[int] = []
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    property_id: Optional[int] = None
+    notes: list[ReceiptFieldNote] = []
+
+
+class ReceiptExtractionResponse(BaseModel):
+    log_id: int
+    extraction: ReceiptExtraction
+
+
 class FieldEdit(BaseModel):
     """One prefilled field the user overrode, for the audit log."""
 
@@ -159,7 +191,7 @@ class ExtractionLogUpdate(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
 
-    entity_type: Literal["property", "renter"]
+    entity_type: Literal["property", "renter", "transaction"]
     created_id: Optional[int] = None
     contract_url: Optional[str] = None
     fields_given_count: int = 0

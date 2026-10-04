@@ -68,8 +68,8 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — BOI's republication of the same series as `CPI_INDEX_ID` |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`; past it `run-cpi-indexing` returns 503 instead of a green 200 |
-| `ANTHROPIC_API_KEY` | No | Enables **both** `POST /extract/lease` and the chat agent; empty ⇒ both return 503 |
-| `EXTRACTION_MODEL` | No | Lease extraction model; default `claude-sonnet-4-6` |
+| `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease`, `POST /extract/receipt` and the chat agent; empty ⇒ all return 503 |
+| `EXTRACTION_MODEL` | No | Lease **and receipt** extraction model; default `claude-sonnet-4-6` |
 | `REVENUECAT_WEBHOOK_SECRET` | No | HMAC secret for `POST /webhooks/revenuecat`, shown once when signing is enabled in the RevenueCat dashboard. Header `X-RevenueCat-Webhook-Signature: t=<unix>,v1=<hex>` over `"<t>.<raw body>"`, HMAC-SHA256 |
 | `REVENUECAT_WEBHOOK_AUTH` | No | The alternative static `Authorization` header RevenueCat can send, verbatim as typed (no `Bearer` scheme implied). **Whichever of these two is set is required; set both and both must pass; set neither and the endpoint answers 503 rather than accepting anything** |
 | `REVENUECAT_APPLY_SANDBOX` | No | Default `false`. Whether RevenueCat events marked `environment: SANDBOX` change anyone's plan. Off in production: sandbox events are recorded in `subscription_events` but never applied. The product → plan map is `app/services/billing_catalog.py`, the only place a store product id is mapped. The ids it lists are now live in App Store Connect and Play Console (`../docs/stores_answers/`), so they cannot be renamed there — a changed id must be added here, not swapped |

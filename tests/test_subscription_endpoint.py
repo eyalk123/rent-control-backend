@@ -148,6 +148,21 @@ def test_scan_usage_counts_successes_this_month(client, db_session):
     assert body["monthly_lease_scans"] == 3
 
 
+def test_receipt_scan_usage_is_reported_apart_from_lease_scans(client, db_session):
+    _owner(db_session)
+    now = datetime.utcnow()
+    for kind in ("receipt", "receipt", "lease"):
+        db_session.add(
+            DocumentExtractionLog(owner_id=OWNER_A, kind=kind, status="success", created_at=now)
+        )
+    db_session.commit()
+
+    body = client.get("/subscription").json()
+    assert body["receipt_scans_used"] == 2
+    assert body["monthly_receipt_scans"] == 3
+    assert body["lease_scans_used"] == 1
+
+
 # ── The one-time notice ──────────────────────────────────────────────────────
 
 

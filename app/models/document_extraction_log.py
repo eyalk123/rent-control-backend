@@ -13,6 +13,8 @@ class DocumentExtractionLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_id = Column(String, nullable=False, index=True)
+    # lease | receipt. Each has its own monthly allowance, counted from these rows.
+    kind = Column(String, nullable=False, default="lease", server_default="lease")
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
@@ -42,6 +44,7 @@ class DocumentExtractionLog(Base):
     submitted_at = Column(DateTime, nullable=True)
     created_property_id = Column(Integer, ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
     created_renter_id = Column(Integer, ForeignKey("renters.id", ondelete="SET NULL"), nullable=True)
+    created_transaction_id = Column(Integer, ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True)
     contract_url = Column(Text, nullable=True)
     fields_given_count = Column(Integer, nullable=False, default=0)
     fields_changed_count = Column(Integer, nullable=False, default=0)

@@ -78,7 +78,7 @@ Latin-1 only and raises on the first Hebrew character.
 | `/suppliers`, `/expense-categories` | Supporting records |
 | `/users` | Owner profile, account deletion, and `me/export` — a ZIP of the owner's records (one .xlsx workbook) plus their uploaded files |
 | `/reports` | `income-expense`, `expense-log` (both `?format=pdf\|csv` and `?lang=en\|he` — `he` renders the report in Hebrew, right-to-left), and export `history` |
-| `/extract/lease` | AI lease extraction |
+| `/extract/lease`, `/extract/receipt` | AI lease and receipt extraction |
 | `/agent` | `status`, `chat` (SSE stream), and `conversations` — list, read, delete |
 | `/notifications`, `/notification-rules`, `/device-tokens` | Push notifications, the rules that generate them, and device registration. Three event types: `overdue`, `lease_expiring`, `cpi_rent_change` (the last has no rules — mute + materiality threshold instead) |
 | `/internal` | `run-reminders`, `run-cpi-indexing` (503 when the CPI cache is stale), `run-lease-generation` (tops up open-ended leases), `run-retention` (`?dry_run=true` supported), and `run-nightly-rollup` (the single Sentry cron check-in for all of them) — cron-triggered, guarded by a shared secret |
@@ -205,7 +205,7 @@ live in `.claude/docs/architectural_patterns.md`.
 | `FIREBASE_PROJECT_ID` | Yes | Audience for ID-token verification |
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON, as a single-line string |
-| `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease` **and** the chat agent. Empty ⇒ both return 503 |
+| `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease`, `POST /extract/receipt` **and** the chat agent. Empty ⇒ all return 503 |
 | `EXTRACTION_MODEL` | No | Default `claude-sonnet-4-6`; use `claude-opus-4-8` if accuracy on hard scans is insufficient |
 | `CORS_ORIGINS` | No | Comma-separated browser origins; default `http://localhost:5173`. Mobile is unaffected (CORS is browser-only) |
 | `SENTRY_DSN` | No | Sentry error monitoring, backend performance tracing (100% of requests; `/health` excluded) **and** the `nightly-jobs` cron monitor. Empty disables it entirely — no init, no network calls. Set per-environment in Railway |

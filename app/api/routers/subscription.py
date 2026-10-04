@@ -64,7 +64,9 @@ def get_subscription(
         else None,
         price_currency=subscription.price_currency if subscription else None,
         monthly_lease_scans=state.plan.monthly_lease_scans,
-        lease_scans_used=repository.count_lease_scans_since(owner_id, _month_start()),
+        lease_scans_used=repository.count_scans_since(owner_id, _month_start(), "lease"),
+        monthly_receipt_scans=state.plan.monthly_receipt_scans,
+        receipt_scans_used=repository.count_scans_since(owner_id, _month_start(), "receipt"),
         agent=state.plan.agent,
     )
 
