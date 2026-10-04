@@ -53,6 +53,8 @@ _EXTRACTION_TOOL = {
 
 # USD per 1M tokens (input, output). Used for a rough cost estimate on the audit log.
 _PRICES: dict[str, tuple[float, float]] = {
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-opus-4-8": (5.0, 25.0),
 }
@@ -158,9 +160,10 @@ Return only the structured data."""
 
 
 class DocumentExtractionService:
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, effort: str = "medium"):
         self._api_key = api_key
         self._model = model
+        self._effort = effort
 
     @property
     def model_name(self) -> str:
@@ -293,7 +296,7 @@ class DocumentExtractionService:
                     "text": "Extract the property and renter details from this lease document.",
                 },
             ],
-            max_tokens=8192,
+            max_tokens=16000,
         )
         try:
             parsed = LeaseExtraction.model_validate(tool_input)
@@ -367,7 +370,7 @@ class DocumentExtractionService:
                 *content_blocks,
                 {"type": "text", "text": receipt.RECEIPT_INSTRUCTION},
             ],
-            max_tokens=2048,
+            max_tokens=8000,
         )
         try:
             parsed = ReceiptExtraction.model_validate(tool_input)
@@ -410,35 +413,51 @@ class DocumentExtractionService:
     def _call_tool(
         self, *, system: list[dict], tool: dict, content: list[dict], max_tokens: int
     ) -> tuple[object, dict]:
-        """One forced tool call. Returns the response and the tool's raw input."""
+        """One tool call carrying the extraction. Returns the response and the tool's raw input.
+
+        The call is asked for, not forced: current models reject a forced ``tool_choice``,
+        so the prompt names the tool and a reply without the call is retried once. The tool
+        is NON-strict (not structured outputs): the strict grammar compiler rejects a schema
+        the size of the lease one ("compiled grammar is too large"), so the model fills it
+        best-effort and the caller validates it.
+
+        Thinking counts towards ``max_tokens``, so callers size it for that as well as the
+        answer. Blocks are read by ``type``: a reply can start with a thinking block.
+        """
         client = self._client()
-        # Use a NON-strict tool (not structured-outputs / messages.parse): the strict
-        # grammar compiler rejects a schema this large ("compiled grammar is too large").
-        # The model fills the tool's schema best-effort and we validate it ourselves.
-        response = client.messages.create(
+        request = dict(
             model=self._model,
             max_tokens=max_tokens,
             system=system,
             tools=[tool],
-            tool_choice={"type": "tool", "name": tool["name"]},
-            messages=[{"role": "user", "content": content}],
+            tool_choice={"type": "auto"},
+            output_config={"effort": self._effort},
+            messages=[{
+                "role": "user",
+                "content": [
+                    *content,
+                    {"type": "text", "text": f"Record the result by calling the `{tool['name']}` tool once."},
+                ],
+            }],
         )
-
-        if response.stop_reason == "refusal":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="The document could not be processed.",
+        for _attempt in range(2):
+            response = client.messages.create(**request)
+            if response.stop_reason == "refusal":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="The document could not be processed.",
+                )
+            tool_block = next(
+                (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
             )
-        tool_block = next(
-            (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
+            if tool_block is not None:
+                return response, tool_block.input
+            if response.stop_reason == "max_tokens":
+                break  # the same request would run out again
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Could not extract structured data from the document.",
         )
-        if tool_block is None:
-            # e.g. stop_reason == "max_tokens" — no complete tool call returned.
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Could not extract structured data from the document.",
-            )
-        return response, tool_block.input
 
     def _meta(self, response, extracted: int, low: int, medium: int) -> ExtractionMeta:
         usage = response.usage

@@ -138,6 +138,7 @@ def get_document_extraction_service() -> DocumentExtractionService:
     return DocumentExtractionService(
         api_key=settings.ANTHROPIC_API_KEY,
         model=settings.EXTRACTION_MODEL,
+        effort=settings.EXTRACTION_EFFORT,
     )
 
 

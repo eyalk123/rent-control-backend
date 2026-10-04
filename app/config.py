@@ -32,9 +32,13 @@ class Settings(BaseSettings):
     # Anthropic API key for the document-extraction feature (POST /extract/lease).
     # Leave empty to disable the endpoint (it will reject every request with 503).
     ANTHROPIC_API_KEY: str = ""
-    # Claude model used for lease extraction. Sonnet is the cost/accuracy default;
-    # switch to "claude-opus-4-8" if extraction accuracy on hard scans isn't enough.
-    EXTRACTION_MODEL: str = "claude-sonnet-4-6"
+    # Claude model used for lease and receipt extraction. Sonnet is the cost/accuracy
+    # default; switch to "claude-opus-5-5" if accuracy on hard scans isn't enough.
+    EXTRACTION_MODEL: str = "claude-sonnet-5-5"
+    # How hard the model thinks before answering (low | medium | high | xhigh | max).
+    # Medium: reading handwriting is where a second look pays for itself, and a scan is a
+    # single request, so the cost is cents.
+    EXTRACTION_EFFORT: str = "medium"
     # --- Portfolio Chat Agent ("Ask RentVance", POST /agent/chat) ---
     # Reuses ANTHROPIC_API_KEY above: empty key disables the agent (503), same as
     # ── Subscriptions ────────────────────────────────────────────────────────
@@ -70,9 +74,13 @@ class Settings(BaseSettings):
     REVENUECAT_APPLY_SANDBOX: bool = False
 
     # extraction. Model is configurable independently of EXTRACTION_MODEL.
-    AGENT_MODEL: str = "claude-sonnet-4-6"
-    # Cap on tokens Claude may emit per reply (cost + latency guard).
-    AGENT_MAX_TOKENS: int = 2048
+    AGENT_MODEL: str = "claude-sonnet-5-5"
+    # Cap on tokens Claude may emit per reply (cost + latency guard). Thinking counts
+    # towards it, which is why it is well above the length of any answer.
+    AGENT_MAX_TOKENS: int = 8000
+    # How hard the model thinks before answering. Low: this is a chat, and at higher
+    # levels it thinks before every reply, which the user sees as a delay before any text.
+    AGENT_EFFORT: str = "low"
     # Max model<->tool round-trips per user message, so a stuck loop can't run forever.
     AGENT_MAX_TOOL_ITERS: int = 8
     # Per-owner messages allowed per calendar day (rate limit → 429 past this).

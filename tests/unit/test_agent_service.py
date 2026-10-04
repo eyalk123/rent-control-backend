@@ -3,6 +3,7 @@
 The MODEL is faked, but the TOOLS run for real against the test DB — so these also
 prove the model→tool→result→model loop wires up end to end.
 """
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -130,6 +131,34 @@ def test_single_tool_turn_end_to_end(db_session):
     assert [m.role for m in msgs] == ["user", "assistant", "user", "assistant"]
     # One usage-log row (the daily rate-limit counter).
     assert svc.repo.count_messages_today(OWNER_A) == 1
+
+
+class FakeThinking:
+    type = "thinking"
+
+    def model_dump(self):
+        return {"type": "thinking", "thinking": "", "signature": "sig"}
+
+
+def test_thinking_blocks_go_back_within_the_turn_but_are_not_stored(db_session):
+    """A thinking block is only accepted back while everything before it is unchanged, and
+    the stored history is trimmed — so it is replayed inside the turn and never saved."""
+    make_property(db_session, property_owner="Dad")
+    svc = _service(db_session, [
+        FakeResponse([FakeThinking(), FakeToolUse("t1", "list_properties", {})], "tool_use"),
+        FakeResponse([FakeText("You have one property.")], "end_turn"),
+    ])
+    result = svc.send_message(OWNER_A, None, "how many properties?")
+
+    calls = svc._injected_client.messages.calls
+    assert calls[0]["output_config"] == {"effort": svc.effort}
+    # Within the turn, the assistant message went back with its thinking block.
+    assert calls[1]["messages"][-2]["content"][0]["type"] == "thinking"
+    # In the database, it did not.
+    stored = [json.loads(m.content) for m in svc.repo.list_messages(result["conversation_id"])]
+    assert all(
+        b.get("type") != "thinking" for c in stored if isinstance(c, list) for b in c
+    )
 
 
 def test_multi_tool_turn(db_session):

@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 # USD per 1M tokens (input, output) — rough cost estimate for the usage log.
 _PRICES: dict[str, tuple[float, float]] = {
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-opus-4-8": (5.0, 25.0),
 }
@@ -79,6 +81,19 @@ def _title_from(text: str) -> str:
     return text[:60] if text else "New conversation"
 
 
+#: Reasoning blocks. Passed back unchanged within a turn's tool loop, but never stored:
+#: the API only accepts one back while everything before it is unchanged, and the stored
+#: history is trimmed to its last messages, so a stored block would fail the next turn
+#: once a conversation outgrows the window. The answers themselves are kept.
+_THINKING_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def _without_thinking(content):
+    if not isinstance(content, list):
+        return content
+    return [b for b in content if not (isinstance(b, dict) and b.get("type") in _THINKING_TYPES)]
+
+
 def _text_of(blocks) -> str:
     return "".join(b.text for b in blocks if getattr(b, "type", None) == "text").strip()
 
@@ -98,6 +113,7 @@ class AgentService:
         self.model = model
         self._injected_client = client
         self.max_tokens = settings.AGENT_MAX_TOKENS
+        self.effort = settings.AGENT_EFFORT
         self.max_tool_iters = settings.AGENT_MAX_TOOL_ITERS
         self.history_max = settings.AGENT_HISTORY_MAX_MESSAGES
 
@@ -129,7 +145,8 @@ class AgentService:
                 start = i
                 break
         return [
-            {"role": row.role, "content": json.loads(row.content)} for row in window[start:]
+            {"role": row.role, "content": _without_thinking(json.loads(row.content))}
+            for row in window[start:]
         ]
 
     def start(self, owner_id: str, conversation_id: Optional[int], user_text: str):
@@ -223,6 +240,7 @@ class AgentService:
                         {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
                     ],
                     tools=tools,
+                    output_config={"effort": self.effort},
                     messages=messages,
                 ) as stream:
                     for delta in stream.text_stream:
@@ -238,9 +256,12 @@ class AgentService:
                     break
 
                 assistant_content = [b.model_dump() for b in resp.content]
+                # In full for the rest of this turn's loop — see _THINKING_TYPES.
                 messages.append({"role": "assistant", "content": assistant_content})
                 self.repo.add_message(
-                    convo.id, "assistant", json.dumps(assistant_content, ensure_ascii=False)
+                    convo.id,
+                    "assistant",
+                    json.dumps(_without_thinking(assistant_content), ensure_ascii=False),
                 )
 
                 tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]

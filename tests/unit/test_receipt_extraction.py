@@ -207,7 +207,8 @@ def test_extract_receipt_sends_the_catalog_and_returns_a_cleaned_draft(monkeypat
     assert result.meta.fields_extracted == 3
 
     call = fake.calls[0]
-    assert call["tool_choice"] == {"type": "tool", "name": RECEIPT_TOOL_NAME}
+    assert call["tool_choice"] == {"type": "auto"}
+    assert call["tools"][0]["name"] == RECEIPT_TOOL_NAME
     assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
     content = call["messages"][0]["content"]
     assert "10: יוסי אינסטלציה" in content[0]["text"]

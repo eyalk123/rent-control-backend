@@ -69,7 +69,8 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — BOI's republication of the same series as `CPI_INDEX_ID` |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`; past it `run-cpi-indexing` returns 503 instead of a green 200 |
 | `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease`, `POST /extract/receipt` and the chat agent; empty ⇒ all return 503 |
-| `EXTRACTION_MODEL` | No | Lease **and receipt** extraction model; default `claude-sonnet-4-6` |
+| `EXTRACTION_MODEL` | No | Lease **and receipt** extraction model; default `claude-sonnet-5-5`. Current models reject a forced `tool_choice`, so `_call_tool` asks for the tool and retries once when the reply has no call — keep it that way when changing models |
+| `EXTRACTION_EFFORT` | No | Default `medium` (`low`…`max`) |
 | `REVENUECAT_WEBHOOK_SECRET` | No | HMAC secret for `POST /webhooks/revenuecat`, shown once when signing is enabled in the RevenueCat dashboard. Header `X-RevenueCat-Webhook-Signature: t=<unix>,v1=<hex>` over `"<t>.<raw body>"`, HMAC-SHA256 |
 | `REVENUECAT_WEBHOOK_AUTH` | No | The alternative static `Authorization` header RevenueCat can send, verbatim as typed (no `Bearer` scheme implied). **Whichever of these two is set is required; set both and both must pass; set neither and the endpoint answers 503 rather than accepting anything** |
 | `REVENUECAT_APPLY_SANDBOX` | No | Default `false`. Whether RevenueCat events marked `environment: SANDBOX` change anyone's plan. Off in production: sandbox events are recorded in `subscription_events` but never applied. The product → plan map is `app/services/billing_catalog.py`, the only place a store product id is mapped. The ids it lists are now live in App Store Connect and Play Console (`../docs/stores_answers/`), so they cannot be renamed there — a changed id must be added here, not swapped |
@@ -88,8 +89,9 @@ is what makes the caps burst-safe under concurrency.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `AGENT_MODEL` | `claude-sonnet-4-6` | Independent of `EXTRACTION_MODEL` |
-| `AGENT_MAX_TOKENS` | `2048` | Tokens per reply (cost + latency guard) |
+| `AGENT_MODEL` | `claude-sonnet-5-5` | Independent of `EXTRACTION_MODEL` |
+| `AGENT_MAX_TOKENS` | `8000` | Tokens per reply, thinking included (cost + latency guard) |
+| `AGENT_EFFORT` | `low` | Thinking before each reply; higher levels delay the first streamed words. Thinking blocks are replayed within a turn but never stored — the stored history is trimmed, and a replayed block is rejected once what precedes it changes |
 | `AGENT_MAX_TOOL_ITERS` | `8` | Max model↔tool round-trips per message; stops a stuck loop |
 | `AGENT_DAILY_MESSAGE_LIMIT` | `50` | Per owner per calendar day; 429 past it |
 | `AGENT_DAILY_COST_LIMIT_USD` | `2.0` | Per owner per UTC day; the real denial-of-wallet guard |

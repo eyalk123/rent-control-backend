@@ -206,7 +206,8 @@ live in `.claude/docs/architectural_patterns.md`.
 | `FIREBASE_STORAGE_BUCKET` | Yes | e.g. `your-project.appspot.com` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Full service-account key JSON, as a single-line string |
 | `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease`, `POST /extract/receipt` **and** the chat agent. Empty ⇒ all return 503 |
-| `EXTRACTION_MODEL` | No | Default `claude-sonnet-4-6`; use `claude-opus-4-8` if accuracy on hard scans is insufficient |
+| `EXTRACTION_MODEL` | No | Default `claude-sonnet-5-5`; use `claude-opus-5-5` if accuracy on hard scans is insufficient |
+| `EXTRACTION_EFFORT` | No | Default `medium` (`low`…`max`): how much the model thinks before answering |
 | `CORS_ORIGINS` | No | Comma-separated browser origins; default `http://localhost:5173`. Mobile is unaffected (CORS is browser-only) |
 | `SENTRY_DSN` | No | Sentry error monitoring, backend performance tracing (100% of requests; `/health` excluded) **and** the `nightly-jobs` cron monitor. Empty disables it entirely — no init, no network calls. Set per-environment in Railway |
 | `LOG_LEVEL` | No | Root log level; default `INFO`. Without this configuration uvicorn leaves the root logger handler-less and `logger.info` goes nowhere — see `app/logging_config.py` |
@@ -232,8 +233,9 @@ All optional — the defaults are sane. Set `ANTHROPIC_API_KEY` and the agent wo
 
 | Variable | Default | Notes |
 |---|---|---|
-| `AGENT_MODEL` | `claude-sonnet-4-6` | Independent of `EXTRACTION_MODEL` |
-| `AGENT_MAX_TOKENS` | `2048` | Tokens per reply |
+| `AGENT_MODEL` | `claude-sonnet-5-5` | Independent of `EXTRACTION_MODEL` |
+| `AGENT_MAX_TOKENS` | `8000` | Tokens per reply, thinking included |
+| `AGENT_EFFORT` | `low` | How much the model thinks before each reply; higher delays the first words |
 | `AGENT_MAX_TOOL_ITERS` | `8` | Max model↔tool round-trips per message |
 | `AGENT_DAILY_MESSAGE_LIMIT` | `50` | Per owner per calendar day; `429` past it |
 | `AGENT_DAILY_COST_LIMIT_USD` | `2.0` | Per owner per UTC day, estimated spend |

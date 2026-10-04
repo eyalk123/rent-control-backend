@@ -162,11 +162,66 @@ def test_extract_lease_returns_result_with_meta(monkeypatch):
     assert result.meta.fields_extracted == 2  # city + base_rent populated
     assert result.meta.medium_confidence_count == 1  # from the note
     assert result.meta.estimated_cost_usd is not None
-    # A non-strict extraction tool was forced, and the PDF was sent as a rendered image
-    # (not a native document block that would carry the corrupt text layer).
+    # The extraction tool is asked for, not forced (current models reject a forced
+    # tool_choice), effort is explicit, and the PDF was sent as a rendered image (not a
+    # native document block that would carry the corrupt text layer).
     call = fake.messages.calls[0]
-    assert call["tool_choice"]["name"] == "record_lease_extraction"
+    assert call["tool_choice"] == {"type": "auto"}
+    assert call["output_config"] == {"effort": "medium"}
+    assert call["tools"][0]["name"] == "record_lease_extraction"
+    assert "record_lease_extraction" in call["messages"][0]["content"][-1]["text"]
     assert call["messages"][0]["content"][0]["type"] == "image"
+
+
+class _ScriptedClient:
+    """Answers each create() with the next response in the script."""
+
+    def __init__(self, *responses):
+        self._responses = list(responses)
+        self.calls = []
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                return outer._responses.pop(0)
+
+        self.messages = _Messages()
+
+
+class _FakeThinking:
+    type = "thinking"
+    thinking = ""
+
+
+def test_a_reply_without_the_tool_call_is_retried_once(monkeypatch):
+    svc = _service()
+    draft = _one_renter()
+    draft.property.city = "Haifa"
+    fake = _ScriptedClient(
+        _FakeResponse([_FakeThinking()], stop_reason="end_turn"),
+        # A reply may open with a thinking block; the tool call is found by type.
+        _FakeResponse([_FakeThinking(), _FakeToolUse(draft.model_dump())]),
+    )
+    monkeypatch.setattr(svc, "_client", lambda: fake)
+
+    result = svc.extract_lease(_make_pdf(["Lease"]), PDF_MEDIA)
+
+    assert result.extraction.property.city == "Haifa"
+    assert len(fake.calls) == 2
+
+
+def test_a_second_reply_without_the_tool_call_raises_422(monkeypatch):
+    svc = _service()
+    fake = _ScriptedClient(
+        _FakeResponse([], stop_reason="end_turn"),
+        _FakeResponse([], stop_reason="end_turn"),
+    )
+    monkeypatch.setattr(svc, "_client", lambda: fake)
+    with pytest.raises(HTTPException) as exc:
+        svc.extract_lease(_make_pdf(["Lease"]), PDF_MEDIA)
+    assert exc.value.status_code == 422
+    assert len(fake.calls) == 2
 
 
 def test_extract_lease_refusal_raises_422(monkeypatch):
