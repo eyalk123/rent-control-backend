@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -14,15 +14,21 @@ from app.services import country_service
 from app.models.report_export import ReportExport
 from app.repositories.owner_repository import OwnerRepository
 from app.repositories.report_export_repository import ReportExportRepository
-from app.schemas.report import ReportExportRead
+from app.schemas.report import (
+    ExpenseLogReportResponse,
+    IncomeExpenseReportResponse,
+    ReportExportRead,
+)
 from app.services.entitlement_gate import EntitlementGate
 from app.services.report_service import (
+    bundle_files,
     generate_expense_log_csv,
     generate_expense_log_pdf,
     generate_income_expense_csv,
     generate_income_expense_pdf,
     get_expense_log_data,
     get_income_expense_data,
+    owner_file_part,
 )
 
 router = APIRouter()
@@ -52,6 +58,49 @@ def _owner_formats(db: Session, owner_id: str):
     return currency, config.number_format, config.currency_symbol_spaced
 
 
+_MEDIA_TYPES = {"pdf": "application/pdf", "csv": "text/csv", "zip": "application/zip"}
+
+# Repeated: `?owner=Dana&owner=Avi`. An empty value is the no-owner group; leaving the
+# parameter out means every owner. Matched exactly as typed on the property.
+OwnerQuery = Annotated[list[str] | None, Query()]
+
+
+def _selected_owners(owner: list[str] | None) -> list[str] | None:
+    return list(dict.fromkeys(owner)) if owner else None
+
+
+def _file_response(content: bytes, kind: str, filename: str) -> Response:
+    return Response(
+        content=content,
+        media_type=_MEDIA_TYPES[kind],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _render(
+    build: Callable[[list[str] | None], tuple[bytes, IncomeExpenseReportResponse | ExpenseLogReportResponse]],
+    owners: list[str] | None,
+    split: bool,
+    stem: str,
+    format: str,
+    lang: str,
+) -> Response:
+    """One file covering the selected owners, or — with ``split`` — a ZIP holding one file
+    per owner, each generated on its own so its totals are that owner's alone.
+
+    A selection with no data in the year still downloads, as one empty report, rather than
+    an empty ZIP that looks like a failure.
+    """
+    content, data = build(owners)
+    if not split:
+        return _file_response(content, format, f"{stem}.{format}")
+    files = [
+        (f"{stem}-{owner_file_part(group.owner_name, lang)}.{format}", build([group.owner_name])[0])
+        for group in data.owners
+    ] or [(f"{stem}.{format}", content)]
+    return _file_response(bundle_files(files), "zip", f"{stem}.zip")
+
+
 @router.get("/income-expense")
 def income_expense_report(
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -65,31 +114,28 @@ def income_expense_report(
     # preference would silently re-interpret history. Defaults to accrual, so a caller that
     # does not pass it gets exactly what this endpoint always returned.
     basis: str = Query("accrual", pattern="^(accrual|cash)$"),
+    owner: OwnerQuery = None,
+    split: bool = False,
 ):
-    data = get_income_expense_data(
-        db,
-        current_user["user_id"],
-        year,
-        basis,
-        exclude_property_ids=gate.hidden_property_ids(current_user["user_id"]),
-    )
+    owner_id = current_user["user_id"]
+    owners = _selected_owners(owner)
+    hidden = gate.hidden_property_ids(owner_id)
+    formats = _owner_formats(db, owner_id) if format == "pdf" else None
 
-    if format == "csv":
-        content = generate_income_expense_csv(data, lang).encode("utf-8-sig")
-        repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="csv", revenue_basis=basis))
-        return Response(
-            content=content,
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="income-expense-{year}.csv"'},
+    def build(selection):
+        data = get_income_expense_data(
+            db, owner_id, year, basis, exclude_property_ids=hidden, owners=selection,
         )
+        if format == "csv":
+            return generate_income_expense_csv(data, lang).encode("utf-8-sig"), data
+        return generate_income_expense_pdf(data, lang, *formats), data
 
-    content = generate_income_expense_pdf(data, lang, *_owner_formats(db, current_user["user_id"]))
-    repo.create(ReportExport(owner_id=current_user["user_id"], report_type="income_expense", year=year, format="pdf", revenue_basis=basis))
-    return Response(
-        content=content,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="income-expense-{year}.pdf"'},
-    )
+    response = _render(build, owners, split, f"income-expense-{year}", format, lang)
+    repo.create(ReportExport(
+        owner_id=owner_id, report_type="income_expense", year=year, format=format,
+        revenue_basis=basis, owners=owners, split_by_owner=split,
+    ))
+    return response
 
 
 @router.get("/expense-log")
@@ -101,31 +147,28 @@ def expense_log_report(
     year: int = Query(..., ge=2000, le=2100),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
     lang: str = Query("en", pattern="^(en|he)$"),
+    owner: OwnerQuery = None,
+    split: bool = False,
 ):
-    data = get_expense_log_data(
-        db,
-        current_user["user_id"],
-        year,
-        lang,
-        exclude_property_ids=gate.hidden_property_ids(current_user["user_id"]),
-    )
+    owner_id = current_user["user_id"]
+    owners = _selected_owners(owner)
+    hidden = gate.hidden_property_ids(owner_id)
+    formats = _owner_formats(db, owner_id) if format == "pdf" else None
 
-    if format == "csv":
-        content = generate_expense_log_csv(data, lang).encode("utf-8-sig")
-        repo.create(ReportExport(owner_id=current_user["user_id"], report_type="expense_log", year=year, format="csv"))
-        return Response(
-            content=content,
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="expense-log-{year}.csv"'},
+    def build(selection):
+        data = get_expense_log_data(
+            db, owner_id, year, lang, exclude_property_ids=hidden, owners=selection,
         )
+        if format == "csv":
+            return generate_expense_log_csv(data, lang).encode("utf-8-sig"), data
+        return generate_expense_log_pdf(data, lang, *formats), data
 
-    content = generate_expense_log_pdf(data, lang, *_owner_formats(db, current_user["user_id"]))
-    repo.create(ReportExport(owner_id=current_user["user_id"], report_type="expense_log", year=year, format="pdf"))
-    return Response(
-        content=content,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="expense-log-{year}.pdf"'},
-    )
+    response = _render(build, owners, split, f"expense-log-{year}", format, lang)
+    repo.create(ReportExport(
+        owner_id=owner_id, report_type="expense_log", year=year, format=format,
+        owners=owners, split_by_owner=split,
+    ))
+    return response
 
 
 @router.get("/history", response_model=list[ReportExportRead])

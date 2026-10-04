@@ -1,5 +1,7 @@
 import csv
 import io
+import re
+import zipfile
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
@@ -82,10 +84,12 @@ UI_TEXT = {
         "summary_title": "Summary by Category & Property",
         "basis_accrual": "Revenue recognised when due (accrual)",
         "basis_cash": "Revenue recognised when received (cash)",
+        "owners_filter": "Owners in this report",
         "multi_note": (
-            "An expense with several categories is counted under the first; the list above "
+            "An expense with several categories is counted under the first; the list below "
             "shows all of them."
         ),
+        "list_title": "All expenses",
         "currency": "ILS ",
     },
     "he": {
@@ -112,7 +116,9 @@ UI_TEXT = {
         "summary_title": "סיכום לפי קטגוריה ונכס",
         "basis_accrual": "הכנסה נרשמת לפי מועד החיוב (מצטבר)",
         "basis_cash": "הכנסה נרשמת לפי מועד התקבול (מזומן)",
-        "multi_note": "הוצאה עם כמה קטגוריות נספרת תחת הראשונה; הרשימה שלמעלה מציגה את כולן.",
+        "owners_filter": "בעלים בדוח זה",
+        "multi_note": "הוצאה עם כמה קטגוריות נספרת תחת הראשונה; הרשימה שלמטה מציגה את כולן.",
+        "list_title": "כל ההוצאות",
         "currency": "₪",
     },
 }
@@ -182,6 +188,19 @@ UNCATEGORISED_BY_LANG = {"en": UNCATEGORISED, "he": "(ללא קטגוריה)"}
 
 def normalise_lang(lang: str | None) -> str:
     return lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+
+
+def owner_filter_label(owners: list[str] | None, lang: str = DEFAULT_LANG) -> str | None:
+    """The line a report prints when it covers only some owners, or None when it covers all.
+
+    An accountant who receives one owner's report has to be able to tell, from the file
+    alone, that it is not the whole portfolio. "" is the no-owner group and prints as such.
+    """
+    if owners is None:
+        return None
+    lang = normalise_lang(lang)
+    names = ", ".join(name or _t(lang, "no_owner") for name in owners)
+    return f"{_t(lang, 'owners_filter')}: {names}"
 
 
 def _t(lang: str, key: str) -> str:
@@ -332,6 +351,7 @@ def get_income_expense_data(
     year: int,
     basis: str = ACCRUAL,
     exclude_property_ids=None,
+    owners: list[str] | None = None,
 ) -> IncomeExpenseReportResponse:
     """The income-and-expense figures for one year, on one revenue recognition basis.
 
@@ -349,6 +369,9 @@ def get_income_expense_data(
 
     Nothing about the data changes — both dates are already on every transaction, so this
     is a choice of which one to group by.
+
+    ``owners`` limits the report to those property owners (``""`` is the no-owner group);
+    None means every owner. Matched exactly as typed, the same key the report groups by.
     """
     from app.models.transaction import TransactionTypeEnum
 
@@ -387,6 +410,7 @@ def get_income_expense_data(
     )
     owner_order: list[str] = []
     prop_order: dict[str, list[str]] = defaultdict(list)
+    owner_set = set(owners) if owners is not None else None
 
     for t in filtered:
         prop_owner = ""
@@ -394,6 +418,8 @@ def get_income_expense_data(
         if t.property:
             prop_owner = t.property.property_owner or ""
             prop_addr = f"{t.property.address}, {t.property.city}" if t.property.city else t.property.address
+        if owner_set is not None and prop_owner not in owner_set:
+            continue
 
         if t.type == TransactionTypeEnum.REVENUE:
             # Must mirror `revenue_date` above, or a transaction selected by one rule would
@@ -456,6 +482,7 @@ def get_income_expense_data(
         owners=owners_out,
         grand_total=MonthCell(revenue=grand_revenue, expenses=grand_expenses, net=grand_revenue - grand_expenses),
         revenue_basis=basis,
+        owner_filter=owners,
     )
 
 
@@ -465,7 +492,10 @@ def get_expense_log_data(
     year: int,
     lang: str = DEFAULT_LANG,
     exclude_property_ids=None,
+    owners: list[str] | None = None,
 ) -> ExpenseLogReportResponse:
+    """Every expense for the year, then a property × category pivot. ``owners`` filters as
+    in ``get_income_expense_data``."""
     stmt = (
         select(Transaction)
         .where(
@@ -494,6 +524,7 @@ def get_expense_log_data(
     prop_order: dict[str, list[str]] = defaultdict(list)
     all_categories: list[str] = []
     has_multi_category = False
+    owner_set = set(owners) if owners is not None else None
 
     for t in transactions:
         prop_owner = ""
@@ -501,6 +532,8 @@ def get_expense_log_data(
         if t.property:
             prop_owner = t.property.property_owner or ""
             prop_addr = f"{t.property.address}, {t.property.city}" if t.property.city else t.property.address
+        if owner_set is not None and prop_owner not in owner_set:
+            continue
 
         # An expense can carry several categories. The pivot credits the whole amount to the
         # primary one (the first the user picked, which the service mirrors into `category_id`)
@@ -581,6 +614,7 @@ def get_expense_log_data(
         grand_total_by_category=dict(grand_by_cat),
         grand_total=grand_total,
         has_multi_category=has_multi_category,
+        owner_filter=owners,
     )
 
 
@@ -598,9 +632,13 @@ class _PDF(FPDF):
         number_format: str = DEFAULT_NUMBER_FORMAT,
         symbol_spaced: bool = False,
         revenue_basis: str | None = None,
+        owner_filter: list[str] | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        # Printed under the title on every page, like the basis, when the report covers only
+        # some owners.
+        self.owner_filter = owner_filter
         # None for the expense log, which has no revenue to recognise and so prints no
         # basis line at all.
         self.revenue_basis = revenue_basis
@@ -741,6 +779,10 @@ class _PDF(FPDF):
             key = "basis_cash" if self.revenue_basis == CASH else "basis_accrual"
             self.set_font(FONT, "", 8)
             self.cell(0, 5, _t(self.lang, key), align="C", new_x="LMARGIN", new_y="NEXT")
+        if (owners_line := owner_filter_label(self.owner_filter, self.lang)) is not None:
+            self.set_font(FONT, "", 8)
+            self.cell(0, 5, self.fit(owners_line, self.epw), align="C",
+                      new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def footer(self):
@@ -770,6 +812,7 @@ def generate_income_expense_pdf(
         "income_title", data.year, lang=lang, currency=currency,
         number_format=number_format, symbol_spaced=symbol_spaced,
         revenue_basis=data.revenue_basis,
+        owner_filter=data.owner_filter,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -999,6 +1042,7 @@ def generate_expense_log_pdf(
     pdf = _PDF(
         "expense_title", data.year, lang=lang, currency=currency,
         number_format=number_format, symbol_spaced=symbol_spaced,
+        owner_filter=data.owner_filter,
         orientation="L", unit="mm", format="A4",
     )
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -1007,47 +1051,7 @@ def generate_expense_log_pdf(
     def t(key: str) -> str:
         return _t(pdf.lang, key)
 
-    # Part 1: transaction list
-    headers = [t("date"), t("property"), t("category"), t("supplier"),
-               t("method"), t("amount"), t("notes")]
-    widths = [22, 62, 38, 40, 26, 22, 66]
-
-    def draw_list_header():
-        pdf.set_font(FONT, "B", 9)
-        pdf.set_fill_color(220, 220, 220)
-        pdf.row([(w, h, {"border": 1, "fill": True}) for h, w in zip(headers, widths)], 6)
-        pdf.ln()
-
-    draw_list_header()
-    pdf.set_font(FONT, "", 7)
-    for row in data.rows:
-        # Break the page ourselves so the column header is repeated, rather than letting rows
-        # spill onto a fresh page under no header at all.
-        if pdf.get_y() + 5 > pdf.page_break_trigger:
-            pdf.add_page()
-            draw_list_header()
-            pdf.set_font(FONT, "", 7)
-        values = [
-            row.date,
-            row.property_address,
-            row.category_name,
-            row.supplier_name,
-            row.payment_method,
-            _group(row.amount, pdf.number_format),
-            row.notes,
-        ]
-        cells = []
-        for index, (value, w) in enumerate(zip(values, widths)):
-            options = {"border": 1}
-            if index == 5:  # the amount column reads right-aligned either way
-                options["align"] = "R"
-            cells.append((w, pdf.fit(value, w), options))
-        pdf.row(cells, 5)
-        pdf.ln()
-
-    pdf.ln(6)
-
-    # Part 2: pivot summary — one row per property, one column per category.
+    # Part 1: pivot summary — one row per property, one column per category.
     #
     # This used to be the other way round, which put the unbounded axis (properties grow with
     # the portfolio) on the page-width axis and forced the table into blocks. Categories are
@@ -1166,6 +1170,53 @@ def generate_expense_log_pdf(
             summary_row(t("total_row"), data.grand_total_by_category, data.grand_total,
                         (230, 240, 230))
 
+    # Part 2: every expense, by date. The summary leads because it is what a reader opens the
+    # report for; the list is the evidence behind it.
+    if data.owners:
+        pdf.ln(6)
+    # Keep the heading with its column header and first rows.
+    pdf.ensure_room(7 + 6 + 5 * 3)
+    pdf.set_font(FONT, "B", 10)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(0, 7, t("list_title"), align="R" if pdf.rtl else "L",
+             new_x="LMARGIN", new_y="NEXT")
+    headers = [t("date"), t("property"), t("category"), t("supplier"),
+               t("method"), t("amount"), t("notes")]
+    widths = [22, 62, 38, 40, 26, 22, 66]
+
+    def draw_list_header():
+        pdf.set_font(FONT, "B", 9)
+        pdf.set_fill_color(220, 220, 220)
+        pdf.row([(w, h, {"border": 1, "fill": True}) for h, w in zip(headers, widths)], 6)
+        pdf.ln()
+
+    draw_list_header()
+    pdf.set_font(FONT, "", 7)
+    for row in data.rows:
+        # Break the page ourselves so the column header is repeated, rather than letting rows
+        # spill onto a fresh page under no header at all.
+        if pdf.get_y() + 5 > pdf.page_break_trigger:
+            pdf.add_page()
+            draw_list_header()
+            pdf.set_font(FONT, "", 7)
+        values = [
+            row.date,
+            row.property_address,
+            row.category_name,
+            row.supplier_name,
+            row.payment_method,
+            _group(row.amount, pdf.number_format),
+            row.notes,
+        ]
+        cells = []
+        for index, (value, w) in enumerate(zip(values, widths)):
+            options = {"border": 1}
+            if index == 5:  # the amount column reads right-aligned either way
+                options["align"] = "R"
+            cells.append((w, pdf.fit(value, w), options))
+        pdf.row(cells, 5)
+        pdf.ln()
+
     return bytes(pdf.output())
 
 
@@ -1188,6 +1239,8 @@ def generate_income_expense_csv(
     # is not what lands in the accountant's inbox.
     if data.revenue_basis:
         writer.writerow([_t(lang, "basis_cash" if data.revenue_basis == CASH else "basis_accrual")])
+    if (owners_line := owner_filter_label(data.owner_filter, lang)) is not None:
+        writer.writerow([owners_line])
     writer.writerow([])
     writer.writerow([_t(lang, "owner"), _t(lang, "property"), "Month",
                      _t(lang, "revenue"), _t(lang, "expenses"), _t(lang, "net")])
@@ -1238,28 +1291,11 @@ def generate_expense_log_csv(data: ExpenseLogReportResponse, lang: str = DEFAULT
     writer = csv.writer(buf)
 
     writer.writerow([f"{_t(lang, 'expense_title')} - {data.year}"])
+    if (owners_line := owner_filter_label(data.owner_filter, lang)) is not None:
+        writer.writerow([owners_line])
     writer.writerow([])
 
-    # Part 1: transaction list
-    writer.writerow([_t(lang, "date"), _t(lang, "property"), _t(lang, "owner"),
-                     _t(lang, "category"), _t(lang, "supplier"), _t(lang, "method"),
-                     _t(lang, "amount"), _t(lang, "notes")])
-    for row in data.rows:
-        writer.writerow([
-            row.date,
-            row.property_address,
-            row.property_owner,
-            row.category_name,
-            row.supplier_name,
-            row.payment_method,
-            float(row.amount),
-            row.notes,
-        ])
-
-    writer.writerow([])
-    writer.writerow([])
-
-    # Part 2: pivot summary
+    # Part 1: pivot summary — first, as in the PDF
     writer.writerow([_t(lang, "summary_title")])
     writer.writerow([])
 
@@ -1293,4 +1329,60 @@ def generate_expense_log_csv(data: ExpenseLogReportResponse, lang: str = DEFAULT
         + [float(data.grand_total)]
     )
 
+    writer.writerow([])
+    writer.writerow([])
+
+    # Part 2: every expense, by date
+    writer.writerow([_t(lang, "list_title")])
+    writer.writerow([])
+    writer.writerow([_t(lang, "date"), _t(lang, "property"), _t(lang, "owner"),
+                     _t(lang, "category"), _t(lang, "supplier"), _t(lang, "method"),
+                     _t(lang, "amount"), _t(lang, "notes")])
+    for row in data.rows:
+        writer.writerow([
+            row.date,
+            row.property_address,
+            row.property_owner,
+            row.category_name,
+            row.supplier_name,
+            row.payment_method,
+            float(row.amount),
+            row.notes,
+        ])
+
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# One file per owner
+# ---------------------------------------------------------------------------
+
+# Characters no file system accepts in a name, plus control characters. Everything else —
+# Hebrew included — is kept: ZIP stores names as UTF-8 and every current OS unpacks them.
+_UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+
+
+def owner_file_part(owner_name: str, lang: str = DEFAULT_LANG) -> str:
+    """The owner's part of a per-owner file name: ``Dana Cohen`` → ``Dana-Cohen``."""
+    label = owner_name.strip() or _t(normalise_lang(lang), "no_owner").strip("()")
+    part = re.sub(r"\s+", "-", _UNSAFE_FILENAME.sub("", label)).strip(".-")
+    return part or "owner"
+
+
+def bundle_files(files: list[tuple[str, bytes]]) -> bytes:
+    """A ZIP of ``(name, content)`` pairs.
+
+    Two owners can reduce to the same file name (``Dana Cohen`` and ``Dana  Cohen`` are two
+    owners, as typed), so a repeated name gets a counter rather than overwriting the first.
+    """
+    buf = io.BytesIO()
+    seen: dict[str, int] = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in files:
+            count = seen.get(name, 0)
+            seen[name] = count + 1
+            if count:
+                stem, dot, ext = name.rpartition(".")
+                name = f"{stem}-{count + 1}.{ext}" if dot else f"{name}-{count + 1}"
+            zf.writestr(name, content)
     return buf.getvalue()

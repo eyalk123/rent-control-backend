@@ -29,6 +29,9 @@ class IncomeExpenseReportResponse(BaseModel):
     # Which recognition basis produced these figures. Carried on the response so the PDF,
     # the CSV and the on-screen preview all print the same answer without being told again.
     revenue_basis: str = "accrual"
+    # The owners this report was limited to ("" is the no-owner group), or None for all of
+    # them. Carried for the same reason as the basis: the file prints it.
+    owner_filter: list[str] | None = None
 
 
 class ExpenseLogRow(BaseModel):
@@ -69,6 +72,7 @@ class ExpenseLogReportResponse(BaseModel):
     # True when at least one expense carries more than one category, so the report can state
     # that the pivot counts such expenses under their primary category only.
     has_multi_category: bool = False
+    owner_filter: list[str] | None = None
 
 
 class ReportExportRead(BaseModel):
@@ -79,6 +83,10 @@ class ReportExportRead(BaseModel):
     # None for an expense log (no revenue to recognise) and for anything exported before
     # the choice existed, which was accrual by definition.
     revenue_basis: str | None = None
+    # The owners it was limited to ("" is the no-owner group); None means every owner.
+    owners: list[str] | None = None
+    # True when it was downloaded as a ZIP holding one file per owner.
+    split_by_owner: bool = False
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

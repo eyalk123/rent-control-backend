@@ -304,6 +304,10 @@ def test_expense_log_csv_pivot_is_property_per_row_and_reconciles(client, db_ses
     figures = [float(v) for v in data_row[2:-1]]
     assert sum(figures) == float(data_row[-1]) == 1000.0
 
+    # The summary leads; the full list follows it.
+    list_header = next(r for r in rows if r[:2] == ["Date", "Property"])
+    assert rows.index(header) < rows.index(list_header)
+
 
 def test_income_report_uses_the_month_the_rent_is_for(client, db_session):
     """Rent paid on 31 December for January belongs to January's year."""
@@ -562,3 +566,130 @@ class TestRevenueRecognitionBasis:
         rows = client.get("/reports/history").json()
         assert rows, "expected a history row"
         assert rows[0]["revenue_basis"] == "cash"
+
+
+class TestOwnerSelection:
+    """A report limited to some property owners, in one file or one file per owner.
+
+    The common case is a landlord managing properties held in different names, each of
+    whom files separately and should not receive the others' figures.
+    """
+
+    def _two_owners(self, db_session):
+        dana = make_property(db_session, owner_id=OWNER_A, property_owner="Dana", address="1 Dana St")
+        ronen = make_property(db_session, owner_id=OWNER_A, property_owner="Ronen", address="2 Ronen St")
+        nobody = make_property(db_session, owner_id=OWNER_A, property_owner=None, address="3 Nobody St")
+        for prop, amount in ((dana, 1000), (ronen, 2000), (nobody, 4000)):
+            make_transaction(
+                db_session, owner_id=OWNER_A, type=TransactionTypeEnum.REVENUE,
+                property_id=prop.id, amount=amount,
+                date_of_payment=date(2025, 3, 1), month_for=date(2025, 3, 1),
+            )
+            make_transaction(
+                db_session, owner_id=OWNER_A, type=TransactionTypeEnum.EXPENSE,
+                property_id=prop.id, amount=amount / 10, date_of_payment=date(2025, 4, 1),
+            )
+
+    def test_no_selection_covers_every_owner(self, db_session):
+        self._two_owners(db_session)
+        data = get_income_expense_data(db_session, OWNER_A, 2025)
+        assert {o.owner_name for o in data.owners} == {"Dana", "Ronen", ""}
+        assert data.owner_filter is None
+
+    def test_selection_limits_rows_and_totals(self, db_session):
+        self._two_owners(db_session)
+        data = get_income_expense_data(db_session, OWNER_A, 2025, owners=["Dana", "Ronen"])
+        assert [o.owner_name for o in data.owners] == ["Dana", "Ronen"]
+        assert data.grand_total.revenue == Decimal("3000")
+        assert data.owner_filter == ["Dana", "Ronen"]
+
+        log = get_expense_log_data(db_session, OWNER_A, 2025, owners=["Ronen"])
+        assert {r.property_owner for r in log.rows} == {"Ronen"}
+        assert log.grand_total == Decimal("200")
+
+    def test_empty_string_selects_the_no_owner_group(self, db_session):
+        self._two_owners(db_session)
+        data = get_income_expense_data(db_session, OWNER_A, 2025, owners=[""])
+        assert [o.owner_name for o in data.owners] == [""]
+        assert data.grand_total.revenue == Decimal("4000")
+
+    def test_the_file_says_which_owners_it_covers(self, client, db_session):
+        self._two_owners(db_session)
+        resp = client.get(
+            "/reports/income-expense",
+            params=[("year", 2025), ("format", "csv"), ("owner", "Dana"), ("owner", "")],
+        )
+        lines = resp.content.decode("utf-8-sig").splitlines()
+        assert "Owners in this report: Dana, (No Owner)" in lines[2]
+        assert "Ronen" not in resp.content.decode("utf-8-sig")
+
+        full = client.get("/reports/expense-log", params={"year": 2025, "format": "csv"})
+        assert "Owners in this report" not in full.content.decode("utf-8-sig")
+
+    def test_pdf_with_a_selection_renders(self, client, db_session):
+        self._two_owners(db_session)
+        for path in ("/reports/income-expense", "/reports/expense-log"):
+            for lang in ("en", "he"):
+                resp = client.get(path, params=[("year", 2025), ("lang", lang), ("owner", "Ronen")])
+                assert resp.status_code == 200
+                assert resp.content.startswith(b"%PDF")
+
+    def test_split_returns_one_file_per_owner(self, client, db_session):
+        import zipfile
+
+        self._two_owners(db_session)
+        resp = client.get(
+            "/reports/income-expense",
+            params=[("year", 2025), ("format", "csv"), ("split", "true"),
+                    ("owner", "Dana"), ("owner", "Ronen")],
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/zip"
+        assert 'filename="income-expense-2025.zip"' in resp.headers["content-disposition"]
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            names = sorted(zf.namelist())
+            assert names == ["income-expense-2025-Dana.csv", "income-expense-2025-Ronen.csv"]
+            dana = zf.read("income-expense-2025-Dana.csv").decode("utf-8-sig")
+        # Each file is that owner's alone — totals included.
+        assert "Ronen" not in dana
+        grand = next(r for r in csv.reader(io.StringIO(dana)) if r and r[0] == "GRAND TOTAL")
+        assert float(grand[3]) == 1000.0
+
+    def test_split_without_a_selection_covers_every_owner(self, client, db_session):
+        import zipfile
+
+        self._two_owners(db_session)
+        resp = client.get("/reports/expense-log", params={"year": 2025, "split": "true"})
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            assert sorted(zf.namelist()) == [
+                "expense-log-2025-Dana.pdf", "expense-log-2025-No-Owner.pdf", "expense-log-2025-Ronen.pdf",
+            ]
+
+    def test_split_with_no_data_still_downloads_a_report(self, client):
+        import zipfile
+
+        resp = client.get("/reports/income-expense", params={"year": 2025, "split": "true"})
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            assert zf.namelist() == ["income-expense-2025.pdf"]
+
+    def test_names_that_reduce_to_the_same_file_do_not_overwrite(self):
+        from app.services.report_service import bundle_files, owner_file_part
+
+        assert owner_file_part("Dana Cohen") == owner_file_part("Dana  Cohen") == "Dana-Cohen"
+        assert owner_file_part("a/b:c") == "abc"
+        import zipfile
+
+        blob = bundle_files([("r-Dana-Cohen.pdf", b"1"), ("r-Dana-Cohen.pdf", b"2")])
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            assert zf.namelist() == ["r-Dana-Cohen.pdf", "r-Dana-Cohen-2.pdf"]
+
+    def test_history_records_the_selection(self, client, db_session):
+        self._two_owners(db_session)
+        client.get("/reports/expense-log", params=[("year", 2025), ("owner", "Dana"), ("split", "true")])
+        client.get("/reports/income-expense", params={"year": 2025})
+        rows = client.get("/reports/history").json()
+        by_type = {r["report_type"]: r for r in rows}
+        assert by_type["expense_log"]["owners"] == ["Dana"]
+        assert by_type["expense_log"]["split_by_owner"] is True
+        assert by_type["income_expense"]["owners"] is None
+        assert by_type["income_expense"]["split_by_owner"] is False
