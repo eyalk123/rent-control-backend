@@ -377,6 +377,23 @@ class DocumentExtractionService:
                 detail="Could not extract structured data from the receipt.",
             )
 
+        # Every scan, so a field that came back empty can be told apart from one that was
+        # read and then thrown away (the warning below). Values and ids only: no supplier
+        # name and no `source_text`, which are transcriptions of the receipt.
+        logger.info(
+            "Receipt extraction (model=%s) returned: amount=%s date=%s payment_method=%r "
+            "category_ids=%s supplier_id=%s property_id=%s (properties offered: %d) "
+            "uncertain=%s",
+            self._model,
+            parsed.amount,
+            parsed.date,
+            parsed.payment_method,
+            parsed.category_ids,
+            parsed.supplier_id,
+            parsed.property_id,
+            len(catalog.properties),
+            [f"{n.field}:{n.confidence}" for n in parsed.notes],
+        )
         discarded: list[str] = []
         extraction = receipt.clean_receipt(parsed, catalog, country, discarded)
         if discarded:

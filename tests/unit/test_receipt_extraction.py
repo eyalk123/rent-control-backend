@@ -222,3 +222,39 @@ def test_extract_receipt_rejects_a_word_document():
     with pytest.raises(HTTPException) as exc:
         svc.extract_receipt(b"PK", docx, CATALOG)
     assert exc.value.status_code == 415
+
+
+def test_payment_method_is_a_closed_list_in_the_tool_schema():
+    """The model must pick one of the API's values instead of free text the clean-up drops."""
+    from app.services.receipt_extraction import RECEIPT_TOOL
+
+    field = RECEIPT_TOOL["input_schema"]["properties"]["payment_method"]
+    allowed = next(o["enum"] for o in field["anyOf"] if "enum" in o)
+    assert set(allowed) == {
+        "cash", "bank_transfer", "check", "card", "mobile_payment", "other", "bit", "paybox",
+    }
+
+
+def test_every_scan_logs_what_the_model_returned_without_receipt_text(monkeypatch, caplog):
+    import logging
+
+    svc = DocumentExtractionService(api_key="k", model="claude-sonnet-4-6")
+    fake = _FakeClient({
+        "amount": 450,
+        "payment_method": "check",
+        "supplier_name": "יוסי אינסטלציה",
+        "property_id": None,
+        "notes": [{"field": "amount", "confidence": "low", "source_text": "45O שקל"}],
+    })
+    monkeypatch.setattr(svc, "_client", lambda: fake)
+
+    with caplog.at_level(logging.INFO, logger="app.services.document_extraction_service"):
+        svc.extract_receipt(_jpeg((800, 600)), "image/jpeg", CATALOG, "IL")
+
+    line = next(r.getMessage() for r in caplog.records if "returned:" in r.getMessage())
+    assert "payment_method='check'" in line
+    assert "property_id=None (properties offered: 1)" in line
+    assert "amount:low" in line
+    # Transcriptions of the receipt stay out of the log.
+    assert "יוסי" not in line
+    assert "45O" not in line
