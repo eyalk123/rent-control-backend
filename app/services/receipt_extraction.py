@@ -75,8 +75,8 @@ Fields:
 - date: the date of the receipt or payment, ISO YYYY-MM-DD. Handwritten dates often use a two-digit year ("3/9/26") — write the full year. Read slashed or dotted dates in the order given in the country block.
 - payment_method: exactly one of the values listed in the country block, and only when the receipt marks how it was paid — e.g. מזומן cash, המחאה / צ'ק / שיק check, העברה בנקאית bank_transfer, כרטיס אשראי card, ביט bit, פייבוקס paybox. Receipt books usually have a small table or checkboxes for this; read which one is filled in. A cheque number or bank/branch written in means check. Null if not shown.
 - supplier_name: the business or person who issued the receipt, exactly as written — usually printed or stamped at the top, sometimes only handwritten.
-- supplier_id: the id of the owner's supplier who issued the receipt, taken ONLY from the supplier list you are given. Match on the business name, allowing for spelling variants, abbreviations, Hebrew/English transliteration and suffixes such as בע"מ or Ltd — or on a phone number or email printed on the receipt. If no supplier on the list is clearly the same business, return null. Do not pick the nearest-sounding one, and never invent an id.
-- category_ids: ids from the category list you are given that describe what was paid for — usually exactly one. Decide from the items or description on the receipt, and from the matched supplier's own categories. If nothing on the list fits, return an empty list; do not fall back to a catch-all such as "other" just to fill the field. Never invent an id.
+- supplier_id: the id of the owner's supplier who issued the receipt, taken ONLY from the supplier list you are given. The owner saved each supplier by hand and the receipt was written by hand, so the same business is often spelled differently in the two — match generously on the name. Treat as the same supplier: spelling variants and typos (including swapped, missing or doubled letters), abbreviations, Hebrew/English transliteration, suffixes such as בע"מ or Ltd, and extra words on the receipt such as a second name, a partner or the trade ("ניסים כהן-אבי שרברבות" is the supplier "ניסים כהן"). A phone number or email on the receipt that matches a supplier is a match on its own. When the match rests on such a variant rather than an exact name, phone or email, still return the id, and add a medium-confidence note. Return null only when no supplier on the list is plausibly the same business. Never invent an id.
+- category_ids: ids from the category list you are given that describe what was paid for — usually exactly one. Decide from the items or description on the receipt. The matched supplier's categories are a hint, not a limit: a supplier is sometimes paid for work outside the categories they are listed under. If nothing on the list fits, return an empty list; do not fall back to a catch-all such as "other" just to fill the field. Never invent an id.
 - property_id: only when you are given a property list. The id of the property the work or purchase was for, ONLY if the receipt states an address that clearly matches one on the list. Otherwise null — never guess it from the supplier, the amount or anything else.
 
 READING HANDWRITING AND NUMBERS
@@ -230,19 +230,11 @@ def clean_receipt(
         supplier = suppliers.get(extraction.supplier_id)
         if supplier is None:
             _drop("supplier_id")
-        elif extraction.category_ids:
-            # The form only lets a supplier sit on an expense in one of their categories,
-            # and the API refuses the pair otherwise. The category is the better-supported
-            # reading of the two (it comes from what was bought), so it is the one kept.
-            if not set(supplier.category_ids) & set(extraction.category_ids):
-                _drop("supplier_id")
-        elif len(supplier.category_ids) == 1:
-            # A supplier who works in one category settles the category too.
+        elif not extraction.category_ids and len(supplier.category_ids) == 1:
+            # Nothing on the receipt said what was bought, and a supplier who works in one
+            # category settles it. A category the model did choose is left alone even when
+            # the supplier isn't listed under it — the form warns about that before saving.
             extraction.category_ids = [supplier.category_ids[0]]
-        else:
-            # Several categories and no way to choose: the supplier could not be shown on
-            # the form anyway. `supplier_name` still tells the user who it was.
-            _drop("supplier_id")
 
     if extraction.property_id is not None and extraction.property_id not in {
         p.id for p in catalog.properties

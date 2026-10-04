@@ -259,7 +259,8 @@ def test_update_expense_unknown_supplier_raises_400(db_session):
     assert exc.value.status_code == 400
 
 
-def test_create_expense_supplier_category_mismatch_raises_400(db_session):
+def test_create_expense_allows_supplier_outside_the_categories(db_session):
+    """Supplier and category are independent: the clients warn, the user decides."""
     svc = _service(db_session)
     prop = make_property(db_session)
     cat_used = make_expense_category(db_session, name="Used")
@@ -273,6 +274,5 @@ def test_create_expense_supplier_category_mismatch_raises_400(db_session):
         category_ids=[cat_used.id],
         supplier_id=supplier.id,
     )
-    with pytest.raises(HTTPException) as exc:
-        svc.create_expense(data, OWNER_A)
-    assert exc.value.status_code == 400
+    created = svc.create_expense(data, OWNER_A)
+    assert created.supplier_id == supplier.id

@@ -52,12 +52,12 @@ def test_duplicate_category_ids_are_collapsed():
     assert _clean(category_ids=[PLUMBING, PLUMBING]).category_ids == [PLUMBING]
 
 
-def test_a_supplier_outside_the_chosen_category_is_dropped_and_the_category_kept():
+def test_a_supplier_outside_the_chosen_category_is_kept_with_the_category():
+    """Supplier and category are independent fields: a mismatch is the user's call, and the
+    form warns about it before saving."""
     out = _clean(category_ids=[ELECTRICITY], supplier_id=10, supplier_name="יוסי")
     assert out.category_ids == [ELECTRICITY]
-    assert out.supplier_id is None
-    # The name as written survives, so the form can still say who it was.
-    assert out.supplier_name == "יוסי"
+    assert out.supplier_id == 10
 
 
 def test_a_single_category_supplier_fills_an_empty_category():
@@ -66,11 +66,10 @@ def test_a_single_category_supplier_fills_an_empty_category():
     assert out.category_ids == [PLUMBING]
 
 
-def test_a_multi_category_supplier_with_no_category_is_dropped():
-    """The form could not show the supplier without a category, and choosing one of theirs
-    would be a guess."""
+def test_a_multi_category_supplier_with_no_category_keeps_the_category_empty():
+    """Choosing one of their categories would be a guess, so the user picks it."""
     out = _clean(supplier_id=11)
-    assert out.supplier_id is None
+    assert out.supplier_id == 11
     assert out.category_ids == []
 
 

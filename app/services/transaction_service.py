@@ -492,12 +492,9 @@ class TransactionService:
                 raise HTTPException(status_code=400, detail="Supplier not found")
             if not supplier.is_active:
                 raise HTTPException(status_code=400, detail="Supplier is inactive")
-            supplier_cat_ids = [c.id for c in supplier.categories]
-            if not any(cid in supplier_cat_ids for cid in data.category_ids):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Supplier does not belong to any of the selected categories",
-                )
+            # A supplier outside the chosen categories is allowed. The clients warn before
+            # saving one, but the landlord decides: a plumber who also fixed the boiler is
+            # still that plumber.
         currency_code = property.currency_code or settings.DEFAULT_CURRENCY
         property_address = f"{property.address}, {property.city}" if property.city else property.address
         renter_name_snap = None

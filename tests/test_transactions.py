@@ -148,7 +148,8 @@ def test_create_expense_inactive_supplier_rejected(client, db_session):
     assert client.post("/transactions/expense", json=payload).status_code == 400
 
 
-def test_create_expense_supplier_category_mismatch(client, db_session):
+def test_create_expense_allows_a_supplier_outside_the_chosen_categories(client, db_session):
+    """The clients warn about the mismatch; the API leaves the decision to the user."""
     prop = make_property(db_session)
     cat_used = make_expense_category(db_session, name="Used")
     cat_other = make_expense_category(db_session, name="Other")
@@ -161,7 +162,9 @@ def test_create_expense_supplier_category_mismatch(client, db_session):
         "category_ids": [cat_used.id],
         "supplier_id": supplier.id,
     }
-    assert client.post("/transactions/expense", json=payload).status_code == 400
+    resp = client.post("/transactions/expense", json=payload)
+    assert resp.status_code == 201
+    assert resp.json()["supplier_id"] == supplier.id
 
 
 # --- get / list -------------------------------------------------------------
