@@ -140,7 +140,7 @@ class MonthSummaryItem(BaseModel):
 
 
 class OwnerNetItem(BaseModel):
-    owner: str | None  # the free-text Property.property_owner; None = unattributed
+    owner: str | None  # the property owner's name; None = unattributed
     revenue: float
     expenses: float
     net: float

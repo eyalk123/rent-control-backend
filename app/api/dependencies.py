@@ -34,6 +34,7 @@ from app.repositories.property_file_repository import PropertyFileRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.report_export_repository import ReportExportRepository
+from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.support_message_repository import SupportMessageRepository
 from app.repositories.transaction_repository import TransactionRepository
@@ -54,6 +55,7 @@ from app.services.push_service import PushService
 from app.services.reminder_service import ReminderService
 from app.services.retention_service import RetentionService
 from app.services.renter_service import RenterService
+from app.services.property_owner_service import PropertyOwnerService
 from app.services.supplier_service import SupplierService
 from app.services.transaction_service import TransactionService
 from app.services.user_service import UserService
@@ -285,6 +287,18 @@ def get_supplier_repository(
     db: Annotated[Session, Depends(get_db)],
 ) -> SupplierRepository:
     return SupplierRepository(db)
+
+
+def get_property_owner_repository(
+    db: Annotated[Session, Depends(get_db)],
+) -> PropertyOwnerRepository:
+    return PropertyOwnerRepository(db)
+
+
+def get_property_owner_service(
+    repository: Annotated[PropertyOwnerRepository, Depends(get_property_owner_repository)],
+) -> PropertyOwnerService:
+    return PropertyOwnerService(repository)
 
 
 def get_transaction_repository(

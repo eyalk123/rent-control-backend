@@ -17,6 +17,7 @@ from app.models.notification_settings import NotificationSettings
 from app.models.owner import Owner
 from app.models.owner_client_day import OwnerClientDay
 from app.models.property import Property
+from app.models.property_owner import PropertyOwner
 from app.models.renter import Renter
 from app.models.report_export import ReportExport
 from app.models.supplier import Supplier
@@ -49,6 +50,7 @@ class UserService:
         self.db.execute(delete(Supplier).where(Supplier.owner_id == owner_id))
         self.db.execute(delete(ExpenseCategory).where(ExpenseCategory.owner_id == owner_id))
         self.db.execute(delete(Property).where(Property.owner_id == owner_id))
+        self.db.execute(delete(PropertyOwner).where(PropertyOwner.owner_id == owner_id))
 
         # Notifications and the rules that generate them, plus the devices they are pushed to.
         self.db.execute(delete(Notification).where(Notification.owner_id == owner_id))

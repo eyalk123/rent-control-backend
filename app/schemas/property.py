@@ -57,6 +57,10 @@ class PropertyCreate(BaseModel):
     water_account_number: Optional[str] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
+    # The owner record. `property_owner` is the older way to say it — a name, matched
+    # exactly or created — kept because mobile builds already in the stores send it.
+    # When both are sent the id wins.
+    property_owner_id: Optional[int] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
     basic_contract_url: Optional[str] = None
@@ -90,6 +94,10 @@ class PropertyUpdate(BaseModel):
     water_account_number: Optional[str] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
+    # The owner record. `property_owner` is the older way to say it — a name, matched
+    # exactly or created — kept because mobile builds already in the stores send it.
+    # When both are sent the id wins.
+    property_owner_id: Optional[int] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
     basic_contract_url: Optional[str] = None
@@ -146,7 +154,8 @@ class PropertyRead(BaseModel):
     water_account_number: Optional[str] = None
     property_tax: Optional[float] = None
     house_committee: Optional[float] = None
-    property_owner: Optional[str] = None
+    property_owner_id: Optional[int] = None
+    property_owner: Optional[str] = None  # the owner's name
     inventory_notes: Optional[str] = None
     basic_contract_url: Optional[str] = None
     land_registry_url: Optional[str] = None

@@ -1,10 +1,12 @@
 import enum
 
-from sqlalchemy import Column, DateTime, Enum, Float, Integer, String, Text
+from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text, select
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 
 from app.clock import utc_now_naive
 from app.models.base import Base
+from app.models.property_owner import PropertyOwner
 
 
 class PropertyTypeEnum(str, enum.Enum):
@@ -48,7 +50,10 @@ class Property(Base):
     # wants to record, and demanding one at signup loses the account.
     purchase_price = Column(Float, nullable=True)
     image_url = Column(String, nullable=True)
-    property_owner = Column(String, nullable=True)
+    # The human owner (see PropertyOwner). Their name is read as `property_owner`, below.
+    property_owner_id = Column(
+        Integer, ForeignKey("property_owners.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     number_of_rooms = Column(Float, nullable=True)
     parking_numbers = Column(Text, nullable=True)  # JSON array of strings
     electricity_meter_number = Column(String, nullable=True)
@@ -76,3 +81,28 @@ class Property(Base):
     renters = relationship("Renter", back_populates="property", foreign_keys="Renter.property_id")
     transactions = relationship("Transaction", back_populates="property", foreign_keys="Transaction.property_id", passive_deletes=True)
     files = relationship("PropertyFile", back_populates="property", cascade="all, delete-orphan")
+    # Joined, not lazy: nearly every read of a property names its owner (lists, reports,
+    # the assistant), and a many-to-one join costs nothing next to an extra query per row.
+    owner_record = relationship(PropertyOwner, lazy="joined")
+
+    @hybrid_property
+    def property_owner(self) -> str | None:
+        """The owner's name — what this column held before owners became records.
+
+        Reports, notification scopes, filters and the assistant all still speak in names,
+        and a name is unique within an account, so they read this instead of changing. In
+        SQL it is a correlated subquery, so filters such as `Property.property_owner.in_(...)`
+        keep working. Do not group by it — PostgreSQL rejects that; join `PropertyOwner`
+        and group by its name. Read-only: set `property_owner_id`.
+        """
+        return self.owner_record.name if self.owner_record is not None else None
+
+    @property_owner.inplace.expression
+    @classmethod
+    def _property_owner_expression(cls):
+        return (
+            select(PropertyOwner.name)
+            .where(PropertyOwner.id == cls.property_owner_id)
+            .correlate_except(PropertyOwner)
+            .scalar_subquery()
+        )

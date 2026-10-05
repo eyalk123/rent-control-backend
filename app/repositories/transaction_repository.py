@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.expense_category import ExpenseCategory
 from app.models.property import Property
+from app.models.property_owner import PropertyOwner
 from app.models.renter import Renter
 from app.models.supplier import Supplier
 from app.models.transaction import Transaction, TransactionTypeEnum
@@ -157,13 +158,15 @@ class TransactionRepository:
     def get_ytd_by_owner(
         self, owner_id: str, from_date: date, exclude_property_ids=None
     ) -> list:
-        # Net per *property owner* (the free-text Property.property_owner), same
-        # effective-date rule as the monthly summary so the sidebar card and the
-        # income/expense report agree. Outer join: property_id is ON DELETE SET NULL,
-        # so transactions of a deleted property must still count, unattributed.
+        # Net per *property owner* (by name), same effective-date rule as the monthly
+        # summary so the sidebar card and the income/expense report agree. Outer joins:
+        # property_id is ON DELETE SET NULL, so transactions of a deleted property must
+        # still count, unattributed — as must a property with no owner. Joined rather than
+        # grouped by the `Property.property_owner` subquery, which PostgreSQL refuses to
+        # group on (it reads an ungrouped column).
         stmt = (
             select(
-                Property.property_owner.label('owner'),
+                PropertyOwner.name.label('owner'),
                 func.sum(
                     case((Transaction.type == TransactionTypeEnum.REVENUE, Transaction.amount), else_=0)
                 ).label('revenue'),
@@ -172,11 +175,12 @@ class TransactionRepository:
                 ).label('expenses'),
             )
             .outerjoin(Property, Transaction.property_id == Property.id)
+            .outerjoin(PropertyOwner, Property.property_owner_id == PropertyOwner.id)
             .where(
                 Transaction.owner_id == owner_id,
                 EFFECTIVE_DATE >= from_date,
             )
-            .group_by(Property.property_owner)
+            .group_by(PropertyOwner.name)
         )
         if (hidden := not_on_properties(exclude_property_ids)) is not None:
             stmt = stmt.where(hidden)

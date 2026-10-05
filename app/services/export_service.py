@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.owner_repository import OwnerRepository
+from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.supplier_repository import SupplierRepository
@@ -100,6 +101,7 @@ _PROPERTY_COLUMNS: list[tuple[str, Callable]] = [
     ("floor_area", lambda p: p.sq_ft),
     ("parking_numbers", lambda p: p.parking_numbers),
     ("purchase_price", lambda p: p.purchase_price),
+    ("property_owner_id", lambda p: p.property_owner_id),
     ("property_owner", lambda p: p.property_owner),
     ("property_tax", lambda p: p.property_tax),
     ("house_committee", lambda p: p.house_committee),
@@ -186,6 +188,18 @@ _SUPPLIER_COLUMNS: list[tuple[str, Callable]] = [
     ("updated_at", lambda s: s.updated_at),
 ]
 
+_PROPERTY_OWNER_COLUMNS: list[tuple[str, Callable]] = [
+    ("id", lambda o: o.id),
+    ("name", lambda o: o.name),
+    ("is_active", lambda o: o.is_active),
+    ("phone", lambda o: o.phone),
+    ("email", lambda o: o.email),
+    ("bank_account", lambda o: o.bank_account),
+    ("notes", lambda o: o.notes),
+    ("created_at", lambda o: o.created_at),
+    ("updated_at", lambda o: o.updated_at),
+]
+
 _CATEGORY_COLUMNS: list[tuple[str, Callable]] = [
     ("id", lambda c: c.id),
     ("key", lambda c: c.key),
@@ -252,6 +266,12 @@ def build_workbook(db: Session, owner_id: str) -> bytes:
         "Properties",
         _property_columns(db, owner_id),
         PropertyRepository(db).get_all_by_owner(owner_id),
+    )
+    _write_sheet(
+        wb,
+        "Property owners",
+        _PROPERTY_OWNER_COLUMNS,
+        PropertyOwnerRepository(db).get_all(owner_id, include_inactive=True),
     )
     _write_sheet(wb, "Renters", _RENTER_COLUMNS, RenterRepository(db).get_all(owner_id))
     _write_sheet(wb, "Transactions", _TRANSACTION_COLUMNS, _all_transactions(db, owner_id))

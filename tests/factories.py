@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.expense_category import ExpenseCategory
 from app.models.property import Property, PropertyTypeEnum
+from app.models.property_owner import PropertyOwner
 from app.models.renter import Renter
 from app.models.supplier import Supplier
 from app.models.transaction import (
@@ -35,12 +36,33 @@ def make_property(session: Session, owner_id: str = OWNER_A, **kw) -> Property:
         sq_ft=80,
         purchase_price=1_000_000.0,
     )
+    # `property_owner="Dad"` still reads naturally in a test: it becomes (or reuses) the
+    # account's owner record of that name, which is what the property form does.
+    name = kw.pop("property_owner", None)
+    if name:
+        kw["property_owner_id"] = make_property_owner(session, owner_id, name=name).id
     defaults.update(kw)
     prop = Property(**defaults)
     session.add(prop)
     session.commit()
     session.refresh(prop)
     return prop
+
+
+def make_property_owner(
+    session: Session, owner_id: str = OWNER_A, name: str = "Dana", **kw
+) -> PropertyOwner:
+    """The account's owner of this name, created if there is none (names are unique)."""
+    existing = (
+        session.query(PropertyOwner).filter_by(owner_id=owner_id, name=name).one_or_none()
+    )
+    if existing is not None:
+        return existing
+    owner = PropertyOwner(owner_id=owner_id, name=name, **{"is_active": True, **kw})
+    session.add(owner)
+    session.commit()
+    session.refresh(owner)
+    return owner
 
 
 def make_renter(

@@ -4,6 +4,7 @@ from datetime import date
 from app.models.property import Property, PropertyTypeEnum
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.owner_repository import OwnerRepository
+from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
@@ -12,6 +13,7 @@ from app.services import country_service
 from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
 from app.services.firebase_storage import release_file_urls
+from app.services.property_owner_service import PropertyOwnerService
 
 # Columns holding a Storage download URL.
 _FILE_FIELDS = ("image_url", "basic_contract_url", "land_registry_url")
@@ -37,6 +39,11 @@ class PropertyService:
         # it a new property simply inherits no country, which `config_for` resolves to
         # Israel — today's behaviour exactly.
         self.owner_repository = owner_repository
+        # Built on the same session so a name typed on the form and the property that
+        # points at it are committed together.
+        self.property_owner_service = PropertyOwnerService(
+            PropertyOwnerRepository(property_repository.session)
+        )
 
     def _mark_locked(self, owner_id: str, properties: list):
         """Tag each property with whether the plan still allows writing to it.
@@ -121,6 +128,19 @@ class PropertyService:
             return None, None
         return owner.country, owner.currency
 
+    def _property_owner_id(self, fields: dict, owner_id: str) -> int | None:
+        """The owner id a create/update asks for.
+
+        `property_owner_id` must be one of this account's owners (400 otherwise).
+        `property_owner` is a name: matched exactly, or created — what the field always did.
+        """
+        if fields.get("property_owner_id") is not None:
+            return self.property_owner_service.require_owned(fields["property_owner_id"], owner_id).id
+        name = fields.get("property_owner")
+        if not name:
+            return None
+        return self.property_owner_service.resolve_name(name, owner_id).id
+
     def create_property(self, data: PropertyCreate, owner_id: str):
         # Before any work: a plan that cannot hold another property refuses here with 402
         # and a body naming the plan that can. No-op while ENTITLEMENT_ENFORCED is off.
@@ -148,7 +168,7 @@ class PropertyService:
             water_account_number=data.water_account_number,
             property_tax=data.property_tax,
             house_committee=data.house_committee,
-            property_owner=data.property_owner,
+            property_owner_id=self._property_owner_id(data.model_dump(), owner_id),
             basic_contract_url=data.basic_contract_url,
             land_registry_url=data.land_registry_url,
             floor=data.floor,
@@ -180,6 +200,9 @@ class PropertyService:
         if self.entitlement_gate is not None:
             self.entitlement_gate.require_property_unlocked(owner_id, property_id)
         update_dict = data.model_dump(exclude_unset=True)
+        if "property_owner_id" in update_dict or "property_owner" in update_dict:
+            update_dict["property_owner_id"] = self._property_owner_id(update_dict, owner_id)
+        update_dict.pop("property_owner", None)
         if "type" in update_dict and update_dict["type"] is not None:
             update_dict["type"] = PropertyTypeEnum(update_dict["type"].value)
         if "parking_numbers" in update_dict:

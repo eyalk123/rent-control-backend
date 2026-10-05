@@ -25,6 +25,7 @@ from app.api.routers import (
     properties,
     renters,
     reports,
+    property_owners,
     suppliers,
     support_messages,
     transactions,
@@ -100,6 +101,7 @@ app.include_router(renters.router, prefix="/renters", tags=["renters"], dependen
 app.include_router(transactions.router, prefix="/transactions", tags=["transactions"], dependencies=_owner_refresh)
 app.include_router(expense_categories.router, prefix="/expense-categories", tags=["expense-categories"], dependencies=_owner_refresh)
 app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"], dependencies=_owner_refresh)
+app.include_router(property_owners.router, prefix="/property-owners", tags=["property-owners"], dependencies=_owner_refresh)
 app.include_router(users.router, prefix="/users", tags=["users"], dependencies=_owner_refresh)
 app.include_router(reports.router, prefix="/reports", tags=["reports"], dependencies=_owner_refresh)
 app.include_router(device_tokens.router, prefix="/device-tokens", tags=["device-tokens"], dependencies=_owner_refresh)
