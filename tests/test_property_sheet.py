@@ -13,7 +13,7 @@ from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import make_property
 from app.models.property import PropertyTypeEnum
 from app.services import country_service
-from app.services.property_sheet_service import SheetFormats, sheet_rows
+from app.services.property_sheet_service import SheetFormats, sheet_facts, sheet_rows
 
 
 def _text(pdf_bytes: bytes) -> str:
@@ -114,9 +114,9 @@ def test_sheet_is_owner_scoped(client_factory, db_session):
 
 def test_empty_fields_and_sections_are_dropped(db_session):
     prop = make_property(db_session, type=PropertyTypeEnum.APARTMENT, floor=0)
-    sections = dict(sheet_rows(prop, "en", _formats()))
     # Floor 0 is a ground floor, not an empty field.
-    assert dict(sections["Property"])["Floor"] == "0"
+    assert dict(sheet_facts(prop, "en", _formats()))["Floor"] == "0"
+    sections = dict(sheet_rows(prop, "en", _formats()))
     assert "Utilities" not in sections
     assert "Payments" not in sections
 
@@ -127,3 +127,11 @@ def test_registry_label_follows_the_country(db_session):
     assert rows["Title number"] == "NGL123456"
     # The UK has one identifier, so the second box never prints.
     assert "ignored" not in rows.values()
+
+
+def test_tax_and_fees_print_as_entered_with_no_period(db_session):
+    """The form asks for an amount and nothing else, so the sheet must not call it annual
+    or monthly — Israeli arnona is usually billed every two months."""
+    prop = make_property(db_session, property_tax=690.0, house_committee=320.0)
+    rows = dict(dict(sheet_rows(prop, "en", _formats()))["Payments"])
+    assert rows == {"Property tax": "690₪", "Building / HOA fees": "320₪"}
