@@ -165,3 +165,24 @@ def delete_file_urls(urls: list[str | None]) -> None:
 
     except Exception as exc:
         logger.warning("Firebase Storage cleanup failed: %s", exc)
+
+
+def download_owner_file(owner_id: str, url: str | None) -> bytes | None:
+    """The bytes of one of the owner's Storage files, or None — never raises.
+
+    Only paths under the owner's own prefixes are read, for the reason `release_file_urls`
+    gives: the stored value is client-supplied, and the Admin SDK would read another
+    account's file on request.
+    """
+    path = _blob_path_from_url(url) if url else None
+    if not path or not path.startswith(tuple(owner_prefixes(owner_id))):
+        return None
+    try:
+        bucket = _get_bucket()
+        if bucket is None:
+            return None
+        return bucket.blob(path).download_as_bytes()
+    except Exception as exc:
+        # The type only: a GCS error message quotes the object path.
+        logger.warning("Failed to download a Storage file: %s", type(exc).__name__)
+        return None

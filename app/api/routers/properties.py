@@ -1,14 +1,19 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_property_file_repository, get_property_service
+from app.api.routers.reports import _owner_formats
+from app.database import get_db
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
 from app.schemas.property_file import PropertyFileCreate, PropertyFileRead
 from app.schemas.renter import PropertyRenterSummary
 from app.services.firebase_storage import release_file_urls
 from app.services.property_service import PropertyService
+from app.services.property_sheet_service import SheetFormats, generate_property_sheet_pdf
 
 router = APIRouter()
 
@@ -51,6 +56,32 @@ def get_property(
     if property is None:
         raise HTTPException(status_code=404, detail="Property not found")
     return property
+
+
+@router.get("/{property_id}/sheet")
+def property_sheet(
+    property_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+    db: Annotated[Session, Depends(get_db)],
+    lang: str = Query("en", pattern="^(en|he)$"),
+):
+    """A one-page PDF of the property for a new renter — renter-safe fields only (see
+    `property_sheet_service`), in the language the app is in."""
+    owner_id = current_user["user_id"]
+    property = property_service.get_property(property_id, owner_id=owner_id)
+    if property is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    content = generate_property_sheet_pdf(
+        property, owner_id, lang, SheetFormats(*_owner_formats(db, owner_id))
+    )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        # The id, not the address: a Hebrew address cannot go in a latin-1 header, and the
+        # clients name the saved file themselves.
+        headers={"Content-Disposition": f'attachment; filename="property-{property_id}.pdf"'},
+    )
 
 
 @router.post("", response_model=PropertyRead, status_code=201)

@@ -625,8 +625,8 @@ def get_expense_log_data(
 class _PDF(FPDF):
     def __init__(
         self,
-        title_key: str,
-        year: int,
+        title_key: str | None,
+        year: int | None,
         lang: str = DEFAULT_LANG,
         currency: country_service.EffectiveCurrency | None = None,
         number_format: str = DEFAULT_NUMBER_FORMAT,
@@ -652,7 +652,8 @@ class _PDF(FPDF):
         self.number_format = number_format
         self.symbol_spaced = symbol_spaced
         self.rtl = self.lang == "he"
-        self._title = _t(self.lang, title_key)
+        # None for a subclass that draws its own header (the property sheet).
+        self._title = _t(self.lang, title_key) if title_key else ""
         self._year = year
         for style, suffix in (("", "Regular"), ("B", "Bold")):
             self.add_font(FONT, style, FONTS_DIR / f"{FONT}-{suffix}.ttf")
