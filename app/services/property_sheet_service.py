@@ -211,6 +211,16 @@ class _SheetPDF(_PDF):
     def footer(self):
         pass
 
+    def cell(self, *args, **kwargs):
+        result = super().cell(*args, **kwargs)
+        # fpdf2 2.8.9 remembers which font it last wrote to the page and skips writing it
+        # again, but a Hebrew label is written through the fallback font without updating
+        # that memory. The value cell beside it — digits, in Noto Sans — was then drawn in
+        # Noto Sans Hebrew, which has no digits: every number came out as empty boxes.
+        # Forgetting after each cell makes the next one name its font.
+        self.current_font_is_set_on_page = False
+        return result
+
     def wrap(self, text: str, width: float) -> list[str]:
         """Break `text` into lines that fit `width` mm at the current font.
 

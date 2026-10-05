@@ -3,9 +3,11 @@
 What matters most is what it leaves out: it is built from an allowlist, so the owner's own
 figures and the human owner's name never reach a renter.
 """
+import ctypes
 import io
 
 import pypdfium2
+import pypdfium2.raw as pdfium_c
 
 from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import make_property
@@ -17,6 +19,19 @@ from app.services.property_sheet_service import SheetFormats, sheet_rows
 def _text(pdf_bytes: bytes) -> str:
     doc = pypdfium2.PdfDocument(io.BytesIO(pdf_bytes))
     return "\n".join(page.get_textpage().get_text_range() for page in doc)
+
+
+def _digit_fonts(pdf_bytes: bytes) -> set[str]:
+    """The font every digit on the first page is drawn in."""
+    textpage = pypdfium2.PdfDocument(io.BytesIO(pdf_bytes))[0].get_textpage()
+    text = textpage.get_text_range()
+    fonts = set()
+    buffer = ctypes.create_string_buffer(256)
+    for index, char in enumerate(text):
+        if char.isdigit():
+            pdfium_c.FPDFText_GetFontInfo(textpage.raw, index, buffer, 256, None)
+            fonts.add(buffer.value.decode())
+    return fonts
 
 
 def _formats(country=None):
@@ -67,10 +82,29 @@ def test_sheet_leaves_out_owner_only_fields(client, db_session):
 
 
 def test_sheet_renders_in_hebrew(client, db_session):
-    prop = _full_property(db_session, address="רחוב הרצל 12", city="תל אביב", inventory_notes="מקרר, תנור ושני מזגנים " * 12)
+    prop = _full_property(
+        db_session, address="רחוב הרצל 12", city="תל אביב",
+        inventory_notes="מקרר, תנור ושני מזגנים " * 12,
+    )
     resp = client.get(f"/properties/{prop.id}/sheet", params={"lang": "he"})
     assert resp.status_code == 200
     assert resp.content.startswith(b"%PDF")
+
+
+def test_hebrew_sheet_draws_numbers_in_a_font_that_has_digits(client, db_session):
+    """The production demo property, field for field.
+
+    On fpdf2 2.8.9 the values after a Hebrew cell were drawn in the font it left behind —
+    the Hebrew one, which has no digits — so every number printed as empty boxes.
+    """
+    prop = make_property(
+        db_session, address="ז'בוטינסקי 33", city="רמת גן", zip_code=None, floor=6,
+        apartment="12", number_of_rooms=4.0, sq_ft=98, parking_numbers='["31"]',
+        block="6152", plot="77", property_tax=690.0, house_committee=320.0,
+    )
+    resp = client.get(f"/properties/{prop.id}/sheet", params={"lang": "he"})
+    fonts = _digit_fonts(resp.content)
+    assert fonts and not any("Hebrew" in font for font in fonts), fonts
 
 
 def test_sheet_is_owner_scoped(client_factory, db_session):
