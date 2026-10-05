@@ -10,7 +10,7 @@ import pypdfium2
 import pypdfium2.raw as pdfium_c
 
 from tests.conftest import OWNER_A, OWNER_B
-from tests.factories import make_property
+from tests.factories import make_property, make_property_owner
 from app.models.property import PropertyTypeEnum
 from app.services import country_service
 from app.services.property_sheet_service import SheetFormats, sheet_facts, sheet_rows
@@ -77,8 +77,32 @@ def test_sheet_downloads_as_pdf(client, db_session):
 def test_sheet_leaves_out_owner_only_fields(client, db_session):
     prop = _full_property(db_session)
     text = _text(client.get(f"/properties/{prop.id}/sheet").content)
-    assert "Secret Owner" not in text
     assert "2,500,000" not in text
+
+
+def test_sheet_shows_the_property_owners_contact_details(client, db_session):
+    """So the tenant knows who to pay and where. The owner record's notes stay off."""
+    owner = make_property_owner(
+        db_session, name="Dana Levi", phone="050-1234567", email="dana@example.com",
+        bank_account="12-345-678901", notes="Private note",
+    )
+    prop = make_property(db_session, property_owner_id=owner.id)
+    text = _text(client.get(f"/properties/{prop.id}/sheet").content)
+    for expected in ("Property owner", "Dana Levi", "050-1234567", "dana@example.com", "12-345-678901"):
+        assert expected in text
+    assert "Private note" not in text
+
+
+def test_owner_contact_shows_only_filled_fields(db_session):
+    owner = make_property_owner(db_session, name="Avi")
+    prop = make_property(db_session, property_owner_id=owner.id)
+    sections = dict(sheet_rows(prop, "en", _formats()))
+    assert sections["Property owner"] == [("Name", "Avi")]
+
+
+def test_no_owner_section_without_an_owner(db_session):
+    prop = make_property(db_session)
+    assert "Property owner" not in dict(sheet_rows(prop, "en", _formats()))
 
 
 def test_sheet_renders_in_hebrew(client, db_session):

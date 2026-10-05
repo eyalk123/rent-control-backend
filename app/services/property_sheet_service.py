@@ -1,9 +1,11 @@
 """The property sheet: a one-page PDF an owner sends to a new renter.
 
 **It is written for the renter, not the owner, so it is built from an allowlist.** A property
-also holds what only the owner should see — the purchase price, the human owner's name, the
-ownership document, revenue — and a field added to the model later must stay out of this file
-until someone decides a renter should have it. Empty fields are left out rather than printed
+also holds what only the owner should see — the purchase price, the ownership document,
+revenue — and a field added to the model later must stay out of this file until someone
+decides a renter should have it. The property owner's contact details (name, phone, email,
+bank account, from ``owner_record``) are on it deliberately, so the tenant knows who to pay
+and where; the owner record's notes are not. Empty fields are left out rather than printed
 as blanks, so a sparsely filled property still reads as a finished document.
 
 Drawn with the reports' `_PDF`, which already carries the fonts and the right-to-left handling.
@@ -36,6 +38,11 @@ TEXT = {
         "section_utilities": "Utilities",
         "section_payments": "Payments",
         "section_inventory": "Inventory notes",
+        "section_owner": "Property owner",
+        "owner_name": "Name",
+        "owner_phone": "Phone",
+        "owner_email": "Email",
+        "owner_bank": "Bank account",
         "type": "Type",
         "floor": "Floor",
         "unit": "Unit",
@@ -58,6 +65,11 @@ TEXT = {
         "section_utilities": "חשמל ומים",
         "section_payments": "תשלומים",
         "section_inventory": "הערות דירה",
+        "section_owner": "בעל הנכס",
+        "owner_name": "שם",
+        "owner_phone": "טלפון",
+        "owner_email": "אימייל",
+        "owner_bank": "חשבון בנק",
         "type": "סוג",
         "floor": "קומה",
         "unit": "דירה",
@@ -203,6 +215,15 @@ def sheet_rows(prop: Property, lang: str, formats: SheetFormats) -> list[tuple[s
             (t["building_fees"], money(prop.house_committee) if prop.house_committee else None),
         ]),
     ]
+    # Next to Payments: who to pay, and where.
+    owner = getattr(prop, "owner_record", None)
+    if owner is not None:
+        sections.append((t["section_owner"], [
+            (t["owner_name"], owner.name),
+            (t["owner_phone"], owner.phone),
+            (t["owner_email"], owner.email),
+            (t["owner_bank"], owner.bank_account),
+        ]))
     return [(title, filled) for title, rows in sections if (filled := _filled(rows))]
 
 
