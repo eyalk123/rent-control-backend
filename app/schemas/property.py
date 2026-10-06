@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.schemas.stored_file import StoredFile
+
 
 class PropertyType(str, Enum):
     Apartment = "apartment"
@@ -48,7 +50,7 @@ class PropertyCreate(BaseModel):
     type: PropertyType
     sq_ft: Optional[int] = None
     purchase_price: Optional[float] = None
-    image_url: Optional[str] = None
+    image_url: StoredFile = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
@@ -63,8 +65,8 @@ class PropertyCreate(BaseModel):
     property_owner_id: Optional[int] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
-    basic_contract_url: Optional[str] = None
-    land_registry_url: Optional[str] = None
+    basic_contract_url: StoredFile = None
+    land_registry_url: StoredFile = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
     block: Optional[str] = None
@@ -85,7 +87,7 @@ class PropertyUpdate(BaseModel):
     type: Optional[PropertyType] = None
     sq_ft: Optional[int] = None
     purchase_price: Optional[float] = None
-    image_url: Optional[str] = None
+    image_url: StoredFile = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
@@ -100,8 +102,8 @@ class PropertyUpdate(BaseModel):
     property_owner_id: Optional[int] = None
     property_owner: Optional[str] = None
     inventory_notes: Optional[str] = None
-    basic_contract_url: Optional[str] = None
-    land_registry_url: Optional[str] = None
+    basic_contract_url: StoredFile = None
+    land_registry_url: StoredFile = None
     floor: Optional[int] = None
     apartment: Optional[str] = None
     block: Optional[str] = None

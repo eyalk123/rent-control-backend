@@ -15,7 +15,7 @@ from app.services.activity_diff import changed_fields
 from app.services.firebase_storage import release_file_urls
 from app.services.property_owner_service import PropertyOwnerService
 
-# Columns holding a Storage download URL.
+# Columns holding a Storage path.
 _FILE_FIELDS = ("image_url", "basic_contract_url", "land_registry_url")
 
 

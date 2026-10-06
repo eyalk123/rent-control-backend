@@ -2,9 +2,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.stored_file import StoredFilePath
+
 
 class PropertyFileCreate(BaseModel):
-    url: str
+    url: StoredFilePath
     label: str
 
 

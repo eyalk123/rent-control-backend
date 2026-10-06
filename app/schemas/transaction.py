@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.stored_file import StoredFile
+
 
 class TransactionType(str, Enum):
     revenue = "revenue"
@@ -50,7 +52,7 @@ class TransactionCreateExpense(BaseModel):
     category_ids: list[int] = Field(min_length=1)
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
-    receipt_image_url: Optional[str] = None
+    receipt_image_url: StoredFile = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -118,7 +120,7 @@ class TransactionUpdateExpense(BaseModel):
     category_ids: Optional[list[int]] = None
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
-    receipt_image_url: Optional[str] = None
+    receipt_image_url: StoredFile = None
 
     model_config = ConfigDict(from_attributes=True)
 

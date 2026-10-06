@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.property import PropertyType
 from app.schemas.renter import LeaseYearType, RentEscalationMode
+from app.schemas.stored_file import StoredFile
 
 Confidence = Literal["medium", "low"]
 
@@ -193,6 +194,6 @@ class ExtractionLogUpdate(BaseModel):
 
     entity_type: Literal["property", "renter", "transaction"]
     created_id: Optional[int] = None
-    contract_url: Optional[str] = None
+    contract_url: StoredFile = None
     fields_given_count: int = 0
     field_edits: list[FieldEdit] = []

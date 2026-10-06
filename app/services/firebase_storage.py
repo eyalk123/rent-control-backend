@@ -1,29 +1,22 @@
 import logging
 import re
-from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
 
-# A bare storage path in the client upload shape (see ENTITY_TYPES below).
+# A stored file value: the bare storage path the client uploaded to (see ENTITY_TYPES below).
+# Anything else in a file column — a house preset sentinel — is not one of our files.
 _STORAGE_PATH = re.compile(r"^(properties|renters|transactions)/[^/]+/[^/]+/.+")
 
 
-def _blob_path_from_url(url: str) -> str | None:
-    """Extract the GCS blob path from a stored file value.
+def _blob_path(value: str) -> str | None:
+    """The GCS blob path a stored file value names, or None when it is not one of our files.
 
-    Accepts a bare storage path — what the columns will hold once download tokens are
-    retired (PLATFORM.md §18) — or a Firebase Storage download URL, which looks like:
-    https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{encoded%2Fpath}?alt=media&token=...
+    Columns hold bare storage paths. They once held Firebase download URLs, whose token
+    opened the file for anyone with the link; migration 069 converted them and the request
+    schemas refuse new ones (PLATFORM.md §18).
     """
-    if _STORAGE_PATH.match(url):
-        return url
-    try:
-        path = urlparse(url).path  # /v0/b/{bucket}/o/{encoded_path}
-        _, encoded = path.split("/o/", 1)
-        return unquote(encoded)
-    except Exception:
-        return None
+    return value if _STORAGE_PATH.match(value) else None
 
 
 def _get_bucket():
@@ -130,18 +123,17 @@ def release_file_urls(db, owner_id: str, urls: list[str | None]) -> None:
     prefixes = tuple(owner_prefixes(owner_id))
     owned = []
     for url in candidates:
-        path = _blob_path_from_url(url)
+        path = _blob_path(url)
         if path and path.startswith(prefixes):
             owned.append(url)
         else:
-            # Never the URL: it carries a non-expiring access token, and the file name may
-            # name a tenant. Logs become Sentry breadcrumbs.
+            # Never the path: the file name may name a tenant. Logs become Sentry breadcrumbs.
             logger.warning("Not deleting a Storage file outside %s's prefixes", owner_id)
     delete_file_urls(owned)
 
 
 def delete_file_urls(urls: list[str | None]) -> None:
-    """Best-effort delete of Firebase Storage blobs referenced by download URLs."""
+    """Best-effort delete of the Firebase Storage blobs these stored values name."""
     valid = [u for u in urls if u]
     if not valid:
         return
@@ -153,9 +145,9 @@ def delete_file_urls(urls: list[str | None]) -> None:
             return
 
         for url in valid:
-            path = _blob_path_from_url(url)
+            path = _blob_path(url)
             if not path:
-                logger.warning("Could not parse a Storage path from a download URL")
+                logger.warning("Not deleting a stored value that is not a Storage path")
                 continue
             try:
                 bucket.blob(path).delete()
@@ -174,7 +166,7 @@ def download_owner_file(owner_id: str, url: str | None) -> bytes | None:
     gives: the stored value is client-supplied, and the Admin SDK would read another
     account's file on request.
     """
-    path = _blob_path_from_url(url) if url else None
+    path = _blob_path(url) if url else None
     if not path or not path.startswith(tuple(owner_prefixes(owner_id))):
         return None
     try:

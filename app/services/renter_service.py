@@ -32,7 +32,7 @@ from app.services.lease_periods import (
 )
 from app.services.firebase_storage import release_file_urls
 
-# Columns holding a Storage download URL.
+# Columns holding a Storage path.
 _FILE_FIELDS = ("full_contract_url", "id_image_url")
 
 

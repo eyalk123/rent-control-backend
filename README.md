@@ -365,6 +365,23 @@ It reports two groups: files whose owner no longer exists (deleted accounts), an
 owners that no record references. Files younger than 48 hours are skipped, since a client uploads
 before it saves the record.
 
+**File columns hold storage paths, never download URLs.** A Firebase download URL carries a token
+that opens the file for anyone holding it, with no sign-in and no expiry. Both apps read files
+through the SDK as the signed-in user, so `storage.rules` decides; the request schemas refuse a
+download URL (`app/schemas/stored_file.py`), and migration 070 converted the ones already stored.
+The tokens themselves live on the files in the bucket. `ops/revoke_download_tokens.py` removes
+them, which kills every link ever handed out — run it on production (it cannot run locally, the
+database has no public URL), report first:
+
+```bash
+MSYS_NO_PATHCONV=1 railway ssh --service rent-control-backend -i ~/.ssh/railway-rentvance \
+    -- /opt/venv/bin/python - < ops/revoke_download_tokens.py           # report only
+MSYS_NO_PATHCONV=1 railway ssh --service rent-control-backend -i ~/.ssh/railway-rentvance \
+    -- /opt/venv/bin/python - --apply < ops/revoke_download_tokens.py   # revoke
+```
+
+It refuses to run while any row still holds a download URL, and is safe to re-run.
+
 ### The nightly rollup
 
 A job that is never called writes no row and raises nothing, so only a monitor with an expected

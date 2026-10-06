@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, field_validator, model_serializer, model_validator
 
 from app.schemas.property import PropertyBriefRead
+from app.schemas.stored_file import StoredFile
 
 
 class LeaseYearType(str, Enum):
@@ -146,8 +147,8 @@ class RenterCreate(BaseModel):
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
     extra_contacts: Optional[list[ExtraContact]] = None
-    full_contract_url: Optional[str] = None
-    id_image_url: Optional[str] = None
+    full_contract_url: StoredFile = None
+    id_image_url: StoredFile = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -186,8 +187,8 @@ class RenterUpdate(BaseModel):
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
     extra_contacts: Optional[list[ExtraContact]] = None
-    full_contract_url: Optional[str] = None
-    id_image_url: Optional[str] = None
+    full_contract_url: StoredFile = None
+    id_image_url: StoredFile = None
 
     model_config = ConfigDict(from_attributes=True)
 

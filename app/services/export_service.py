@@ -66,17 +66,15 @@ def _names(items) -> str:
 
 
 def _archive_file(value: str | None) -> str | None:
-    """Where a stored file sits inside this archive, in place of its download URL.
+    """Where a stored file sits inside this archive, in place of its storage path.
 
-    A download URL carries a token that opens the file for anyone holding it, with no
-    sign-in and no expiry — a workbook listing them hands out every lease in it. The
-    archive already holds the files, so the cell names the copy beside it. Anything
+    The archive already holds the files, so the cell names the copy beside it. Anything
     that is not one of our files (a house preset) passes through unchanged.
     """
     if not value:
         return value
-    path = firebase_storage._blob_path_from_url(value)
-    if not path or not firebase_storage._STORAGE_PATH.match(path):
+    path = firebase_storage._blob_path(value)
+    if not path:
         return value
     entity_type, _owner, rest = path.split("/", 2)
     return f"files/{entity_type}/{rest}"

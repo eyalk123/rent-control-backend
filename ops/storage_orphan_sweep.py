@@ -3,8 +3,7 @@
 Until the fix that introduced ``firebase_storage.owner_prefixes``, three paths left files
 behind: account deletion listed a ``{owner_id}/`` prefix no upload ever used, so it deleted
 nothing; replacing a document kept the old one; and deleting a transaction or a property
-file kept its file. Those files are still in the bucket, reachable through their download
-URLs. This finds them.
+file kept its file. Those files are still in the bucket, which this finds.
 
     cd rent-control-backend
     railway run python ops/storage_orphan_sweep.py            # report only
@@ -14,7 +13,7 @@ Two kinds of orphan, reported separately:
 
 * **deleted account** — the ``{owner_id}`` path segment has no ``owners`` row. The
   tombstone keeps only a hash of the id, so this is the only way to find them.
-* **unreferenced** — the owner exists, but no record of theirs holds the file's URL.
+* **unreferenced** — the owner exists, but no record of theirs holds the file's path.
 
 Safety:
 
@@ -42,7 +41,7 @@ from app.models.property import Property  # noqa: E402
 from app.models.property_file import PropertyFile  # noqa: E402
 from app.models.renter import Renter  # noqa: E402
 from app.models.transaction import Transaction  # noqa: E402
-from app.services.firebase_storage import ENTITY_TYPES, _blob_path_from_url, _get_bucket  # noqa: E402
+from app.services.firebase_storage import ENTITY_TYPES, _blob_path, _get_bucket  # noqa: E402
 
 
 def _referenced_paths(db) -> set[str]:
@@ -59,7 +58,7 @@ def _referenced_paths(db) -> set[str]:
     paths: set[str] = set()
     for column in columns:
         for url in db.scalars(select(column).where(column.is_not(None))):
-            path = _blob_path_from_url(url)
+            path = _blob_path(url)
             if path:
                 paths.add(path)
     return paths

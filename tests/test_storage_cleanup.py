@@ -4,12 +4,16 @@ Blob names here use the real upload shape, `{entity_type}/{owner_id}/{uuid}/{fil
 (storage.rules). The fakes once used `{owner_id}/...` — the same wrong shape as the code —
 and every test passed while account deletion removed no file at all.
 """
-from urllib.parse import quote
-
 import pytest
+from pydantic import ValidationError
 
 from app.models.property_file import PropertyFile
 from app.models.transaction import TransactionTypeEnum
+from app.schemas.document_extraction import ExtractionLogUpdate
+from app.schemas.property import PropertyUpdate
+from app.schemas.property_file import PropertyFileCreate
+from app.schemas.renter import RenterUpdate
+from app.schemas.transaction import TransactionUpdateExpense
 from app.services import firebase_storage
 from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import make_expense_category, make_property, make_renter, make_transaction
@@ -43,8 +47,9 @@ def bucket(monkeypatch):
     return fake
 
 
-def url(path: str) -> str:
-    return f"https://firebasestorage.googleapis.com/v0/b/bkt/o/{quote(path, safe='')}?alt=media&token=t"
+def stored(path: str) -> str:
+    """A file column's value: the bare storage path (migration 070)."""
+    return path
 
 
 def test_owner_blobs_covers_every_upload_prefix():
@@ -74,11 +79,11 @@ def test_account_deletion_deletes_the_owners_files_and_only_theirs(client, bucke
 
 
 def test_replacing_a_property_document_deletes_the_old_one(client, db_session, bucket):
-    old = url(f"properties/{OWNER_A}/u1/old.pdf")
+    old = stored(f"properties/{OWNER_A}/u1/old.pdf")
     prop = make_property(db_session, basic_contract_url=old)
 
     resp = client.patch(f"/properties/{prop.id}", json={
-        "basic_contract_url": url(f"properties/{OWNER_A}/u2/new.pdf"),
+        "basic_contract_url": stored(f"properties/{OWNER_A}/u2/new.pdf"),
     })
 
     assert resp.status_code == 200
@@ -86,14 +91,14 @@ def test_replacing_a_property_document_deletes_the_old_one(client, db_session, b
 
 
 def test_an_unrelated_edit_deletes_nothing(client, db_session, bucket):
-    prop = make_property(db_session, basic_contract_url=url(f"properties/{OWNER_A}/u1/a.pdf"))
+    prop = make_property(db_session, basic_contract_url=stored(f"properties/{OWNER_A}/u1/a.pdf"))
     assert client.patch(f"/properties/{prop.id}", json={"city": "Haifa"}).status_code == 200
     assert bucket.deleted == []
 
 
 def test_clearing_a_renter_contract_deletes_it(client, db_session, bucket):
     prop = make_property(db_session)
-    renter = make_renter(db_session, property_id=prop.id, full_contract_url=url(f"renters/{OWNER_A}/u1/lease.pdf"))
+    renter = make_renter(db_session, property_id=prop.id, full_contract_url=stored(f"renters/{OWNER_A}/u1/lease.pdf"))
 
     assert client.patch(f"/renters/{renter.id}", json={"full_contract_url": None}).status_code == 200
     assert bucket.deleted == [f"renters/{OWNER_A}/u1/lease.pdf"]
@@ -104,8 +109,8 @@ def test_deleting_a_renter_deletes_its_files(client, db_session, bucket):
     renter = make_renter(
         db_session,
         property_id=prop.id,
-        full_contract_url=url(f"renters/{OWNER_A}/u1/lease.pdf"),
-        id_image_url=url(f"renters/{OWNER_A}/u2/id.jpg"),
+        full_contract_url=stored(f"renters/{OWNER_A}/u1/lease.pdf"),
+        id_image_url=stored(f"renters/{OWNER_A}/u2/id.jpg"),
     )
     assert client.delete(f"/renters/{renter.id}").status_code == 204
     assert sorted(bucket.deleted) == [f"renters/{OWNER_A}/u1/lease.pdf", f"renters/{OWNER_A}/u2/id.jpg"]
@@ -117,24 +122,24 @@ def test_replacing_a_receipt_deletes_the_old_one(client, db_session, bucket):
         db_session,
         type=TransactionTypeEnum.EXPENSE,
         categories=[cat],
-        receipt_image_url=url(f"transactions/{OWNER_A}/u1/old.jpg"),
+        receipt_image_url=stored(f"transactions/{OWNER_A}/u1/old.jpg"),
     )
     resp = client.patch(f"/transactions/expense/{txn.id}", json={
-        "receipt_image_url": url(f"transactions/{OWNER_A}/u2/new.jpg"),
+        "receipt_image_url": stored(f"transactions/{OWNER_A}/u2/new.jpg"),
     })
     assert resp.status_code == 200
     assert bucket.deleted == [f"transactions/{OWNER_A}/u1/old.jpg"]
 
 
 def test_deleting_a_transaction_deletes_its_receipt(client, db_session, bucket):
-    txn = make_transaction(db_session, receipt_image_url=url(f"transactions/{OWNER_A}/u1/r.jpg"))
+    txn = make_transaction(db_session, receipt_image_url=stored(f"transactions/{OWNER_A}/u1/r.jpg"))
     assert client.delete(f"/transactions/{txn.id}").status_code == 204
     assert bucket.deleted == [f"transactions/{OWNER_A}/u1/r.jpg"]
 
 
 def test_deleting_a_property_deletes_its_attached_files(client, db_session, bucket):
-    prop = make_property(db_session, image_url=url(f"properties/{OWNER_A}/u1/photo.jpg"))
-    db_session.add(PropertyFile(property_id=prop.id, url=url(f"properties/{OWNER_A}/u2/plan.pdf"), label="Plan"))
+    prop = make_property(db_session, image_url=stored(f"properties/{OWNER_A}/u1/photo.jpg"))
+    db_session.add(PropertyFile(property_id=prop.id, url=stored(f"properties/{OWNER_A}/u2/plan.pdf"), label="Plan"))
     db_session.commit()
 
     assert client.delete(f"/properties/{prop.id}").status_code == 204
@@ -143,7 +148,7 @@ def test_deleting_a_property_deletes_its_attached_files(client, db_session, buck
 
 def test_deleting_a_property_file_deletes_the_file(client, db_session, bucket):
     prop = make_property(db_session)
-    file = PropertyFile(property_id=prop.id, url=url(f"properties/{OWNER_A}/u1/plan.pdf"), label="Plan")
+    file = PropertyFile(property_id=prop.id, url=stored(f"properties/{OWNER_A}/u1/plan.pdf"), label="Plan")
     db_session.add(file)
     db_session.commit()
 
@@ -152,7 +157,7 @@ def test_deleting_a_property_file_deletes_the_file(client, db_session, bucket):
 
 
 def test_a_file_another_record_still_uses_is_kept(client, db_session, bucket):
-    shared = url(f"renters/{OWNER_A}/u1/lease.pdf")
+    shared = stored(f"renters/{OWNER_A}/u1/lease.pdf")
     prop = make_property(db_session)
     first = make_renter(db_session, property_id=prop.id, full_contract_url=shared)
     make_renter(db_session, property_id=prop.id, full_contract_url=shared)
@@ -164,18 +169,34 @@ def test_a_file_another_record_still_uses_is_kept(client, db_session, bucket):
 def test_another_accounts_file_is_never_deleted(client, db_session, bucket):
     """A URL is client-supplied and the Admin SDK ignores storage.rules: pointing a record
     at someone else's file and deleting the record must not delete their file."""
-    victim = url(f"renters/{OWNER_B}/u1/lease.pdf")
+    victim = stored(f"renters/{OWNER_B}/u1/lease.pdf")
     prop = make_property(db_session, image_url=victim)
 
     assert client.delete(f"/properties/{prop.id}").status_code == 204
     assert bucket.deleted == []
 
 
-def test_a_bare_storage_path_is_released_like_a_url(client, db_session, bucket):
-    """Once download tokens are retired the columns hold bare paths; cleanup must not
-    depend on the URL shape."""
-    prop = make_property(db_session)
-    renter = make_renter(db_session, property_id=prop.id, full_contract_url=f"renters/{OWNER_A}/u1/lease.pdf")
+DOWNLOAD_URL = "https://firebasestorage.googleapis.com/v0/b/bkt/o/renters%2Fo%2Fu1%2Flease.pdf?token=t"
 
-    assert client.delete(f"/renters/{renter.id}").status_code == 204
-    assert bucket.deleted == [f"renters/{OWNER_A}/u1/lease.pdf"]
+
+@pytest.mark.parametrize(
+    "schema, field",
+    [
+        (PropertyUpdate, "image_url"),
+        (PropertyUpdate, "basic_contract_url"),
+        (PropertyUpdate, "land_registry_url"),
+        (RenterUpdate, "full_contract_url"),
+        (RenterUpdate, "id_image_url"),
+        (TransactionUpdateExpense, "receipt_image_url"),
+        (PropertyFileCreate, "url"),
+        (ExtractionLogUpdate, "contract_url"),
+    ],
+)
+def test_a_download_url_is_refused(schema, field):
+    """A download URL opens its file for anyone holding it; the columns hold paths only."""
+    base = {"label": "Plan"} if schema is PropertyFileCreate else {}
+    if schema is ExtractionLogUpdate:
+        base = {"entity_type": "renter"}
+    with pytest.raises(ValidationError):
+        schema(**base, **{field: DOWNLOAD_URL})
+    assert getattr(schema(**base, **{field: "renters/o/u1/lease.pdf"}), field) == "renters/o/u1/lease.pdf"
