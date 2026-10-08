@@ -14,6 +14,10 @@
 
   English-only LTR on purpose — the product is Hebrew-first and RTL, this admin page is not.
 
+  Layout: five tabs over one payload. Overview carries the handful of numbers worth checking
+  daily; the other tabs hold the detail. The payload is fetched once per control change and
+  kept in `state.data`, so switching tabs re-renders from memory and never refetches.
+
   Series colours come from a categorical palette validated for colour-vision deficiency in
   both light and dark. Slots 3 and 4 fall below 3:1 against a white surface, so the charts
   use slots 1 and 2 — which clear it — and reserve the other two for marks that carry visible
@@ -94,29 +98,51 @@ a { color: var(--primary); }
 /* ── shell ─────────────────────────────────────────────────────────── */
 header.topbar {
   background: var(--navy); color: #fff;
-  padding: 14px 20px;
+  padding: 12px 20px;
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
 }
 header.topbar h1 { font-size: 16px; }
 header.topbar .meta { color: #9FB3CC; font-size: 12px; margin-left: auto; }
+.health-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 12px; color: #fff; cursor: pointer;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px; padding: 3px 10px;
+}
+.health-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #94A3B8; }
+.health-chip.ok .dot { background: #34D399; }
+.health-chip.bad .dot { background: #FBBF24; }
+
+/* Tabs and controls share one bar that stays put while the page scrolls under it. */
+.bar {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--surface); border-bottom: 1px solid var(--outline);
+}
+.bar-inner {
+  max-width: 1240px; margin: 0 auto; padding-inline: 16px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.tabs { display: flex; gap: 2px; overflow-x: auto; margin-right: auto; }
+.tabs button {
+  border: 0; background: none; font: inherit; font-size: 13.5px; font-weight: 550;
+  color: var(--text-secondary); padding: 13px 12px 11px; cursor: pointer;
+  border-bottom: 2px solid transparent; white-space: nowrap;
+}
+.tabs button:hover { color: var(--text-primary); }
+.tabs button[aria-selected="true"] { color: var(--primary); border-bottom-color: var(--primary); }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-block: 8px; }
 main { max-width: 1240px; margin: 0 auto; padding-block: 20px; padding-inline: 16px; }
 
 /* ── controls ──────────────────────────────────────────────────────── */
-.controls {
-  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-  background: var(--surface); border: 1px solid var(--outline);
-  border-radius: var(--radius); padding: 12px; margin-bottom: 18px;
-}
-.controls label { font-size: 12px; color: var(--text-secondary); margin-right: 4px; }
 .segmented { display: inline-flex; border: 1px solid var(--outline); border-radius: var(--radius-sm); overflow: hidden; }
 .segmented button {
   border: 0; background: var(--surface); color: var(--text-secondary);
-  padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer;
+  padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer;
 }
 .segmented button + button { border-left: 1px solid var(--outline); }
 .segmented button[aria-pressed="true"] { background: var(--primary); color: #fff; }
 select, input[type=email], input[type=password] {
-  font: inherit; padding: 7px 10px; border: 1px solid var(--outline);
+  font: inherit; padding: 6px 10px; border: 1px solid var(--outline);
   border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary);
 }
 button.primary {
@@ -126,35 +152,56 @@ button.primary {
 button.ghost {
   background: transparent; color: var(--text-secondary);
   border: 1px solid var(--outline); border-radius: var(--radius-sm);
-  padding: 7px 12px; font: inherit; cursor: pointer;
+  padding: 6px 12px; font: inherit; cursor: pointer;
 }
 
 /* ── cards & tiles ─────────────────────────────────────────────────── */
 section.block { margin-bottom: 26px; }
-section.block > h2 { font-size: 15px; margin-bottom: 4px; }
-section.block > .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+section.block > h2 { font-size: 15px; margin-bottom: 10px; }
 .grid { display: grid; gap: 14px; }
 .tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 14px; }
-.charts { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); margin-bottom: 14px; }
+.charts { grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
 .card {
   background: var(--surface); border: 1px solid var(--outline);
-  border-radius: var(--radius-card); padding: 16px;
+  border-radius: var(--radius-card); padding: 16px; min-width: 0;
 }
-.card > h3 { font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 2px; }
-.card > .note { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; }
+.card > h3 {
+  font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 6px;
+}
+.tile > h3 { margin-bottom: 2px; }
 .tile .value {
   /* Proportional figures on a display-size number; tabular only where digits stack. */
-  font-size: 30px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15;
+  font-size: 28px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15;
   margin-top: 2px;
 }
 .tile .value.small { font-size: 21px; }
 .tile .caption { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.kpi { display: flex; flex-direction: column; }
+.kpi .value { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; margin-top: 4px; }
+.kpi .caption { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.kpi .spark { position: relative; height: 40px; margin-top: 12px; }
+
+/* The explanatory note behind each card title. Hover or focus shows it; it is the only place
+   the note lives, so it must work from the keyboard too. */
+.info {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--outline);
+  font-size: 10px; font-weight: 700; font-style: normal; color: var(--muted); cursor: help;
+}
+.info:hover::after, .info:focus::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
+  width: max-content; max-width: 260px; z-index: 10;
+  background: var(--navy); color: #fff; padding: 8px 10px; border-radius: 8px;
+  font-size: 12px; font-weight: 400; line-height: 1.4; text-align: left;
+}
 
 /* Charts must reserve room for the x-axis band, or the card grows a nested scrollbar. */
 .chart-wrap { position: relative; height: 240px; }
-.chart-wrap.tall { height: 300px; }
 
-/* ── funnel ────────────────────────────────────────────────────────── */
+/* ── bars (funnel + breakdowns) ────────────────────────────────────── */
 .funnel { display: flex; flex-direction: column; gap: 8px; }
 .funnel-step { display: grid; grid-template-columns: 170px 1fr; gap: 12px; align-items: center; }
 .funnel-label { font-size: 12.5px; color: var(--text-secondary); text-align: right; }
@@ -173,11 +220,21 @@ section.block > .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 12
 .funnel-drop { font-size: 11.5px; color: var(--muted); margin-left: 182px; }
 .funnel-drop.bad { color: var(--warning); }
 
+.hbars { display: flex; flex-direction: column; gap: 8px; }
+.hbar { display: grid; grid-template-columns: 140px 1fr 90px; gap: 10px; align-items: center; font-size: 12.5px; }
+.hbar-label { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { background: var(--grid); border-radius: 6px; height: 18px; overflow: hidden; }
+.hbar-fill { height: 100%; background: var(--series-1); border-radius: 6px; min-width: 2px; }
+.hbar-value { text-align: right; font-variant-numeric: tabular-nums; }
+.hbar-value span { color: var(--muted); margin-left: 6px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.card-head h3 { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+
 /* ── misc ──────────────────────────────────────────────────────────── */
 table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
 table.data th { color: var(--muted); font-weight: 600; }
-table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .scroll-x { overflow-x: auto; }
 
 .empty {
@@ -189,8 +246,10 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .banner.error { background: var(--error-bg); color: var(--error); border: 1px solid var(--error); }
 .banner.warn  { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
 .banner strong { display: block; margin-bottom: 3px; }
-.caveats { font-size: 12px; color: var(--muted); }
+.caveats { font-size: 12px; color: var(--muted); margin: 0; padding-left: 18px; }
 .caveats li { margin-bottom: 6px; }
+details.notes { margin-top: 8px; }
+details.notes summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
 .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--grid); color: var(--text-secondary); }
 .pill.ok { background: #DCFCE7; color: #166534; }
 .pill.bad { background: var(--error-bg); color: var(--error); }
@@ -220,9 +279,13 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
   content: ""; flex: 1; height: 1px; background: var(--outline);
 }
 @media (max-width: 560px) {
+  /* The bar wraps to three rows here; pinned, it would eat a quarter of the screen. */
+  .bar { position: static; }
   .funnel-step { grid-template-columns: 1fr; }
   .funnel-label { text-align: left; }
   .funnel-drop { margin-left: 0; }
+  .hbar { grid-template-columns: 90px 1fr 70px; }
+  .kpi .value { font-size: 34px; }
 }
 </style>
 </head>
@@ -258,38 +321,36 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 <div id="app-view" hidden>
   <header class="topbar">
     <h1>RentVance — Product Metrics</h1>
+    <button class="health-chip" id="health-chip" type="button" hidden>
+      <span class="dot"></span><span id="health-text"></span>
+    </button>
     <span class="meta" id="meta"></span>
     <button class="ghost" id="signout" style="color:#9FB3CC;border-color:#2E4468">Sign out</button>
   </header>
 
-  <main>
-    <div class="controls">
-      <span><label>Range</label>
-        <span class="segmented" id="range-seg">
+  <div class="bar">
+    <div class="bar-inner">
+      <nav class="tabs" role="tablist" id="tabs" aria-label="Dashboard sections">
+        <button role="tab" data-tab="overview">Overview</button>
+        <button role="tab" data-tab="growth">Growth</button>
+        <button role="tab" data-tab="ai">AI</button>
+        <button role="tab" data-tab="platform">Platform</button>
+        <button role="tab" data-tab="health">Health</button>
+      </nav>
+      <div class="controls">
+        <span class="segmented" id="range-seg" aria-label="Date range">
           <button data-v="7d">7d</button><button data-v="30d">30d</button>
           <button data-v="90d" aria-pressed="true">90d</button><button data-v="all">All</button>
         </span>
-      </span>
-      <span><label>Granularity</label>
-        <span class="segmented" id="gran-seg">
-          <button data-v="day">Daily</button><button data-v="week" aria-pressed="true">Weekly</button>
-        </span>
-      </span>
-      <span><label for="country">Country</label>
-        <select id="country"><option value="">All countries</option></select>
-      </span>
-      <button class="ghost" id="refresh" style="margin-left:auto">Refresh</button>
+        <select id="country" aria-label="Country"><option value="">All countries</option></select>
+        <button class="ghost" id="refresh">Refresh</button>
+      </div>
     </div>
+  </div>
 
+  <main role="tabpanel" id="panel">
     <div id="banners"></div>
     <div id="sections"></div>
-
-    <section class="block">
-      <h2>How to read this</h2>
-      <div class="card">
-        <ul class="caveats" id="caveats"></ul>
-      </div>
-    </section>
   </main>
 </div>
 
@@ -298,13 +359,20 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 const FIREBASE_CONFIG = __FIREBASE_CONFIG__;
 
 const $ = (s) => document.querySelector(s);
-const state = { range: '90d', granularity: 'week', country: '', charts: {}, seq: 0 };
+const TABS = ['overview', 'growth', 'ai', 'platform', 'health'];
+const state = {
+  range: '90d', country: '', charts: {}, seq: 0, data: null,
+  tab: 'overview', breakdown: 'owner_country',
+};
+
+/** Granularity follows the range rather than being a second control: a 7- or 30-day window
+ *  reads best by day, anything longer by week. */
+const granularityFor = (range) => (range === '7d' || range === '30d') ? 'day' : 'week';
 
 /* ── formatting ────────────────────────────────────────────────────── */
 const nf = new Intl.NumberFormat('en-US');
 const num = (v) => (v === null || v === undefined) ? '—' : nf.format(v);
 const pct = (v) => (v === null || v === undefined) ? '—' : v.toFixed(1) + '%';
-const money = (v) => (v === null || v === undefined) ? '—' : '$' + Number(v).toFixed(2);
 function hours(h) {
   if (h === null || h === undefined) return '—';
   if (h < 1) return Math.round(h * 60) + ' min';
@@ -472,11 +540,11 @@ async function load() {
   const seq = ++state.seq;
   const stale = () => seq !== state.seq;
 
-  const banners = $('#banners');
-  banners.innerHTML = '';
+  $('#banners').innerHTML = '';
   $('#meta').textContent = 'Loading…';
+  $('#sections').style.opacity = '0.5';
 
-  const qs = new URLSearchParams({ range: state.range, granularity: state.granularity });
+  const qs = new URLSearchParams({ range: state.range, granularity: granularityFor(state.range) });
   if (state.country) qs.set('country', state.country);
 
   let res;
@@ -511,14 +579,23 @@ async function load() {
 
   const data = await res.json();
   if (stale()) return;
+  state.data = data;
   $('#meta').textContent =
-    new Date(data.generated_at + 'Z').toLocaleString() +
-    (data.cached ? ' · cached' : ' · ' + data.query_ms + ' ms');
-  render(data);
+    'Updated ' + new Date(data.generated_at + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+    (data.cached ? ' · cached' : '');
+  $('#banners').innerHTML = (data.warnings || []).map((w) =>
+    '<div class="banner warn"><strong>Data warning</strong>' + esc(w) + '</div>').join('');
+  populateCountries(data.platform.owner_country);
+  renderHealthChip(data);
+  renderTab();
 }
 
 function fail(title, detail) {
+  state.data = null;
+  destroyAll();
   $('#meta').textContent = '';
+  $('#sections').style.opacity = '';
+  $('#health-chip').hidden = true;
   $('#banners').innerHTML =
     '<div class="banner error"><strong>' + esc(title) + '</strong>' + esc(detail) + '</div>';
   $('#sections').innerHTML = '';
@@ -528,7 +605,7 @@ function fail(title, detail) {
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
 function baseOptions(extra) {
-  const grid = css('--grid'), text = css('--text-secondary'), surface = css('--surface');
+  const grid = css('--grid'), text = css('--text-secondary');
   return Object.assign({
     responsive: true,
     maintainAspectRatio: false,
@@ -553,8 +630,13 @@ function baseOptions(extra) {
     },
   }, extra || {});
 }
+/** baseOptions with the legend off — for single-series charts, where it only repeats the title. */
+const singleSeries = (extra) => baseOptions(Object.assign({
+  plugins: { legend: { display: false }, tooltip: baseOptions().plugins.tooltip },
+}, extra || {}));
 
 function destroy(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
+function destroyAll() { Object.keys(state.charts).forEach(destroy); }
 
 /** Renders a chart, or an honest empty state — never a chart drawn from [] that reads as zero. */
 function chartOrEmpty(canvasId, rows, build, emptyText) {
@@ -563,24 +645,43 @@ function chartOrEmpty(canvasId, rows, build, emptyText) {
   const wrap = el.parentElement;
   destroy(canvasId);
   if (!CHARTS_AVAILABLE) {
-    wrap.innerHTML = '<div class="empty">Chart library unavailable — the numbers above and ' +
-      'the tables below are unaffected.</div>';
+    wrap.innerHTML = '<div class="empty">Chart library unavailable — the numbers and ' +
+      'tables are unaffected.</div>';
     return;
   }
   if (!rows || rows.length === 0) {
     wrap.innerHTML = '<div class="empty">' + esc(emptyText || 'No data yet') + '</div>';
     return;
   }
-  if (!wrap.querySelector('canvas')) wrap.innerHTML = '<canvas id="' + canvasId + '"></canvas>';
-  const ctx = document.getElementById(canvasId).getContext('2d');
-  state.charts[canvasId] = new Chart(ctx, build());
+  state.charts[canvasId] = new Chart(el.getContext('2d'), build());
+}
+
+/** A bare trend line under a KPI: no axes, no tooltip, nothing to read but the shape. */
+function sparkline(canvasId, values) {
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  if (!CHARTS_AVAILABLE || values.length < 2) { el.parentElement.remove(); return; }
+  state.charts[canvasId] = new Chart(el.getContext('2d'), {
+    type: 'line',
+    data: { labels: values.map((_, i) => i), datasets: [{
+      data: values, borderColor: css('--series-1'), borderWidth: 2,
+      cubicInterpolationMode: 'monotone', pointRadius: 0, fill: false,
+    }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, events: [],
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: { x: { display: false }, y: { display: false, beginAtZero: true } },
+    },
+  });
 }
 
 function lineSeries(label, data, colorVar) {
   return {
     label, data,
     borderColor: css(colorVar), backgroundColor: css(colorVar),
-    borderWidth: 2, tension: 0.25,
+    // Monotone, not a free tension: a smoothed curve overshoots below zero next to an empty
+    // bucket, drawing negative signups.
+    borderWidth: 2, cubicInterpolationMode: 'monotone',
     pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 24,
   };
 }
@@ -631,26 +732,97 @@ if (CHARTS_AVAILABLE) {
   console.error('Chart.js failed to load — tables and numbers will still render.');
 }
 
-/* ── render ────────────────────────────────────────────────────────── */
-function render(d) {
-  const g = d.window.granularity;
-
-  if (d.warnings && d.warnings.length) {
-    $('#banners').innerHTML = d.warnings.map((w) =>
-      '<div class="banner warn"><strong>Data warning</strong>' + esc(w) + '</div>').join('');
-  }
-
-  populateCountries(d.platform.owner_country);
-
-  $('#sections').innerHTML = [
-    growthHTML(d), funnelHTML(d), engagementHTML(d), aiHTML(d), platformHTML(d), opsHTML(d),
-  ].join('');
-
-  drawGrowth(d, g); drawEngagement(d, g); drawAI(d, g); drawPlatform(d, g);
-
-  $('#caveats').innerHTML = (d.caveats || [])
-    .map((c) => '<li><strong>' + esc(c.scope) + ':</strong> ' + esc(c.text) + '</li>').join('');
+/* ── building blocks ───────────────────────────────────────────────── */
+const info = (note) => note
+  ? '<span class="info" tabindex="0" role="note" aria-label="' + esc(note) + '" data-tip="' + esc(note) + '">i</span>'
+  : '';
+function tile(label, value, caption, small, note) {
+  return '<div class="card tile"><h3>' + esc(label) + info(note) + '</h3>' +
+    '<div class="value' + (small ? ' small' : '') + '">' + esc(value) + '</div>' +
+    (caption ? '<div class="caption">' + esc(caption) + '</div>' : '') + '</div>';
 }
+function kpi(label, value, caption, sparkId, note) {
+  return '<div class="card kpi"><h3>' + esc(label) + info(note) + '</h3>' +
+    '<div class="value">' + esc(value) + '</div>' +
+    '<div class="caption">' + esc(caption) + '</div>' +
+    (sparkId ? '<div class="spark"><canvas id="' + sparkId + '"></canvas></div>' : '') + '</div>';
+}
+function card(title, note, body) {
+  return '<div class="card"><h3>' + esc(title) + info(note) + '</h3>' + body + '</div>';
+}
+const canvasCard = (title, note, id) =>
+  card(title, note, '<div class="chart-wrap"><canvas id="' + id + '"></canvas></div>');
+const section = (title, body) =>
+  '<section class="block">' + (title ? '<h2>' + esc(title) + '</h2>' : '') + body + '</section>';
+
+/** The payload's caveats for the scopes this tab shows, collapsed at the bottom of it. */
+function notesFor(d, scopes) {
+  const items = (d.caveats || []).filter((c) => scopes.includes(c.scope));
+  if (!items.length) return '';
+  return '<details class="notes card"><summary>Before you trust these numbers (' + items.length +
+    ')</summary><ul class="caveats">' +
+    items.map((c) => '<li>' + esc(c.text) + '</li>').join('') + '</ul></details>';
+}
+
+/* ── tabs ──────────────────────────────────────────────────────────── */
+const TAB_RENDER = {
+  overview: [overviewHTML, drawOverview],
+  growth:   [growthHTML, drawGrowth],
+  ai:       [aiHTML, drawAI],
+  platform: [platformHTML, drawPlatform],
+  health:   [healthHTML, () => {}],
+};
+
+function renderTab() {
+  document.querySelectorAll('#tabs [role=tab]').forEach((b) => {
+    const on = b.dataset.tab === state.tab;
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+  });
+  const d = state.data;
+  if (!d) return;
+  destroyAll();
+  const [html, draw] = TAB_RENDER[state.tab];
+  $('#sections').innerHTML = html(d);
+  $('#sections').style.opacity = '';
+  draw(d, d.window.granularity);
+}
+
+/** The tab lives in the URL hash so a refresh — or a pasted link — lands on the same one. */
+function tabFromHash() {
+  const h = location.hash.replace('#', '');
+  state.tab = TABS.includes(h) ? h : 'overview';
+}
+window.addEventListener('hashchange', () => { tabFromHash(); renderTab(); });
+$('#tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[role=tab]'); if (!b) return;
+  location.hash = b.dataset.tab;
+});
+$('#tabs').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  const i = TABS.indexOf(state.tab) + (e.key === 'ArrowRight' ? 1 : -1);
+  const next = TABS[(i + TABS.length) % TABS.length];
+  location.hash = next;
+  document.querySelector('#tabs [data-tab="' + next + '"]').focus();
+});
+
+/* ── health chip ───────────────────────────────────────────────────── */
+const STALE_MS = 36 * 3600 * 1000;
+function isStale(job, now) {
+  const lastOk = job.last_ok ? parseUtc(job.last_ok) : null;
+  return !lastOk || (now - lastOk.getTime()) > STALE_MS;
+}
+function renderHealthChip(d) {
+  const jobs = d.operations.jobs || [];
+  const now = Date.now();
+  const stale = jobs.filter((j) => isStale(j, now)).length;
+  const chip = $('#health-chip');
+  chip.hidden = false;
+  chip.className = 'health-chip ' + (!jobs.length ? '' : stale ? 'bad' : 'ok');
+  $('#health-text').textContent = !jobs.length ? 'No job runs in range'
+    : stale ? stale + ' job' + (stale > 1 ? 's' : '') + ' stale' : 'All jobs healthy';
+}
+$('#health-chip').addEventListener('click', () => { location.hash = 'health'; });
 
 function populateCountries(rows) {
   const sel = $('#country');
@@ -663,57 +835,9 @@ function populateCountries(rows) {
   sel.dataset.filled = '1';
 }
 
-function tile(label, value, caption, small) {
-  return '<div class="card tile"><h3>' + esc(label) + '</h3>' +
-    '<div class="value' + (small ? ' small' : '') + '">' + esc(value) + '</div>' +
-    (caption ? '<div class="caption">' + esc(caption) + '</div>' : '') + '</div>';
-}
-function card(title, note, body) {
-  return '<div class="card"><h3>' + esc(title) + '</h3>' +
-    (note ? '<div class="note">' + esc(note) + '</div>' : '') + body + '</div>';
-}
-const canvasCard = (title, note, id, tall) =>
-  card(title, note, '<div class="chart-wrap' + (tall ? ' tall' : '') + '"><canvas id="' + id + '"></canvas></div>');
-
-/* ── growth ────────────────────────────────────────────────────────── */
-function growthHTML(d) {
-  const t = d.growth.totals || {};
-  return '<section class="block"><h2>Growth</h2>' +
-    '<div class="sub">Live accounts. Deleting an account removes its row, so these are signups that still exist.</div>' +
-    '<div class="grid tiles">' +
-      tile('Live owners', num(t.live_owners), 'accounts that exist right now') +
-      tile('New this window', num(t.new_in_window), 'signups in the selected range') +
-      tile('Deleted this window', num(t.deleted_in_window), 'accounts erased') +
-      tile('Deleted all time', num(t.deleted_all_time), 'since 2026-07-31') +
-    '</div><div class="grid charts">' +
-      canvasCard('Signups over time', 'From owners.created_at', 'c-signups') +
-      canvasCard('Account deletions', 'Monthly. Not filtered by country — the tombstone stores none.', 'c-deletions') +
-    '</div></section>';
-}
-function drawGrowth(d, g) {
-  const s = fillBuckets(d, d.growth.signups, ['signups']);
-  chartOrEmpty('c-signups', s, () => ({
-    type: 'line',
-    data: { labels: s.map((r) => bucketLabel(r.bucket, g)),
-            datasets: [lineSeries('Signups', s.map((r) => r.signups), '--series-1')] },
-    options: baseOptions({ plugins: { legend: { display: false },
-      tooltip: baseOptions().plugins.tooltip } }),
-  }), 'No signups in this range yet');
-
-  const del = d.growth.deletions;
-  chartOrEmpty('c-deletions', del, () => ({
-    type: 'bar',
-    data: { labels: del.map((r) => bucketLabel(r.bucket, 'month')),
-            datasets: [barSeries('Deletions', del.map((r) => r.deletions), '--series-2')] },
-    options: baseOptions({ plugins: { legend: { display: false },
-      valueLabels: { enabled: true },
-      tooltip: baseOptions().plugins.tooltip } }),
-  }), 'No account deletions yet');
-}
-
-/* ── funnel ────────────────────────────────────────────────────────── */
-function funnelHTML(d) {
-  const f = d.funnel || {}, ttf = d.time_to_first || {};
+/* ── overview ──────────────────────────────────────────────────────── */
+function funnelBody(d) {
+  const f = d.funnel || {};
   const steps = [
     ['Signed up', f.step_signed_up],
     ['Added a property', f.step_property],
@@ -722,60 +846,64 @@ function funnelHTML(d) {
     ['Exported a report', f.step_export],
   ];
   const top = steps[0][1] || 0;
-
-  let body;
-  if (!top) {
-    body = '<div class="empty">No owners signed up in this range yet, so there is no funnel to draw.</div>';
-  } else {
-    body = '<div class="funnel">' + steps.map(([label, v], i) => {
-      const value = v || 0;
-      const w = top ? (value / top) * 100 : 0;
-      // Below ~14% the value would be clipped by its own bar, so it sits outside instead.
-      const inside = w >= 14;
-      const bar = '<div class="funnel-bar' + (value === 0 ? ' zero' : '') + '" style="width:' + w.toFixed(1) + '%">' +
-        (inside ? num(value) : '') + '</div>' +
-        (inside ? '' : '<div class="funnel-outside" style="left:' + w.toFixed(1) + '%">' + num(value) + '</div>');
-      const prev = i > 0 ? (steps[i - 1][1] || 0) : null;
-      const drop = (prev && prev > 0) ? (100 * (prev - value) / prev) : null;
-      const dropLine = drop === null ? '' :
-        '<div class="funnel-drop' + (drop >= 50 ? ' bad' : '') + '">↓ ' + drop.toFixed(0) +
-        '% drop-off (' + num(prev - value) + ' owners)</div>';
-      return '<div class="funnel-step"><div class="funnel-label">' + esc(label) +
-        '</div><div class="funnel-track">' + bar + '</div></div>' + dropLine;
-    }).join('') + '</div>';
-  }
-
-  // "Ever did X" ignores order; the funnel above requires it. A gap means owners are taking
-  // the product out of sequence, which is worth seeing rather than smoothing away.
-  const outOfOrder = (f.ever_renter || 0) > (f.step_renter || 0) ||
-                     (f.ever_transaction || 0) > (f.step_transaction || 0);
-  const raw = outOfOrder ? card('Out of order',
-    'These owners did the thing without doing the previous step first, so the funnel above excludes them.',
-    '<table class="data"><tbody>' +
-      '<tr><td>Ever added a renter</td><td class="num">' + num(f.ever_renter) + '</td></tr>' +
-      '<tr><td>Ever recorded a transaction</td><td class="num">' + num(f.ever_transaction) + '</td></tr>' +
-      '<tr><td>Ever exported a report</td><td class="num">' + num(f.ever_export) + '</td></tr>' +
-    '</tbody></table>') : '';
-
-  return '<section class="block"><h2>Activation funnel</h2>' +
-    '<div class="sub">Cohort starts ' + esc(d.window.cohort_floor) +
-    '. Each step requires every step before it, so the funnel can only go down.</div>' +
-    '<div class="grid tiles">' +
-      tile('Median time to first property', hours(ttf.median_hours_to_property),
-           'n = ' + num(ttf.sample_property), true) +
-      tile('Median time to first renter', hours(ttf.median_hours_to_renter),
-           'n = ' + num(ttf.sample_renter), true) +
-      tile('Reached the last step', top ? pct(100 * (f.step_export || 0) / top) : '—',
-           'signup → exported a report', true) +
-    '</div>' +
-    '<div class="grid charts" style="grid-template-columns:' + (raw ? '2fr 1fr' : '1fr') + '">' +
-      card('Signup → first report export', '', body) + raw +
-    '</div></section>';
+  if (!top) return '<div class="empty">No owners signed up in this range yet, so there is no funnel to draw.</div>';
+  return '<div class="funnel">' + steps.map(([label, v], i) => {
+    const value = v || 0;
+    const w = (value / top) * 100;
+    // Below ~14% the value would be clipped by its own bar, so it sits outside instead.
+    const inside = w >= 14;
+    const bar = '<div class="funnel-bar' + (value === 0 ? ' zero' : '') + '" style="width:' + w.toFixed(1) + '%">' +
+      (inside ? num(value) : '') + '</div>' +
+      (inside ? '' : '<div class="funnel-outside" style="left:' + w.toFixed(1) + '%">' + num(value) + '</div>');
+    const prev = i > 0 ? (steps[i - 1][1] || 0) : null;
+    const drop = (prev && prev > 0) ? (100 * (prev - value) / prev) : null;
+    const dropLine = drop === null ? '' :
+      '<div class="funnel-drop' + (drop >= 50 ? ' bad' : '') + '">↓ ' + drop.toFixed(0) +
+      '% drop-off (' + num(prev - value) + ' owners)</div>';
+    return '<div class="funnel-step"><div class="funnel-label">' + esc(label) +
+      '</div><div class="funnel-track">' + bar + '</div></div>' + dropLine;
+  }).join('') + '</div>';
 }
 
-/* ── engagement ────────────────────────────────────────────────────── */
-function engagementHTML(d) {
+function overviewHTML(d) {
+  const g = d.window.granularity;
+  const t = d.growth.totals || {}, f = d.funnel || {};
+  const active = fillBuckets(d, d.engagement.active_owners, ['active_owners']);
+  // The last bucket is the current, unfinished one — a Monday-morning number would read as
+  // a collapse every week. The one before it is the latest complete period.
+  const lastFull = active.length >= 2 ? active[active.length - 2].active_owners : null;
+  const scans = (d.ai.scans || []).reduce((s, r) => s + (r.scans || 0), 0);
+  const saved = (d.ai.scans || []).reduce((s, r) => s + (r.saved || 0), 0);
+  const messages = (d.ai.assistant || []).reduce((s, r) => s + (r.messages || 0), 0);
+
+  return section('', '<div class="grid kpis">' +
+      kpi('Live owners', num(t.live_owners), '+' + num(t.new_in_window) + ' in this range', null,
+          'Accounts that exist right now. Deleting an account removes its row.') +
+      kpi('New signups', num(t.new_in_window), 'in this range', 'k-signups') +
+      kpi('Active owners', num(lastFull), g === 'week' ? 'last full week' : 'yesterday', 'k-active',
+          'Distinct owners who wrote something — a property, renter, transaction, export, scan or assistant message.') +
+      kpi('Activation', f.step_signed_up ? pct(100 * (f.step_property || 0) / f.step_signed_up) : '—',
+          'of ' + num(f.step_signed_up) + ' new owners added a property', null,
+          'Cohort starts ' + d.window.cohort_floor + ' — earlier signups have no trustworthy dates.') +
+      kpi('Lease scans', num(scans), scans ? pct(100 * saved / scans) + ' saved' : 'in this range', 'k-scans') +
+      kpi('Assistant messages', num(messages), 'in this range', 'k-agent') +
+    '</div>') +
+    section('Activation funnel', card('Signup → first report export',
+      'Each step requires every step before it, so the funnel can only go down. Cohort starts ' +
+      d.window.cohort_floor + '.', funnelBody(d))) +
+    notesFor(d, ['funnel']);
+}
+function drawOverview(d) {
+  sparkline('k-signups', fillBuckets(d, d.growth.signups, ['signups']).map((r) => r.signups));
+  sparkline('k-active', fillBuckets(d, d.engagement.active_owners, ['active_owners']).map((r) => r.active_owners));
+  sparkline('k-scans', fillBuckets(d, d.ai.scans, ['scans']).map((r) => r.scans));
+  sparkline('k-agent', fillBuckets(d, d.ai.assistant, ['messages']).map((r) => r.messages));
+}
+
+/* ── growth ────────────────────────────────────────────────────────── */
+function retentionTable(d) {
   const r = d.engagement.retention || [];
+  if (!r.length) return '<div class="empty">No cohorts with activity yet</div>';
   // Week N is days 7N..7N+7 after each owner's own signup, so a cohort can only be scored
   // once its last member (who signed up at the end of the cohort week) is past that. Before
   // then the query returns 0, which reads as "everyone left" instead of "too early to tell".
@@ -789,36 +917,71 @@ function engagementHTML(d) {
     }
     return pct(100 * count / x.cohort_size);
   };
-  const rows = r.length ? r.map((x) =>
-    '<tr><td>' + esc(bucketLabel(x.cohort_week, 'week')) + '</td>' +
-    '<td class="num">' + num(x.cohort_size) + '</td>' +
-    '<td class="num">' + retained(x, 1, x.retained_week_1) + '</td>' +
-    '<td class="num">' + retained(x, 4, x.retained_week_4) + '</td></tr>'
-  ).join('') : '';
-
-  const retention = rows
-    ? '<div class="scroll-x"><table class="data"><thead><tr><th>Cohort week</th>' +
-      '<th class="num">Size</th><th class="num">Week 1</th><th class="num">Week 4</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table></div>'
-    : '<div class="empty">No cohorts with activity yet</div>';
-
-  return '<section class="block"><h2>Engagement</h2>' +
-    '<div class="sub">Active = at least one append-only write. Pure edits are not yet counted.</div>' +
-    '<div class="grid charts">' +
-      canvasCard('Active owners', 'Distinct owners who wrote something', 'c-active') +
-      canvasCard('Portfolio size', 'Owners by number of properties / renters', 'c-dist') +
-      card('Retention by signup cohort',
-           'Cohort size shown so a small cohort is never read as a trend.', retention) +
-    '</div></section>';
+  return '<div class="scroll-x"><table class="data"><thead><tr><th>Cohort week</th>' +
+    '<th class="num">Size</th><th class="num">Week 1</th><th class="num">Week 4</th></tr></thead><tbody>' +
+    r.map((x) =>
+      '<tr><td>' + esc(bucketLabel(x.cohort_week, 'week')) + '</td>' +
+      '<td class="num">' + num(x.cohort_size) + '</td>' +
+      '<td class="num">' + retained(x, 1, x.retained_week_1) + '</td>' +
+      '<td class="num">' + retained(x, 4, x.retained_week_4) + '</td></tr>').join('') +
+    '</tbody></table></div>';
 }
-function drawEngagement(d, g) {
+
+function growthHTML(d) {
+  const t = d.growth.totals || {}, f = d.funnel || {}, ttf = d.time_to_first || {};
+  // "Ever did X" ignores order; the funnel requires it. A gap means owners are taking the
+  // product out of sequence, which is worth seeing rather than smoothing away.
+  const outOfOrder = (f.ever_renter || 0) > (f.step_renter || 0) ||
+                     (f.ever_transaction || 0) > (f.step_transaction || 0);
+  const top = f.step_signed_up || 0;
+
+  return section('Accounts', '<div class="grid tiles">' +
+        tile('Live owners', num(t.live_owners), 'exist right now') +
+        tile('New', num(t.new_in_window), 'signed up in this range') +
+        tile('Deleted', num(t.deleted_in_window), 'in this range', false,
+             'Not filtered by country — the deletion record stores none.') +
+        tile('Deleted all time', num(t.deleted_all_time), 'since 2026-07-31') +
+      '</div><div class="grid charts">' +
+        canvasCard('Signups', 'From owners.created_at', 'c-signups') +
+        canvasCard('Active owners', 'Distinct owners who wrote something. Pure edits are not counted.', 'c-active') +
+      '</div>') +
+    section('Activation', '<div class="grid tiles">' +
+        tile('Time to first property', hours(ttf.median_hours_to_property),
+             'median, n = ' + num(ttf.sample_property), true) +
+        tile('Time to first renter', hours(ttf.median_hours_to_renter),
+             'median, n = ' + num(ttf.sample_renter), true) +
+        tile('Reached a report export', top ? pct(100 * (f.step_export || 0) / top) : '—',
+             'of new owners, in order', true) +
+      '</div>' +
+      (outOfOrder ? card('Out of order',
+        'These owners did the step without the one before it, so the funnel excludes them.',
+        '<table class="data"><tbody>' +
+          '<tr><td>Ever added a renter</td><td class="num">' + num(f.ever_renter) + '</td></tr>' +
+          '<tr><td>Ever recorded a transaction</td><td class="num">' + num(f.ever_transaction) + '</td></tr>' +
+          '<tr><td>Ever exported a report</td><td class="num">' + num(f.ever_export) + '</td></tr>' +
+        '</tbody></table>') : '')) +
+    section('Retention', '<div class="grid charts">' +
+        card('By signup cohort', 'Cohort size shown so a small cohort is never read as a trend.',
+             retentionTable(d)) +
+        canvasCard('Portfolio size', 'Owners by number of properties / renters', 'c-dist') +
+      '</div>') +
+    notesFor(d, ['funnel', 'engagement']);
+}
+function drawGrowth(d, g) {
+  const s = fillBuckets(d, d.growth.signups, ['signups']);
+  chartOrEmpty('c-signups', s, () => ({
+    type: 'line',
+    data: { labels: s.map((r) => bucketLabel(r.bucket, g)),
+            datasets: [lineSeries('Signups', s.map((r) => r.signups), '--series-1')] },
+    options: singleSeries(),
+  }), 'No signups in this range yet');
+
   const a = fillBuckets(d, d.engagement.active_owners, ['active_owners']);
   chartOrEmpty('c-active', a, () => ({
     type: 'line',
     data: { labels: a.map((r) => bucketLabel(r.bucket, g)),
             datasets: [lineSeries('Active owners', a.map((r) => r.active_owners), '--series-1')] },
-    options: baseOptions({ plugins: { legend: { display: false },
-      tooltip: baseOptions().plugins.tooltip } }),
+    options: singleSeries(),
   }), 'No write activity in this range yet');
 
   const dist = d.engagement.distribution;
@@ -850,23 +1013,26 @@ function aiHTML(d) {
         num(r.scans_affected) + '</td></tr>').join('') + '</tbody></table></div>'
     : '<div class="empty">No corrections recorded yet</div>';
 
-  return '<section class="block"><h2>AI features</h2>' +
-    '<div class="sub">Lease scanning and the assistant.</div>' +
-    '<div class="grid tiles">' +
-      tile('Lease scans', num(totalScans), 'in this range') +
-      tile('Saved', totalScans ? pct(100 * saved / totalScans) : '—',
-           'rest abandoned (upper bound)') +
-      tile('Corrected fields / scan', num(acc.avg_changed_per_scan),
-           acc.pct_fields_corrected != null ? pct(acc.pct_fields_corrected) + ' of prefilled' : '') +
-      tile('Owners at daily cap', num(cap.owners_at_cap),
-           'reached ' + num(lim.daily_message_limit) + ' msgs — estimate') +
-    '</div><div class="grid charts">' +
-      canvasCard('Lease scans — saved vs abandoned', 'Abandonment is an upper bound', 'c-scans') +
-      canvasCard('Assistant messages', 'One row per user message', 'c-agent') +
-      card('Most-corrected fields',
-           'Field names only — the corrected values are lease content and are never queried.',
-           fields) +
-    '</div></section>';
+  return section('Lease scanning', '<div class="grid tiles">' +
+        tile('Scans', num(totalScans), 'in this range') +
+        tile('Saved', totalScans ? pct(100 * saved / totalScans) : '—', 'the rest were abandoned', false,
+             'Abandonment is an upper bound — a save whose callback never arrived reads as abandoned.') +
+        tile('Corrected fields / scan', num(acc.avg_changed_per_scan),
+             acc.pct_fields_corrected != null ? pct(acc.pct_fields_corrected) + ' of prefilled fields' : '') +
+      '</div><div class="grid charts">' +
+        canvasCard('Saved vs abandoned', '', 'c-scans') +
+        card('Most-corrected fields',
+             'Field names only — the corrected values are lease content and are never queried.', fields) +
+      '</div>') +
+    section('Assistant', '<div class="grid tiles">' +
+        tile('Messages', num((d.ai.assistant || []).reduce((s, r) => s + (r.messages || 0), 0)), 'in this range') +
+        tile('Owners at daily cap', num(cap.owners_at_cap),
+             'reached ' + num(lim.daily_message_limit) + ' messages in a day', false,
+             'An estimate: counts owners who reached the limit, not owners who were turned away.') +
+      '</div><div class="grid charts">' +
+        canvasCard('Messages', 'One per user message', 'c-agent') +
+      '</div>') +
+    notesFor(d, ['ai']);
 }
 function drawAI(d, g) {
   const s = fillBuckets(d, d.ai.scans, ['scans', 'saved']);
@@ -881,56 +1047,72 @@ function drawAI(d, g) {
         x: Object.assign({}, baseOptions().scales.x, { stacked: true }),
         y: Object.assign({}, baseOptions().scales.y, { stacked: true }),
       }),
-      plugins: { legend: baseOptions().plugins.legend, tooltip: baseOptions().plugins.tooltip },
     }),
   }), 'No lease scans in this range yet');
 
-  const a = fillBuckets(d, d.ai.assistant, ['messages', 'owners']);
+  const a = fillBuckets(d, d.ai.assistant, ['messages']);
   chartOrEmpty('c-agent', a, () => ({
     type: 'line',
-    data: { labels: a.map((r) => bucketLabel(r.bucket, g)), datasets: [
-      lineSeries('Messages', a.map((r) => r.messages), '--series-1'),
-      lineSeries('Owners', a.map((r) => r.owners), '--series-2'),
-    ] },
-    options: baseOptions(),
+    data: { labels: a.map((r) => bucketLabel(r.bucket, g)),
+            datasets: [lineSeries('Messages', a.map((r) => r.messages), '--series-1')] },
+    options: singleSeries(),
   }), 'No assistant usage in this range yet');
 }
 
 /* ── platform ──────────────────────────────────────────────────────── */
+// One card with a switch instead of five near-identical tables. Bars with a share are easier
+// to compare at a glance than a column of raw counts.
+const BREAKDOWNS = {
+  owner_country:    { label: 'Country', key: 'country', value: 'owners', unit: 'owners',
+                      note: "Where the account holder signed up. 'unknown' = pre-2026-09-13 backfill." },
+  property_country: { label: 'Property country', key: 'country', value: 'properties', unit: 'properties',
+                      note: 'Where the buildings are — what decides which rules you must build.' },
+  language:         { label: 'Language', key: 'locale', value: 'owners', unit: 'owners',
+                      note: 'Which of the two legal texts they accepted — covers every owner.' },
+  signup_platform:  { label: 'Signup platform', key: 'platform', value: 'owners', unit: 'owners',
+                      note: 'From the mandatory consent gate, so it covers every owner.' },
+  devices:          { label: 'Push devices', key: 'platform', value: 'owners', unit: 'owners',
+                      note: 'Owners with a registered push token, by device platform.' },
+};
+function breakdownBody(d) {
+  const b = BREAKDOWNS[state.breakdown];
+  const rows = (d.platform[state.breakdown] || []).slice().sort((x, y) => (y[b.value] || 0) - (x[b.value] || 0));
+  const total = rows.reduce((s, r) => s + (r[b.value] || 0), 0);
+  if (!rows.length || !total) return '<div class="empty">Nothing recorded yet</div>';
+  const max = rows[0][b.value] || 1;
+  return '<div class="hbars">' + rows.map((r) => {
+    const v = r[b.value] || 0;
+    return '<div class="hbar"><div class="hbar-label" title="' + esc(r[b.key]) + '">' + esc(r[b.key]) +
+      '</div><div class="hbar-track"><div class="hbar-fill" style="width:' + (100 * v / max).toFixed(1) +
+      '%"></div></div><div class="hbar-value">' + num(v) + '<span>' + Math.round(100 * v / total) +
+      '%</span></div></div>';
+  }).join('') + '</div>';
+}
 function platformHTML(d) {
   const p = d.platform;
-  const rowsOf = (arr, k, v) => (arr || []).map((r) =>
-    '<tr><td>' + esc(r[k]) + '</td><td class="num">' + num(r[v]) + '</td></tr>').join('');
-
-  const table = (arr, k, v, kh, vh, empty) => (arr && arr.length)
-    ? '<table class="data"><thead><tr><th>' + kh + '</th><th class="num">' + vh +
-      '</th></tr></thead><tbody>' + rowsOf(arr, k, v) + '</tbody></table>'
-    : '<div class="empty">' + esc(empty) + '</div>';
-
   const overlap = (p.client_overlap || []).filter((r) => r.segment !== 'unknown');
   const overlapBody = overlap.length
     ? '<table class="data"><thead><tr><th>Segment</th><th class="num">Owners</th>' +
       '<th class="num">Writes</th></tr></thead><tbody>' + overlap.map((r) =>
         '<tr><td>' + esc(r.segment) + '</td><td class="num">' + num(r.owners) +
         '</td><td class="num">' + num(r.writes) + '</td></tr>').join('') + '</tbody></table>'
-    : '<div class="empty">No client usage recorded yet — this fills once the apps ship the X-Client headers.</div>';
+    : '<div class="empty">No client usage recorded yet.</div>';
 
-  return '<section class="block"><h2>Platform</h2>' +
-    '<div class="sub">Where owners work, measured in writes rather than sessions.</div>' +
-    '<div class="grid charts">' +
-      canvasCard('Where the work happens', 'Writes by client — a glance and an evening of work are not the same', 'c-client') +
-      card('Mobile / web / both', 'Owners can appear in both, so shares exceed 100%.', overlapBody) +
-      card('Signup platform', 'From the mandatory consent gate, so it covers every owner.',
-           table(p.signup_platform, 'platform', 'owners', 'Platform', 'Owners', 'No acceptances recorded yet')) +
-      card('Language', 'Which of the two legal texts they read — covers everyone, unlike push locale.',
-           table(p.language, 'locale', 'owners', 'Locale', 'Owners', 'No acceptances recorded yet')) +
-      card('Owner country', "Where the account holder signed up. 'unknown' = pre-2026-09-13 backfill.",
-           table(p.owner_country, 'country', 'owners', 'Country', 'Owners', 'No owners yet')) +
-      card('Property country', 'Where the buildings are — what decides which rules you must build.',
-           table(p.property_country, 'country', 'properties', 'Country', 'Properties', 'No properties yet')) +
-      card('Push devices', 'Registered push tokens. Counts devices, not owners.',
-           table(p.devices, 'platform', 'owners', 'Platform', 'Owners', 'No device tokens yet')) +
-    '</div></section>';
+  const b = BREAKDOWNS[state.breakdown];
+  const switcher = '<span class="segmented" id="breakdown-seg" aria-label="Breakdown">' +
+    Object.entries(BREAKDOWNS).map(([k, v]) =>
+      '<button data-v="' + k + '" aria-pressed="' + (k === state.breakdown) + '">' + esc(v.label) + '</button>').join('') +
+    '</span>';
+
+  return section('Where owners work', '<div class="grid charts">' +
+        canvasCard('Writes by client', 'A glance and an evening of work are not the same, so this counts writes, not sessions.', 'c-client') +
+        card('Mobile / web / both', 'Owners can appear in both.', overlapBody) +
+      '</div>') +
+    section('Who they are', '<div class="card"><div class="card-head"><h3>' + esc(b.label) +
+        ' <span style="font-weight:400;color:var(--muted)">· ' + esc(b.unit) + '</span>' + info(b.note) +
+        '</h3><div class="scroll-x">' + switcher + '</div></div>' +
+        '<div id="breakdown-body">' + breakdownBody(d) + '</div></div>') +
+    notesFor(d, ['platform']);
 }
 function drawPlatform(d, g) {
   const rows = d.platform.client_over_time || [];
@@ -952,30 +1134,32 @@ function drawPlatform(d, g) {
           return hit ? (hit.writes || 0) : 0;
         }), appColor[app] || '--series-muted')),
     },
-    options: baseOptions({ plugins: { legend: baseOptions().plugins.legend,
-      tooltip: baseOptions().plugins.tooltip } }),
-  }), 'No client usage recorded yet — this fills once the apps ship the X-Client headers.');
+    options: baseOptions(),
+  }), 'No client usage recorded yet.');
+
+  $('#breakdown-seg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    state.breakdown = btn.dataset.v;
+    renderTab();
+  });
 }
 
-/* ── operations ────────────────────────────────────────────────────── */
-function opsHTML(d) {
+/* ── health ────────────────────────────────────────────────────────── */
+function healthHTML(d) {
   const jobs = d.operations.jobs || [];
   const now = Date.now();
-  const jobRows = jobs.length ? jobs.map((j) => {
-    const lastOk = j.last_ok ? new Date(j.last_ok + 'Z') : null;
-    const stale = !lastOk || (now - lastOk.getTime()) > 36 * 3600 * 1000;
-    return '<tr><td>' + esc(j.job_name) + '</td>' +
-      '<td class="num">' + num(j.runs) + '</td>' +
-      '<td class="num">' + num(j.bad_runs) + '</td>' +
-      '<td>' + (lastOk ? lastOk.toLocaleString() : 'never') + '</td>' +
-      '<td><span class="pill ' + (stale ? 'bad' : 'ok') + '">' +
-        (stale ? 'stale' : 'healthy') + '</span></td></tr>';
-  }).join('') : '';
-
-  const jobsBody = jobRows
+  const jobsBody = jobs.length
     ? '<div class="scroll-x"><table class="data"><thead><tr><th>Job</th><th class="num">Runs</th>' +
       '<th class="num">Failed</th><th>Last success</th><th>State</th></tr></thead><tbody>' +
-      jobRows + '</tbody></table></div>'
+      jobs.map((j) => {
+        const stale = isStale(j, now);
+        return '<tr><td>' + esc(j.job_name) + '</td>' +
+          '<td class="num">' + num(j.runs) + '</td>' +
+          '<td class="num">' + num(j.bad_runs) + '</td>' +
+          '<td>' + (j.last_ok ? parseUtc(j.last_ok).toLocaleString() : 'never') + '</td>' +
+          '<td><span class="pill ' + (stale ? 'bad' : 'ok') + '">' +
+            (stale ? 'stale' : 'healthy') + '</span></td></tr>';
+      }).join('') + '</tbody></table></div>'
     : '<div class="empty">No job runs recorded in this range</div>';
 
   const dh = d.operations.data_health || [];
@@ -988,29 +1172,25 @@ function opsHTML(d) {
       '</tbody></table></div>'
     : '<div class="empty">No tables reported</div>';
 
-  return '<section class="block"><h2>Operations</h2>' +
-    '<div class="sub">A cron that dies quietly stops your users’ reminders and says nothing.</div>' +
-    '<div class="grid charts">' +
-      card('Background jobs', 'Stale = no success in 36 hours.', jobsBody) +
-      card('Data health', 'Row counts and the real date range behind every metric above.', dhBody) +
-    '</div></section>';
+  return section('Background jobs', card('Last runs',
+      'Stale = no success in 36 hours. A cron that dies quietly stops reminders and says nothing.', jobsBody)) +
+    section('Data health', card('Tables behind the metrics',
+      'Row counts and the real date range behind every number on this dashboard.', dhBody));
 }
 
 /* ── controls ──────────────────────────────────────────────────────── */
-function wireSegment(sel, key) {
-  document.querySelector(sel).addEventListener('click', (e) => {
-    const btn = e.target.closest('button'); if (!btn) return;
-    [...e.currentTarget.children].forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
-    state[key] = btn.dataset.v;
-    load();
-  });
-}
-wireSegment('#range-seg', 'range');
-wireSegment('#gran-seg', 'granularity');
+$('#range-seg').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  [...e.currentTarget.children].forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+  state.range = btn.dataset.v;
+  load();
+});
 $('#country').addEventListener('change', (e) => { state.country = e.target.value; load(); });
 $('#refresh').addEventListener('click', load);
+tabFromHash();
+renderTab();
 
-// Last statement on purpose: onAuthStateChanged can call load() -> render(), which uses the
+// Last statement on purpose: onAuthStateChanged can call load() -> render, which uses the
 // const helpers defined above, and a const is not readable before its definition runs.
 // Nothing above may throw at top level or this never executes — that is what the missing
 // Chart.js did, and why Chart.register is now guarded.
