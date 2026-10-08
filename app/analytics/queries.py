@@ -27,20 +27,23 @@ of "whenever they next opened the app". Anything cohort-shaped before 2026-07-06
 fiction, and every funnel, cohort and time-to-first query here floors at it.
 
 ``COUNTRY_KNOWN_FROM`` — ``owners.country`` was added 2026-09-13 and backfilled to ``'IL'``.
-Owners created before that date have a country nobody chose, so ``COUNTRY_EXPR`` reports them
-as ``'unknown'`` rather than letting a migration default masquerade as a signal.
+Owners created before that date did not pick a country, but the product only served Israel
+then (Israeli rules, shekels, CBS indexation), so the backfill is the right answer for them,
+and ``COUNTRY_EXPR`` reports the stored value. Reporting them as 'unknown' made most of the
+user base disappear from every country comparison. 'unknown' is left for owners who signed up
+after the picker and have not passed it yet.
 """
 
 # Cohort/funnel floor. See the module docstring.
 DATA_FLOOR = "2026-07-06"
 
-# Before this, owners.country is a backfill, not a choice.
+# Before this, owners.country is the 'IL' backfill rather than a choice. See the docstring.
 COUNTRY_KNOWN_FROM = "2026-09-13"
 
-# The honest country for an owner: 'unknown' unless they actually chose one.
-COUNTRY_EXPR = f"""
-    CASE WHEN o.created_at < TIMESTAMP '{COUNTRY_KNOWN_FROM}' THEN 'unknown'
-         ELSE COALESCE(o.country, 'unknown') END
+# An owner's country. NULL only for someone who signed up after the picker shipped and has
+# not passed it yet.
+COUNTRY_EXPR = """
+    COALESCE(o.country, 'unknown')
 """
 
 # Owners in scope for a request: the country filter, applied once. `:country` NULL means
@@ -264,12 +267,16 @@ FROM counts GROUP BY 1
 
 # Inlined rather than a real SQL function so the query stays copy-pasteable into psql with no
 # setup. Kept in one place so the two halves of the histogram can never drift apart.
+#
+# The bands are the subscription plans' property bands (entitlement_service.PLANS), so the
+# chart reads directly as "how many owners would land on each plan". Hard-coded rather than
+# generated: this file is plain SQL on purpose, and the bands are an external contract that
+# changes with a migration, not an edit.
 _BUCKET_CASE = """CASE WHEN {col} = 0 THEN '0'
-         WHEN {col} = 1 THEN '1'
-         WHEN {col} = 2 THEN '2'
-         WHEN {col} BETWEEN 3 AND 5  THEN '3-5'
-         WHEN {col} BETWEEN 6 AND 10 THEN '6-10'
-         ELSE '11+' END"""
+         WHEN {col} BETWEEN 1 AND 2  THEN '1-2'
+         WHEN {col} BETWEEN 3 AND 8  THEN '3-8'
+         WHEN {col} BETWEEN 9 AND 15 THEN '9-15'
+         ELSE '16+' END"""
 
 PER_OWNER_DISTRIBUTION = (
     PER_OWNER_DISTRIBUTION
@@ -278,7 +285,7 @@ PER_OWNER_DISTRIBUTION = (
 )
 
 # Bucket order for the chart — SQL returns them as text, which sorts '11+' before '2'.
-BUCKET_ORDER = ["0", "1", "2", "3-5", "6-10", "11+"]
+BUCKET_ORDER = ["0", "1-2", "3-8", "9-15", "16+"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -429,9 +436,12 @@ GROUP BY 1, 2
 ORDER BY writes DESC NULLS LAST
 """
 
+# `day` is a DATE, and date_trunc on a date returns a timestamptz in the *session's*
+# timezone — on a server not set to UTC the buckets land hours off the page's UTC grid and
+# the chart draws nothing. The cast keeps it a naive UTC timestamp like every other bucket.
 CLIENT_USAGE_OVER_TIME = f"""
 WITH {SCOPED_OWNERS}
-SELECT date_trunc(CAST(:granularity AS text), c.day) AS bucket,
+SELECT date_trunc(CAST(:granularity AS text), CAST(c.day AS timestamp)) AS bucket,
        c.app,
        count(DISTINCT c.owner_id)      AS owners,
        sum(c.writes)                   AS writes
@@ -526,6 +536,188 @@ ORDER BY 2 DESC
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Subscriptions
+# ─────────────────────────────────────────────────────────────────────────────
+
+# "Does this subscription row confer a paid plan right now" — entitlement_service.
+# effective_plan, restated in SQL. Keep the two in step: if that function's rules change,
+# this changes with it, or the dashboard counts payers the product does not honour.
+#
+# Two deliberate omissions. `owners.granted_plan` is not a subscription (it is the permanent
+# grant for landlords who predate billing), so it is counted separately as grandfathered and
+# never as paying. And an unrecognised plan name resolves to free there, so the plan list is
+# explicit here rather than "anything but 'free'".
+#
+# `now() AT TIME ZONE 'UTC'` because the columns are naive UTC; comparing them to a bare
+# now() would shift every expiry by the session's timezone offset.
+_ENTITLED = """(
+        lower(sub.plan) IN ('tier_3_8', 'tier_9_15', 'tier_16_plus')
+        AND (
+            (lower(sub.status) IN ('active', 'trialing', 'grace')
+                AND (sub.current_period_end IS NULL
+                     OR sub.current_period_end >= (now() AT TIME ZONE 'UTC')))
+            OR (lower(sub.status) = 'past_due'
+                AND sub.grace_until > (now() AT TIME ZONE 'UTC'))
+            OR (lower(sub.status) = 'canceled'
+                AND sub.current_period_end > (now() AT TIME ZONE 'UTC'))
+        )
+    )"""
+
+# Every subscription row as it stands now, grouped by the facts the page slices on. A
+# snapshot, so it is not windowed.
+#
+# `monthly_amount` is the store-reported price normalised to a month. It is display money —
+# Subscription's docstring explains why it must never be reconciled against — and it is
+# summed per currency, never across them. Revenue in mixed currencies has no single total.
+SUBSCRIPTION_STATE = f"""
+WITH {SCOPED_OWNERS}
+SELECT CASE
+           WHEN NOT {_ENTITLED}                     THEN 'ended'
+           WHEN lower(sub.status) = 'trialing'      THEN 'trial'
+           WHEN lower(sub.status) = 'past_due'      THEN 'payment_failed'
+           WHEN lower(sub.status) = 'canceled'      THEN 'canceling'
+           ELSE 'active'
+       END                                          AS state,
+       lower(sub.plan)                              AS plan,
+       sub.period                                   AS period,
+       sub.source                                   AS source,
+       sub.price_currency                           AS currency,
+       count(*)                                     AS subscriptions,
+       round(sum(CASE WHEN sub.period = 'yearly' THEN sub.price_amount / 12
+                      ELSE sub.price_amount END)::numeric, 2) AS monthly_amount
+FROM subscriptions sub
+JOIN scoped_owners s ON s.id = sub.owner_id
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 6 DESC
+"""
+
+# Every live account sorted into exactly one of paid / grandfathered / free, plus the free
+# accounts sitting at the free plan's property ceiling — the ones the paywall will meet
+# first. The ceiling (2) is the free band in entitlement_service.PLANS.
+ACCOUNT_PLANS = f"""
+WITH {SCOPED_OWNERS},
+prop_counts AS (SELECT owner_id, count(*) AS n FROM properties GROUP BY owner_id),
+entitled AS (SELECT DISTINCT sub.owner_id FROM subscriptions sub WHERE {_ENTITLED})
+SELECT count(*)                                                              AS owners,
+       count(*) FILTER (WHERE e.owner_id IS NOT NULL)                        AS on_paid_plan,
+       count(*) FILTER (WHERE e.owner_id IS NULL
+                          AND COALESCE(lower(o.granted_plan), 'free') <> 'free') AS grandfathered,
+       count(*) FILTER (WHERE e.owner_id IS NULL
+                          AND COALESCE(lower(o.granted_plan), 'free') = 'free')  AS free,
+       count(*) FILTER (WHERE e.owner_id IS NULL
+                          AND COALESCE(lower(o.granted_plan), 'free') = 'free'
+                          AND COALESCE(p.n, 0) >= 2)                         AS free_at_limit
+FROM scoped_owners s
+JOIN owners o            ON o.id = s.id
+LEFT JOIN entitled e     ON e.owner_id = s.id
+LEFT JOIN prop_counts p  ON p.owner_id = s.id
+"""
+
+# Lifecycle events from the RevenueCat webhook log. Sandbox purchases (store testing) are
+# excluded, and so is TEST. `payload` is never selected: it is the raw webhook body.
+# occurred_at is the event's own time — delivery order is not guaranteed, arrival time lies.
+SUBSCRIPTION_EVENTS_OVER_TIME = f"""
+WITH {SCOPED_OWNERS}
+SELECT date_trunc(CAST(:granularity AS text), e.occurred_at)                AS bucket,
+       count(*) FILTER (WHERE e.event_type = 'INITIAL_PURCHASE')           AS started,
+       count(*) FILTER (WHERE e.event_type = 'RENEWAL')                    AS renewed,
+       count(*) FILTER (WHERE e.event_type = 'CANCELLATION')               AS canceled,
+       count(*) FILTER (WHERE e.event_type = 'EXPIRATION')                 AS expired,
+       count(*) FILTER (WHERE e.event_type = 'BILLING_ISSUE')              AS billing_issues
+FROM subscription_events e
+JOIN scoped_owners s ON s.id = e.owner_id
+WHERE e.occurred_at >= :since AND e.occurred_at < :until
+  AND COALESCE(upper(e.environment), '') <> 'SANDBOX'
+  AND e.event_type <> 'TEST'
+GROUP BY 1
+ORDER BY 1
+"""
+
+# Is the webhook wired up and being understood? `unmapped` is a product id the backend does
+# not recognise — a store-console typo that would leave a payer on the free plan.
+WEBHOOK_HEALTH = """
+SELECT count(*)                                              AS events,
+       count(*) FILTER (WHERE applied = 'applied')           AS applied,
+       count(*) FILTER (WHERE applied = 'unmapped')          AS unmapped,
+       count(*) FILTER (WHERE applied = 'stale')             AS stale,
+       count(*) FILTER (WHERE applied = 'ignored')           AS ignored,
+       count(*) FILTER (WHERE upper(environment) = 'SANDBOX') AS sandbox,
+       max(created_at)                                       AS last_received
+FROM subscription_events
+WHERE created_at >= :since AND created_at < :until
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Countries — side by side
+# ─────────────────────────────────────────────────────────────────────────────
+
+# These three ignore the page's country filter on purpose: their whole point is comparing
+# countries with each other, which a filter down to one country would erase.
+_COUNTRY_OWNERS = f"""
+    country_owners AS (
+        SELECT o.id, o.created_at, {COUNTRY_EXPR} AS country
+        FROM owners o
+    )
+"""
+
+# One row per country, every column a per-owner count summed up. Each joined CTE has at most
+# one row per owner, so no join can multiply another's numbers.
+COUNTRY_COMPARISON = f"""
+WITH {_COUNTRY_OWNERS},
+{WRITE_EVENTS},
+active AS (SELECT DISTINCT owner_id FROM write_events
+           WHERE created_at >= :since AND created_at < :until),
+props  AS (SELECT owner_id, count(*) AS n FROM properties GROUP BY owner_id),
+scans  AS (SELECT owner_id, count(*) AS n FROM document_extraction_logs
+           WHERE created_at >= :since AND created_at < :until GROUP BY owner_id),
+msgs   AS (SELECT owner_id, count(*) AS n FROM agent_usage_logs
+           WHERE created_at >= :since AND created_at < :until GROUP BY owner_id),
+paying AS (SELECT DISTINCT sub.owner_id FROM subscriptions sub WHERE {_ENTITLED})
+SELECT c.country,
+       count(*)                                                              AS owners,
+       count(*) FILTER (WHERE c.created_at >= :since AND c.created_at < :until) AS signups,
+       count(a.owner_id)                                                     AS active_owners,
+       COALESCE(sum(p.n), 0)                                                 AS properties,
+       COALESCE(sum(sc.n), 0)                                                AS scans,
+       COALESCE(sum(m.n), 0)                                                 AS messages,
+       count(pay.owner_id)                                                   AS paying
+FROM country_owners c
+LEFT JOIN active a    ON a.owner_id   = c.id
+LEFT JOIN props p     ON p.owner_id   = c.id
+LEFT JOIN scans sc    ON sc.owner_id  = c.id
+LEFT JOIN msgs m      ON m.owner_id   = c.id
+LEFT JOIN paying pay  ON pay.owner_id = c.id
+GROUP BY c.country
+ORDER BY owners DESC
+"""
+
+COUNTRY_SIGNUPS_OVER_TIME = f"""
+WITH {_COUNTRY_OWNERS}
+SELECT date_trunc(CAST(:granularity AS text), c.created_at) AS bucket,
+       c.country,
+       count(*)                                             AS signups
+FROM country_owners c
+WHERE c.created_at >= :since AND c.created_at < :until
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+
+COUNTRY_ACTIVE_OVER_TIME = f"""
+WITH {_COUNTRY_OWNERS},
+{WRITE_EVENTS}
+SELECT date_trunc(CAST(:granularity AS text), e.created_at) AS bucket,
+       c.country,
+       count(DISTINCT e.owner_id)                           AS active_owners
+FROM write_events e
+JOIN country_owners c ON c.id = e.owner_id
+WHERE e.created_at >= :since AND e.created_at < :until
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Operations — job health and data health
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -560,5 +752,7 @@ UNION ALL SELECT 'legal_acceptances',       count(*), min(accepted_at), max(acce
 UNION ALL SELECT 'activity_log',            count(*), min(created_at),  max(created_at)  FROM activity_log
 UNION ALL SELECT 'owner_client_days',       count(*), min(first_seen_at), max(first_seen_at) FROM owner_client_days
 UNION ALL SELECT 'deleted_accounts',        count(*), min(deleted_at),  max(deleted_at)  FROM deleted_accounts
+UNION ALL SELECT 'subscriptions',           count(*), min(created_at),  max(created_at)  FROM subscriptions
+UNION ALL SELECT 'subscription_events',     count(*), min(created_at),  max(created_at)  FROM subscription_events
 ORDER BY 1
 """

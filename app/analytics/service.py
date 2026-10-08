@@ -184,6 +184,19 @@ def build_payload(db: Session, range_key: str, granularity: str, country: str | 
             "owner_country": _rows(db, Q.COUNTRY_SPLIT, p),
             "property_country": _rows(db, Q.PROPERTY_COUNTRY_SPLIT, p),
         },
+        "subscriptions": {
+            "state": _rows(db, Q.SUBSCRIPTION_STATE, p),
+            "accounts": _one(db, Q.ACCOUNT_PLANS, p),
+            "events": _rows(db, Q.SUBSCRIPTION_EVENTS_OVER_TIME, p),
+            "webhook": _one(db, Q.WEBHOOK_HEALTH, simple),
+        },
+        # Deliberately not scoped by the country filter — see queries.py.
+        "countries": {
+            "comparison": _rows(db, Q.COUNTRY_COMPARISON, simple),
+            "signups": _rows(db, Q.COUNTRY_SIGNUPS_OVER_TIME, {**simple, "granularity": granularity}),
+            "active": _rows(db, Q.COUNTRY_ACTIVE_OVER_TIME, {**simple, "granularity": granularity}),
+            "property_country": _rows(db, Q.PROPERTY_COUNTRY_SPLIT, {**p, "country": None}),
+        },
         "operations": {
             "jobs": _rows(db, Q.JOB_HEALTH, {"since": since}),
             "data_health": _rows(db, Q.DATA_HEALTH, {}),
@@ -252,8 +265,40 @@ def _caveats() -> list[dict]:
         {
             "scope": "platform",
             "text": (
+                "Writes from app builds that predate the client headers (sent from "
+                "2026-09-18) are recorded as 'not reported' and can never be attributed "
+                "after the fact. The share shrinks as owners update the mobile app."
+            ),
+        },
+        {
+            "scope": "countries",
+            "text": (
                 f"owners.country was added {Q.COUNTRY_KNOWN_FROM} and backfilled to 'IL'. "
-                "Owners created before then are reported as 'unknown' rather than Israel."
+                "Owners from before then never picked a country, but the product only "
+                "served Israel at the time, so they are counted as IL."
+            ),
+        },
+        {
+            "scope": "countries",
+            "text": (
+                "This tab ignores the country filter, since its job is comparing countries."
+            ),
+        },
+        {
+            "scope": "subscriptions",
+            "text": (
+                "Amounts are the price the store reported, normalised to a month and summed "
+                "per currency. They are for orientation, not accounting: Apple and Google "
+                "convert currencies on their own schedules, and there is no total across "
+                "currencies."
+            ),
+        },
+        {
+            "scope": "subscriptions",
+            "text": (
+                "Grandfathered accounts (owners.granted_plan) have the top plan for free, "
+                "permanently, and are never counted as paying. Sandbox purchases are left "
+                "out of the event chart."
             ),
         },
     ]

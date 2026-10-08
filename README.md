@@ -544,8 +544,13 @@ Store. See their respective repos.
 ## Internal analytics dashboard
 
 One page, served by this service, showing how the *product* is doing across all users:
-signups, activation, retention, the two AI features, and which client owners actually work
-in. It replaces a self-hosted Metabase that cost $15/month to sit idle.
+subscriptions, signups, retention, countries side by side, the two AI features, and which
+client owners actually work in. It replaces a self-hosted Metabase that cost $15/month to sit
+idle.
+
+The Subscriptions tab was built before billing went live: until the first RevenueCat webhook
+lands it says so and shows zeros, then fills in with no code change. The Countries tab ignores
+the page's country filter, since its job is comparing countries.
 
 It adds **no new service and no new process**. The page is a single static HTML file served
 by a route here; the queries run on the connection this app already holds; the 60-second

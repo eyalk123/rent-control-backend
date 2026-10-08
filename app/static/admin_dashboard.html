@@ -14,7 +14,7 @@
 
   English-only LTR on purpose — the product is Hebrew-first and RTL, this admin page is not.
 
-  Layout: five tabs over one payload. Overview carries the handful of numbers worth checking
+  Layout: seven tabs over one payload. Overview carries the handful of numbers worth checking
   daily; the other tabs hold the detail. The payload is fetched once per control change and
   kept in `state.data`, so switching tabs re-renders from memory and never refetches.
 
@@ -161,6 +161,7 @@ section.block > h2 { font-size: 15px; margin-bottom: 10px; }
 .grid { display: grid; gap: 14px; }
 .tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 14px; }
 .kpis { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); margin-bottom: 14px; }
+.kpis.four, .charts.four { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
 .charts { grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
 .card {
   background: var(--surface); border: 1px solid var(--outline);
@@ -227,6 +228,9 @@ section.block > h2 { font-size: 15px; margin-bottom: 10px; }
 .hbar-fill { height: 100%; background: var(--series-1); border-radius: 6px; min-width: 2px; }
 .hbar-value { text-align: right; font-variant-numeric: tabular-nums; }
 .hbar-value span { color: var(--muted); margin-left: 6px; }
+/* Narrow cards: label and value share a line, the bar runs full width underneath. */
+.charts.four .hbar { grid-template-columns: 1fr auto; row-gap: 4px; }
+.charts.four .hbar-track { grid-column: 1 / -1; order: 3; height: 10px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .card-head h3 { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 6px; }
 
@@ -332,7 +336,9 @@ details.notes summary { cursor: pointer; font-size: 12.5px; color: var(--muted);
     <div class="bar-inner">
       <nav class="tabs" role="tablist" id="tabs" aria-label="Dashboard sections">
         <button role="tab" data-tab="overview">Overview</button>
+        <button role="tab" data-tab="subscriptions">Subscriptions</button>
         <button role="tab" data-tab="growth">Growth</button>
+        <button role="tab" data-tab="countries">Countries</button>
         <button role="tab" data-tab="ai">AI</button>
         <button role="tab" data-tab="platform">Platform</button>
         <button role="tab" data-tab="health">Health</button>
@@ -359,10 +365,10 @@ details.notes summary { cursor: pointer; font-size: 12.5px; color: var(--muted);
 const FIREBASE_CONFIG = __FIREBASE_CONFIG__;
 
 const $ = (s) => document.querySelector(s);
-const TABS = ['overview', 'growth', 'ai', 'platform', 'health'];
+const TABS = ['overview', 'subscriptions', 'growth', 'countries', 'ai', 'platform', 'health'];
 const state = {
   range: '90d', country: '', charts: {}, seq: 0, data: null,
-  tab: 'overview', breakdown: 'owner_country',
+  tab: 'overview', breakdown: 'language', countryMetric: 'owners',
 };
 
 /** Granularity follows the range rather than being a second control: a 7- or 30-day window
@@ -373,12 +379,6 @@ const granularityFor = (range) => (range === '7d' || range === '30d') ? 'day' : 
 const nf = new Intl.NumberFormat('en-US');
 const num = (v) => (v === null || v === undefined) ? '—' : nf.format(v);
 const pct = (v) => (v === null || v === undefined) ? '—' : v.toFixed(1) + '%';
-function hours(h) {
-  if (h === null || h === undefined) return '—';
-  if (h < 1) return Math.round(h * 60) + ' min';
-  if (h < 48) return h.toFixed(1) + ' h';
-  return (h / 24).toFixed(1) + ' d';
-}
 // Timestamps arrive naive and are UTC (app.clock.utc_now_naive). Without the 'Z' the
 // browser reads them as local time, which shifts a bucket label by a day for anyone west
 // of UTC — the labels would disagree with the data by one row.
@@ -764,13 +764,42 @@ function notesFor(d, scopes) {
     items.map((c) => '<li>' + esc(c.text) + '</li>').join('') + '</ul></details>';
 }
 
+/** Horizontal bars with the value and its share. `items` is [{label, value}], drawn in the
+ *  order given, each bar scaled to the largest. */
+function hbars(items, emptyText) {
+  const total = items.reduce((s, x) => s + (x.value || 0), 0);
+  if (!items.length || !total) return '<div class="empty">' + esc(emptyText || 'Nothing recorded yet') + '</div>';
+  const max = Math.max(...items.map((x) => x.value || 0)) || 1;
+  return '<div class="hbars">' + items.map((x) => {
+    const v = x.value || 0;
+    return '<div class="hbar"><div class="hbar-label" title="' + esc(x.label) + '">' + esc(x.label) +
+      '</div><div class="hbar-track"><div class="hbar-fill" style="width:' + (100 * v / max).toFixed(1) +
+      '%' + (x.color ? ';background:var(' + x.color + ')' : '') + '"></div></div><div class="hbar-value">' +
+      num(v) + '<span>' + Math.round(100 * v / total) + '%</span></div></div>';
+  }).join('') + '</div>';
+}
+/** A segmented switch. `options` is {value: label}. */
+const switcher = (id, options, current, label) =>
+  '<span class="segmented" id="' + id + '" aria-label="' + esc(label) + '">' +
+  Object.entries(options).map(([k, v]) =>
+    '<button data-v="' + k + '" aria-pressed="' + (k === current) + '">' + esc(v) + '</button>').join('') +
+  '</span>';
+/** Sum a field over rows, grouped by a key — for reshaping the subscription snapshot. */
+function sumBy(rows, key, field) {
+  const out = {};
+  rows.forEach((r) => { out[r[key]] = (out[r[key]] || 0) + (r[field] || 0); });
+  return out;
+}
+
 /* ── tabs ──────────────────────────────────────────────────────────── */
 const TAB_RENDER = {
-  overview: [overviewHTML, drawOverview],
-  growth:   [growthHTML, drawGrowth],
-  ai:       [aiHTML, drawAI],
-  platform: [platformHTML, drawPlatform],
-  health:   [healthHTML, () => {}],
+  overview:      [overviewHTML, drawOverview],
+  subscriptions: [subscriptionsHTML, drawSubscriptions],
+  growth:        [growthHTML, drawGrowth],
+  countries:     [countriesHTML, drawCountries],
+  ai:            [aiHTML, drawAI],
+  platform:      [platformHTML, drawPlatform],
+  health:        [healthHTML, () => {}],
 };
 
 function renderTab() {
@@ -779,6 +808,11 @@ function renderTab() {
     b.setAttribute('aria-selected', String(on));
     b.tabIndex = on ? 0 : -1;
   });
+  // The Countries tab compares countries with each other, so the filter does nothing there.
+  // Disabled rather than hidden, so the bar does not jump when switching tabs.
+  const sel = $('#country');
+  sel.disabled = state.tab === 'countries';
+  sel.title = sel.disabled ? 'This tab always compares every country' : '';
   const d = state.data;
   if (!d) return;
   destroyAll();
@@ -867,7 +901,8 @@ function funnelBody(d) {
 
 function overviewHTML(d) {
   const g = d.window.granularity;
-  const t = d.growth.totals || {}, f = d.funnel || {};
+  const t = d.growth.totals || {};
+  const subs = subscriptionSummary(d);
   const active = fillBuckets(d, d.engagement.active_owners, ['active_owners']);
   // The last bucket is the current, unfinished one — a Monday-morning number would read as
   // a collapse every week. The one before it is the latest complete period.
@@ -877,14 +912,14 @@ function overviewHTML(d) {
   const messages = (d.ai.assistant || []).reduce((s, r) => s + (r.messages || 0), 0);
 
   return section('', '<div class="grid kpis">' +
+      kpi('Paying subscribers', num(subs.paying),
+          subs.trial ? '+' + num(subs.trial) + ' on trial' : 'right now', null,
+          'Subscriptions that confer a paid plan right now, trials excluded. Grandfathered accounts are not counted.') +
       kpi('Live owners', num(t.live_owners), '+' + num(t.new_in_window) + ' in this range', null,
           'Accounts that exist right now. Deleting an account removes its row.') +
       kpi('New signups', num(t.new_in_window), 'in this range', 'k-signups') +
       kpi('Active owners', num(lastFull), g === 'week' ? 'last full week' : 'yesterday', 'k-active',
           'Distinct owners who wrote something — a property, renter, transaction, export, scan or assistant message.') +
-      kpi('Activation', f.step_signed_up ? pct(100 * (f.step_property || 0) / f.step_signed_up) : '—',
-          'of ' + num(f.step_signed_up) + ' new owners added a property', null,
-          'Cohort starts ' + d.window.cohort_floor + ' — earlier signups have no trustworthy dates.') +
       kpi('Lease scans', num(scans), scans ? pct(100 * saved / scans) + ' saved' : 'in this range', 'k-scans') +
       kpi('Assistant messages', num(messages), 'in this range', 'k-agent') +
     '</div>') +
@@ -898,6 +933,231 @@ function drawOverview(d) {
   sparkline('k-active', fillBuckets(d, d.engagement.active_owners, ['active_owners']).map((r) => r.active_owners));
   sparkline('k-scans', fillBuckets(d, d.ai.scans, ['scans']).map((r) => r.scans));
   sparkline('k-agent', fillBuckets(d, d.ai.assistant, ['messages']).map((r) => r.messages));
+}
+
+/* ── subscriptions ─────────────────────────────────────────────────── */
+// Built before billing goes live, so every panel must read sensibly at zero and fill in by
+// itself once the first webhook lands — no code change on launch day.
+const PAYING_STATES = ['active', 'canceling', 'payment_failed'];
+const PLAN_LABELS = { tier_3_8: '3–8 properties', tier_9_15: '9–15 properties', tier_16_plus: '16+ properties' };
+const SOURCE_LABELS = { apple: 'App Store', google: 'Google Play', paddle: 'Web (Paddle)' };
+const STATE_LABELS = {
+  active: 'Active', trial: 'Trial', canceling: 'Canceled, paid to period end',
+  payment_failed: 'Payment failed, in grace', ended: 'Ended',
+};
+function money(amount, currency) {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount);
+  } catch (_) {
+    return nf.format(Math.round(amount)) + ' ' + currency;
+  }
+}
+function subscriptionSummary(d) {
+  const rows = (d.subscriptions && d.subscriptions.state) || [];
+  const live = rows.filter((r) => PAYING_STATES.includes(r.state));
+  const byState = sumBy(rows, 'state', 'subscriptions');
+  // Per currency, never across them: there is no honest single total of shekels and dollars.
+  const mrr = {};
+  live.forEach((r) => {
+    if (r.currency && r.monthly_amount != null) mrr[r.currency] = (mrr[r.currency] || 0) + r.monthly_amount;
+  });
+  return {
+    rows, live, byState, mrr,
+    paying: live.reduce((s, r) => s + (r.subscriptions || 0), 0),
+    trial: byState.trial || 0,
+  };
+}
+const labelled = (counts, labels) => Object.entries(counts)
+  .map(([k, v]) => ({ label: labels[k] || k, value: v }))
+  .sort((a, b) => b.value - a.value);
+
+function subscriptionsHTML(d) {
+  const sub = d.subscriptions || {};
+  const s = subscriptionSummary(d);
+  const acc = sub.accounts || {}, wh = sub.webhook || {};
+  const mrr = Object.entries(s.mrr).sort((a, b) => b[1] - a[1]);
+  const banner = (!s.rows.length && !wh.events)
+    ? '<div class="banner warn"><strong>Billing is not live yet</strong>No subscription has been ' +
+      'recorded. Every panel here fills in by itself once the first RevenueCat webhook lands.</div>'
+    : '';
+
+  const currencyTable = mrr.length
+    ? '<table class="data"><thead><tr><th>Currency</th><th class="num">Subscribers</th>' +
+      '<th class="num">Per month</th></tr></thead><tbody>' + mrr.map(([c, v]) =>
+        '<tr><td>' + esc(c) + '</td><td class="num">' +
+        num(s.live.filter((r) => r.currency === c).reduce((n, r) => n + r.subscriptions, 0)) +
+        '</td><td class="num">' + esc(money(v, c)) + '</td></tr>').join('') + '</tbody></table>'
+    : '<div class="empty">No paying subscribers yet</div>';
+
+  const whRow = (label, value, bad) => '<tr><td>' + esc(label) + '</td><td class="num">' +
+    (bad ? '<span class="pill bad">' + num(value) + '</span>' : num(value)) + '</td></tr>';
+  const webhook = '<table class="data"><tbody>' +
+    whRow('Events in this range', wh.events) +
+    whRow('Applied', wh.applied) +
+    whRow('Unrecognised product', wh.unmapped, (wh.unmapped || 0) > 0) +
+    whRow('Arrived out of order', wh.stale) +
+    whRow('Sandbox (store testing)', wh.sandbox) +
+    '<tr><td>Last received</td><td class="num">' +
+      (wh.last_received ? parseUtc(wh.last_received).toLocaleString() : 'never') + '</td></tr>' +
+    '</tbody></table>';
+
+  return banner +
+    section('', '<div class="grid kpis four">' +
+      kpi('Paying subscribers', num(s.paying), s.trial ? '+' + num(s.trial) + ' on trial' : 'right now', null,
+          'Includes canceled subscriptions still inside the period they paid for, and failed payments still in grace.') +
+      kpi('Monthly revenue', mrr.length ? money(mrr[0][1], mrr[0][0]) : '—',
+          mrr.length > 1 ? '+ ' + mrr.slice(1).map(([c, v]) => money(v, c)).join(' · ') : 'store prices, per month', null,
+          'Yearly plans divided by 12. One figure per currency — they are never added together.') +
+      kpi('Free accounts at the limit', num(acc.free_at_limit), 'of ' + num(acc.free) + ' free accounts', null,
+          'Free accounts with 2 properties, the free plan\'s ceiling. Their next property needs a paid plan.') +
+      kpi('Grandfathered', num(acc.grandfathered), 'top plan for free, for good', null,
+          'Accounts from before billing keep the top plan permanently (owners.granted_plan). Not counted as paying.') +
+    '</div>') +
+    section('Accounts', '<div class="grid charts">' +
+      card('Every account by plan', 'Each live account counted once.', hbars([
+        { label: 'Paid plan (incl. trial)', value: acc.on_paid_plan },
+        { label: 'Grandfathered', value: acc.grandfathered },
+        { label: 'Free', value: acc.free },
+      ], 'No accounts yet')) +
+      canvasCard('Owners by number of properties',
+        'Grouped by the plans\' property bands, so each bar is where those owners would land on pricing.', 'c-dist') +
+    '</div>') +
+    section('Subscribers', '<div class="grid charts four">' +
+      card('By plan', 'Paying subscribers only.', hbars(labelled(sumBy(s.live, 'plan', 'subscriptions'), PLAN_LABELS), 'No paying subscribers yet')) +
+      card('By store', 'Where they bought. App Store and Google Play subscriptions can only be canceled in the store.',
+           hbars(labelled(sumBy(s.live, 'source', 'subscriptions'), SOURCE_LABELS), 'No paying subscribers yet')) +
+      card('By status', 'Every subscription ever recorded, including ended ones.',
+           hbars(labelled(s.byState, STATE_LABELS), 'No subscriptions yet')) +
+      card('Revenue by currency', 'Store-reported prices, for orientation — not accounting.', currencyTable) +
+    '</div>') +
+    section('Over time', '<div class="grid charts">' +
+      canvasCard('New vs canceled', 'From the webhook log, sandbox purchases excluded.', 'c-sub-events') +
+      card('RevenueCat webhook', 'Is billing data arriving, and is it understood? An unrecognised product leaves a payer on the free plan.', webhook) +
+    '</div>') +
+    notesFor(d, ['subscriptions']);
+}
+function drawSubscriptions(d, g) {
+  const dist = d.engagement.distribution;
+  const bandLabel = { '0': '0', '1-2': '1–2 (free)', '3-8': '3–8', '9-15': '9–15', '16+': '16+' };
+  const axis = (text) => ({ display: true, text, color: css('--muted'), font: { size: 11 } });
+  chartOrEmpty('c-dist', dist && dist.properties.some(Boolean) ? dist.buckets : [], () => ({
+    type: 'bar',
+    data: { labels: dist.buckets.map((b) => bandLabel[b] || b),
+            datasets: [barSeries('Owners', dist.properties, '--series-1')] },
+    options: singleSeries({
+      plugins: { legend: { display: false }, tooltip: baseOptions().plugins.tooltip, valueLabels: { enabled: true } },
+      scales: {
+        x: Object.assign({}, baseOptions().scales.x, { title: axis('Properties per owner') }),
+        y: Object.assign({}, baseOptions().scales.y, { title: axis('Owners') }),
+      },
+    }),
+  }), 'No owners yet');
+
+  const e = fillBuckets(d, (d.subscriptions || {}).events, ['started', 'canceled']);
+  chartOrEmpty('c-sub-events', e, () => ({
+    type: 'bar',
+    data: { labels: e.map((r) => bucketLabel(r.bucket, g)), datasets: [
+      barSeries('New', e.map((r) => r.started), '--series-1'),
+      barSeries('Canceled', e.map((r) => r.canceled), '--series-2'),
+    ] },
+    options: baseOptions(),
+  }), 'No subscription events yet');
+}
+
+/* ── countries ─────────────────────────────────────────────────────── */
+const COUNTRY_METRICS = {
+  owners: 'Owners', signups: 'Signups', active_owners: 'Active', properties: 'Properties',
+  scans: 'Scans', messages: 'Assistant', paying: 'Paying',
+};
+const regionNames = (typeof Intl.DisplayNames === 'function')
+  ? new Intl.DisplayNames(['en'], { type: 'region' }) : null;
+function countryName(code) {
+  if (!code || code === 'unknown') return 'Not chosen yet';
+  try { return (regionNames && regionNames.of(code)) || code; } catch (_) { return code; }
+}
+/** The countries worth a line of their own; everything else is folded into "Other". */
+const TREND_COUNTRIES = 4;
+const TREND_COLORS = ['--series-1', '--series-2', '--series-3', '--series-4'];
+
+function countriesHTML(d) {
+  const c = d.countries || {};
+  const rows = c.comparison || [];
+  const m = state.countryMetric;
+  const ranked = rows.slice().sort((a, b) => (b[m] || 0) - (a[m] || 0));
+  const items = ranked.slice(0, 10).map((r) => ({ label: countryName(r.country), value: r[m] || 0 }));
+  if (ranked.length > 10) {
+    items.push({ label: 'Other (' + (ranked.length - 10) + ')',
+                 value: ranked.slice(10).reduce((s, r) => s + (r[m] || 0), 0), color: '--series-muted' });
+  }
+  const rate = (a, b) => b ? pct(100 * a / b) : '—';
+  const table = rows.length
+    ? '<div class="scroll-x"><table class="data"><thead><tr><th>Country</th>' +
+      '<th class="num">Owners</th><th class="num">Signups</th><th class="num">Active</th>' +
+      '<th class="num">% active</th><th class="num">Properties / owner</th>' +
+      '<th class="num">Scans</th><th class="num">Assistant</th><th class="num">Paying</th>' +
+      '<th class="num">% paying</th></tr></thead><tbody>' + rows.map((r) =>
+        '<tr><td>' + esc(countryName(r.country)) + '</td>' +
+        '<td class="num">' + num(r.owners) + '</td>' +
+        '<td class="num">' + num(r.signups) + '</td>' +
+        '<td class="num">' + num(r.active_owners) + '</td>' +
+        '<td class="num">' + rate(r.active_owners, r.owners) + '</td>' +
+        '<td class="num">' + (r.owners ? (r.properties / r.owners).toFixed(1) : '—') + '</td>' +
+        '<td class="num">' + num(r.scans) + '</td>' +
+        '<td class="num">' + num(r.messages) + '</td>' +
+        '<td class="num">' + num(r.paying) + '</td>' +
+        '<td class="num">' + rate(r.paying, r.owners) + '</td></tr>').join('') +
+      '</tbody></table></div>'
+    : '<div class="empty">No owners yet</div>';
+
+  const propCountry = (c.property_country || []).map((r) => ({ label: r.country, value: r.properties }));
+
+  return section('', '<div class="card"><div class="card-head"><h3>Top countries by ' +
+        esc(COUNTRY_METRICS[m].toLowerCase()) +
+        info('Owners, properties and paying are totals right now; the rest count this range only.') +
+        '</h3><div class="scroll-x">' + switcher('country-metric', COUNTRY_METRICS, m, 'Metric') +
+        '</div></div>' + hbars(items, 'Nothing recorded yet') + '</div>') +
+    section('Side by side', card('Every country',
+        'The % columns are what make a small country comparable to a big one.', table)) +
+    section('Over time', '<div class="grid charts">' +
+        canvasCard('Signups', 'The ' + TREND_COUNTRIES + ' largest countries, the rest as Other.', 'c-country-signups') +
+        canvasCard('Active owners', 'Distinct owners who wrote something, per country.', 'c-country-active') +
+      '</div>') +
+    section('Where the buildings are', card('Properties by property country',
+        'Decides which rules apply. Can differ from the owner\'s country.',
+        hbars(propCountry, 'No properties yet'))) +
+    notesFor(d, ['countries']);
+}
+/** Lines for the largest countries plus one "Other", on the full run of buckets. */
+function countryTrend(d, g, canvasId, rows, field, emptyText) {
+  const sizes = {};
+  ((d.countries || {}).comparison || []).forEach((r) => { sizes[r.country] = r.owners || 0; });
+  const top = Object.keys(sizes).sort((a, b) => sizes[b] - sizes[a]).slice(0, TREND_COUNTRIES);
+  const buckets = rows.length ? bucketKeys(d, rows) : [];
+  const series = top.map((country, i) => ({ name: countryName(country), color: TREND_COLORS[i],
+                                             match: (r) => r.country === country }));
+  if (rows.some((r) => !top.includes(r.country))) {
+    series.push({ name: 'Other', color: '--series-muted', match: (r) => !top.includes(r.country) });
+  }
+  chartOrEmpty(canvasId, rows, () => ({
+    type: 'line',
+    data: {
+      labels: buckets.map((b) => bucketLabel(new Date(b).toISOString(), g)),
+      datasets: series.map((s) => lineSeries(s.name, buckets.map((b) => rows
+        .filter((r) => parseUtc(r.bucket).getTime() === b && s.match(r))
+        .reduce((n, r) => n + (r[field] || 0), 0)), s.color)),
+    },
+    options: baseOptions(),
+  }), emptyText);
+}
+function drawCountries(d, g) {
+  const c = d.countries || {};
+  countryTrend(d, g, 'c-country-signups', c.signups || [], 'signups', 'No signups in this range yet');
+  countryTrend(d, g, 'c-country-active', c.active || [], 'active_owners', 'No write activity in this range yet');
+  $('#country-metric').addEventListener('click', (e) => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    state.countryMetric = btn.dataset.v;
+    renderTab();
+  });
 }
 
 /* ── growth ────────────────────────────────────────────────────────── */
@@ -928,12 +1188,7 @@ function retentionTable(d) {
 }
 
 function growthHTML(d) {
-  const t = d.growth.totals || {}, f = d.funnel || {}, ttf = d.time_to_first || {};
-  // "Ever did X" ignores order; the funnel requires it. A gap means owners are taking the
-  // product out of sequence, which is worth seeing rather than smoothing away.
-  const outOfOrder = (f.ever_renter || 0) > (f.step_renter || 0) ||
-                     (f.ever_transaction || 0) > (f.step_transaction || 0);
-  const top = f.step_signed_up || 0;
+  const t = d.growth.totals || {};
 
   return section('Accounts', '<div class="grid tiles">' +
         tile('Live owners', num(t.live_owners), 'exist right now') +
@@ -945,25 +1200,9 @@ function growthHTML(d) {
         canvasCard('Signups', 'From owners.created_at', 'c-signups') +
         canvasCard('Active owners', 'Distinct owners who wrote something. Pure edits are not counted.', 'c-active') +
       '</div>') +
-    section('Activation', '<div class="grid tiles">' +
-        tile('Time to first property', hours(ttf.median_hours_to_property),
-             'median, n = ' + num(ttf.sample_property), true) +
-        tile('Time to first renter', hours(ttf.median_hours_to_renter),
-             'median, n = ' + num(ttf.sample_renter), true) +
-        tile('Reached a report export', top ? pct(100 * (f.step_export || 0) / top) : '—',
-             'of new owners, in order', true) +
-      '</div>' +
-      (outOfOrder ? card('Out of order',
-        'These owners did the step without the one before it, so the funnel excludes them.',
-        '<table class="data"><tbody>' +
-          '<tr><td>Ever added a renter</td><td class="num">' + num(f.ever_renter) + '</td></tr>' +
-          '<tr><td>Ever recorded a transaction</td><td class="num">' + num(f.ever_transaction) + '</td></tr>' +
-          '<tr><td>Ever exported a report</td><td class="num">' + num(f.ever_export) + '</td></tr>' +
-        '</tbody></table>') : '')) +
     section('Retention', '<div class="grid charts">' +
         card('By signup cohort', 'Cohort size shown so a small cohort is never read as a trend.',
              retentionTable(d)) +
-        canvasCard('Portfolio size', 'Owners by number of properties / renters', 'c-dist') +
       '</div>') +
     notesFor(d, ['funnel', 'engagement']);
 }
@@ -983,18 +1222,6 @@ function drawGrowth(d, g) {
             datasets: [lineSeries('Active owners', a.map((r) => r.active_owners), '--series-1')] },
     options: singleSeries(),
   }), 'No write activity in this range yet');
-
-  const dist = d.engagement.distribution;
-  const any = dist && (dist.properties.some(Boolean) || dist.renters.some(Boolean));
-  chartOrEmpty('c-dist', any ? dist.buckets : [], () => ({
-    type: 'bar',
-    data: { labels: dist.buckets, datasets: [
-      barSeries('Properties', dist.properties, '--series-1'),
-      barSeries('Renters', dist.renters, '--series-2'),
-    ] },
-    options: baseOptions({ plugins: { valueLabels: { enabled: true },
-      legend: baseOptions().plugins.legend, tooltip: baseOptions().plugins.tooltip } }),
-  }), 'No owners yet');
 }
 
 /* ── AI ────────────────────────────────────────────────────────────── */
@@ -1062,11 +1289,8 @@ function drawAI(d, g) {
 /* ── platform ──────────────────────────────────────────────────────── */
 // One card with a switch instead of five near-identical tables. Bars with a share are easier
 // to compare at a glance than a column of raw counts.
+// Countries have their own tab.
 const BREAKDOWNS = {
-  owner_country:    { label: 'Country', key: 'country', value: 'owners', unit: 'owners',
-                      note: "Where the account holder signed up. 'unknown' = pre-2026-09-13 backfill." },
-  property_country: { label: 'Property country', key: 'country', value: 'properties', unit: 'properties',
-                      note: 'Where the buildings are — what decides which rules you must build.' },
   language:         { label: 'Language', key: 'locale', value: 'owners', unit: 'owners',
                       note: 'Which of the two legal texts they accepted — covers every owner.' },
   signup_platform:  { label: 'Signup platform', key: 'platform', value: 'owners', unit: 'owners',
@@ -1076,20 +1300,18 @@ const BREAKDOWNS = {
 };
 function breakdownBody(d) {
   const b = BREAKDOWNS[state.breakdown];
-  const rows = (d.platform[state.breakdown] || []).slice().sort((x, y) => (y[b.value] || 0) - (x[b.value] || 0));
-  const total = rows.reduce((s, r) => s + (r[b.value] || 0), 0);
-  if (!rows.length || !total) return '<div class="empty">Nothing recorded yet</div>';
-  const max = rows[0][b.value] || 1;
-  return '<div class="hbars">' + rows.map((r) => {
-    const v = r[b.value] || 0;
-    return '<div class="hbar"><div class="hbar-label" title="' + esc(r[b.key]) + '">' + esc(r[b.key]) +
-      '</div><div class="hbar-track"><div class="hbar-fill" style="width:' + (100 * v / max).toFixed(1) +
-      '%"></div></div><div class="hbar-value">' + num(v) + '<span>' + Math.round(100 * v / total) +
-      '%</span></div></div>';
-  }).join('') + '</div>';
+  return hbars((d.platform[state.breakdown] || [])
+    .map((r) => ({ label: r[b.key], value: r[b.value] || 0 }))
+    .sort((x, y) => y.value - x.value));
 }
+// Builds that predate the X-Client-* headers (2026-09-18) are stored as 'unknown'. Named for
+// what they almost certainly are, so the biggest bar does not read as a data bug.
+const APP_LABELS = { mobile: 'Mobile', web: 'Web', unknown: 'Not reported (older app build)' };
 function platformHTML(d) {
   const p = d.platform;
+  const writesByApp = sumBy(p.client_usage || [], 'app', 'writes');
+  const allWrites = Object.values(writesByApp).reduce((s, v) => s + v, 0);
+  const reported = allWrites ? pct(100 * (allWrites - (writesByApp.unknown || 0)) / allWrites) : null;
   const overlap = (p.client_overlap || []).filter((r) => r.segment !== 'unknown');
   const overlapBody = overlap.length
     ? '<table class="data"><thead><tr><th>Segment</th><th class="num">Owners</th>' +
@@ -1099,24 +1321,28 @@ function platformHTML(d) {
     : '<div class="empty">No client usage recorded yet.</div>';
 
   const b = BREAKDOWNS[state.breakdown];
-  const switcher = '<span class="segmented" id="breakdown-seg" aria-label="Breakdown">' +
-    Object.entries(BREAKDOWNS).map(([k, v]) =>
-      '<button data-v="' + k + '" aria-pressed="' + (k === state.breakdown) + '">' + esc(v.label) + '</button>').join('') +
-    '</span>';
+  const labels = Object.fromEntries(Object.entries(BREAKDOWNS).map(([k, v]) => [k, v.label]));
 
   return section('Where owners work', '<div class="grid charts">' +
-        canvasCard('Writes by client', 'A glance and an evening of work are not the same, so this counts writes, not sessions.', 'c-client') +
-        card('Mobile / web / both', 'Owners can appear in both.', overlapBody) +
+        card('Writes by client',
+          'A glance and an evening of work are not the same, so this counts writes, not sessions. ' +
+          'Builds from before 2026-09-18 do not say which app they are and show as not reported.',
+          '<div class="chart-wrap"><canvas id="c-client"></canvas></div>' +
+          (reported ? '<div class="caption" style="font-size:12px;color:var(--muted);margin-top:8px">' +
+            reported + ' of writes in this range came from a build that reports its app.</div>' : '')) +
+        card('Mobile / web / both', 'Owners can appear in both. Owners seen only on unreported builds are left out.', overlapBody) +
       '</div>') +
     section('Who they are', '<div class="card"><div class="card-head"><h3>' + esc(b.label) +
         ' <span style="font-weight:400;color:var(--muted)">· ' + esc(b.unit) + '</span>' + info(b.note) +
-        '</h3><div class="scroll-x">' + switcher + '</div></div>' +
+        '</h3><div class="scroll-x">' + switcher('breakdown-seg', labels, state.breakdown, 'Breakdown') + '</div></div>' +
         '<div id="breakdown-body">' + breakdownBody(d) + '</div></div>') +
     notesFor(d, ['platform']);
 }
 function drawPlatform(d, g) {
   const rows = d.platform.client_over_time || [];
-  const apps = [...new Set(rows.map((r) => r.app))];
+  const order = ['mobile', 'web', 'unknown'];
+  const apps = [...new Set(rows.map((r) => r.app))]
+    .sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
   // Rows are one per (bucket, app), so the full bucket run is built here rather than by
   // fillBuckets; a bucket with no row for an app is already drawn as 0 below.
   const buckets = rows.length ? bucketKeys(d, rows) : [];
@@ -1128,7 +1354,7 @@ function drawPlatform(d, g) {
     type: 'bar',
     data: {
       labels: buckets.map((b) => bucketLabel(new Date(b).toISOString(), g)),
-      datasets: apps.map((app) => barSeries(app,
+      datasets: apps.map((app) => barSeries(APP_LABELS[app] || app,
         buckets.map((b) => {
           const hit = rows.find((r) => parseUtc(r.bucket).getTime() === b && r.app === app);
           return hit ? (hit.writes || 0) : 0;

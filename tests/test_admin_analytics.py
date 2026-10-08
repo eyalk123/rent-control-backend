@@ -239,7 +239,9 @@ def test_every_windowed_query_filters_on_time():
     unbounded = {"DATA_HEALTH", "PER_OWNER_DISTRIBUTION", "DEVICE_PLATFORM_SPLIT",
                  "SIGNUP_PLATFORM_SPLIT", "LANGUAGE_SPLIT", "COUNTRY_SPLIT",
                  "PROPERTY_COUNTRY_SPLIT", "OWNER_TOTALS", "SCOPED_OWNERS",
-                 "WRITE_EVENTS", "COUNTRY_EXPR"}
+                 "WRITE_EVENTS", "COUNTRY_EXPR", "_COUNTRY_OWNERS",
+                 # Current subscription state — a snapshot of one small table.
+                 "SUBSCRIPTION_STATE", "ACCOUNT_PLANS"}
     for name, sql in ALL_QUERIES.items():
         if name in unbounded:
             continue
