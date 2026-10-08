@@ -79,6 +79,9 @@
   }
 }
 * { box-sizing: border-box; }
+/* Any class that sets `display` beats the UA's [hidden] rule — .login-wrap's flex kept the
+   login box on screen above the dashboard after sign-in. */
+[hidden] { display: none !important; }
 body {
   margin: 0;
   background: var(--bg);
@@ -295,7 +298,7 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 const FIREBASE_CONFIG = __FIREBASE_CONFIG__;
 
 const $ = (s) => document.querySelector(s);
-const state = { token: null, range: '90d', granularity: 'week', country: '', charts: {} };
+const state = { range: '90d', granularity: 'week', country: '', charts: {}, seq: 0 };
 
 /* ── formatting ────────────────────────────────────────────────────── */
 const nf = new Intl.NumberFormat('en-US');
@@ -308,13 +311,17 @@ function hours(h) {
   if (h < 48) return h.toFixed(1) + ' h';
   return (h / 24).toFixed(1) + ' d';
 }
+// Timestamps arrive naive and are UTC (app.clock.utc_now_naive). Without the 'Z' the
+// browser reads them as local time, which shifts a bucket label by a day for anyone west
+// of UTC — the labels would disagree with the data by one row.
+function parseUtc(iso) {
+  const s = String(iso);
+  return new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
+}
 function bucketLabel(iso, granularity) {
   if (!iso) return '';
-  // Timestamps arrive naive and are UTC (app.clock.utc_now_naive). Without the 'Z' the
-  // browser reads them as local time, which shifts a bucket label by a day for anyone west
-  // of UTC — the labels would disagree with the data by one row.
   const s = String(iso);
-  const d = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
+  const d = parseUtc(s);
   if (isNaN(d)) return s.slice(0, 10);
   const opts = granularity === 'month'
     ? { year: 'numeric', month: 'short', timeZone: 'UTC' }
@@ -323,6 +330,43 @@ function bucketLabel(iso, granularity) {
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── empty buckets ─────────────────────────────────────────────────── */
+// SQL GROUP BY returns only buckets that had rows, so a quiet week is simply missing and a
+// line chart draws straight across it — a week with zero signups reads as a busy one.
+// These rebuild the full run of buckets and fill the holes with zeros.
+const DAY_MS = 86400000;
+/** Postgres date_trunc('day'|'week') in UTC: midnight, and Monday for weeks. */
+function truncUtc(date, granularity) {
+  const d = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  return granularity === 'week' ? d - ((new Date(d).getUTCDay() + 6) % 7) * DAY_MS : d;
+}
+/** Every bucket start (ms) in the window. On 'All' the window opens at a fixed 2025 epoch,
+ *  before the product existed, so it starts at the first bucket with data instead. */
+function bucketKeys(d, rows) {
+  const g = d.window.granularity;
+  const step = g === 'week' ? 7 * DAY_MS : DAY_MS;
+  const have = rows.map((r) => parseUtc(r.bucket).getTime()).filter((t) => !isNaN(t));
+  let start = truncUtc(parseUtc(d.window.since), g);
+  if (d.window.range === 'all') {
+    if (!have.length) return [];
+    start = Math.min(...have);
+  }
+  const end = truncUtc(parseUtc(d.generated_at), g);
+  const keys = [];
+  for (let t = start; t <= end; t += step) keys.push(t);
+  return keys;
+}
+/** One row per bucket, with `fields` zeroed where the query returned nothing. No rows at all
+ *  stays empty, so chartOrEmpty still says "no data yet" instead of drawing a flat zero. */
+function fillBuckets(d, rows, fields) {
+  rows = rows || [];
+  if (!rows.length) return rows;
+  const byKey = new Map(rows.map((r) => [parseUtc(r.bucket).getTime(), r]));
+  return bucketKeys(d, rows).map((t) => byKey.get(t) ||
+    Object.assign({ bucket: new Date(t).toISOString() },
+                  Object.fromEntries(fields.map((f) => [f, 0]))));
+}
 
 /* ── auth ──────────────────────────────────────────────────────────── */
 let FIREBASE_READY = false;
@@ -347,9 +391,8 @@ function initAuth() {
   }
   firebase.initializeApp(FIREBASE_CONFIG);
   FIREBASE_READY = true;
-  firebase.auth().onAuthStateChanged(async (user) => {
+  firebase.auth().onAuthStateChanged((user) => {
     if (!user) return;
-    state.token = await user.getIdToken();
     $('#login-view').hidden = true;
     $('#app-view').hidden = false;
     load();
@@ -424,6 +467,11 @@ $('#signout').addEventListener('click', async () => {
 
 /* ── fetch ─────────────────────────────────────────────────────────── */
 async function load() {
+  // Every control click starts a request, and a slow older one can land after a newer one.
+  // Only the latest may touch the page, or the controls say 7d over 90d charts.
+  const seq = ++state.seq;
+  const stale = () => seq !== state.seq;
+
   const banners = $('#banners');
   banners.innerHTML = '';
   $('#meta').textContent = 'Loading…';
@@ -433,17 +481,26 @@ async function load() {
 
   let res;
   try {
+    // Asked for on every load, not once at sign-in: ID tokens expire after an hour, and the
+    // endpoint answers an expired one with the same 404 as a non-admin. getIdToken() returns
+    // the cached token until it is about to expire, then refreshes it.
+    const user = firebase.auth().currentUser;
+    if (!user) return location.reload();
+    const token = await user.getIdToken();
     // Bearer header only — never a token in the query string, which would land in access
     // logs, proxy logs, browser history and Referer.
     res = await fetch('./analytics?' + qs.toString(), {
-      headers: { Authorization: 'Bearer ' + state.token },
+      headers: { Authorization: 'Bearer ' + token },
     });
   } catch (err) {
+    if (stale()) return;
     return fail('Network error', String(err));
   }
+  if (stale()) return;
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json()).detail || ''; } catch (_) { detail = await res.text().catch(() => ''); }
+    if (stale()) return;
     if (res.status === 404) {
       return fail('HTTP 404 — not found',
         'Either this route does not exist, or your account is not in ADMIN_OWNER_IDS. ' +
@@ -453,6 +510,7 @@ async function load() {
   }
 
   const data = await res.json();
+  if (stale()) return;
   $('#meta').textContent =
     new Date(data.generated_at + 'Z').toLocaleString() +
     (data.cached ? ' · cached' : ' · ' + data.query_ms + ' ms');
@@ -633,7 +691,7 @@ function growthHTML(d) {
     '</div></section>';
 }
 function drawGrowth(d, g) {
-  const s = d.growth.signups;
+  const s = fillBuckets(d, d.growth.signups, ['signups']);
   chartOrEmpty('c-signups', s, () => ({
     type: 'line',
     data: { labels: s.map((r) => bucketLabel(r.bucket, g)),
@@ -718,11 +776,24 @@ function funnelHTML(d) {
 /* ── engagement ────────────────────────────────────────────────────── */
 function engagementHTML(d) {
   const r = d.engagement.retention || [];
+  // Week N is days 7N..7N+7 after each owner's own signup, so a cohort can only be scored
+  // once its last member (who signed up at the end of the cohort week) is past that. Before
+  // then the query returns 0, which reads as "everyone left" instead of "too early to tell".
+  const now = parseUtc(d.generated_at).getTime();
+  const retained = (x, n, count) => {
+    if (!x.cohort_size) return '—';
+    const measured = parseUtc(x.cohort_week).getTime() + (n + 2) * 7 * DAY_MS;
+    if (measured > now) {
+      return '<span class="pill" title="Some owners in this cohort have not reached week ' + n +
+        ' yet">pending</span>';
+    }
+    return pct(100 * count / x.cohort_size);
+  };
   const rows = r.length ? r.map((x) =>
     '<tr><td>' + esc(bucketLabel(x.cohort_week, 'week')) + '</td>' +
     '<td class="num">' + num(x.cohort_size) + '</td>' +
-    '<td class="num">' + (x.cohort_size ? pct(100 * x.retained_week_1 / x.cohort_size) : '—') + '</td>' +
-    '<td class="num">' + (x.cohort_size ? pct(100 * x.retained_week_4 / x.cohort_size) : '—') + '</td></tr>'
+    '<td class="num">' + retained(x, 1, x.retained_week_1) + '</td>' +
+    '<td class="num">' + retained(x, 4, x.retained_week_4) + '</td></tr>'
   ).join('') : '';
 
   const retention = rows
@@ -741,7 +812,7 @@ function engagementHTML(d) {
     '</div></section>';
 }
 function drawEngagement(d, g) {
-  const a = d.engagement.active_owners;
+  const a = fillBuckets(d, d.engagement.active_owners, ['active_owners']);
   chartOrEmpty('c-active', a, () => ({
     type: 'line',
     data: { labels: a.map((r) => bucketLabel(r.bucket, g)),
@@ -798,7 +869,7 @@ function aiHTML(d) {
     '</div></section>';
 }
 function drawAI(d, g) {
-  const s = d.ai.scans;
+  const s = fillBuckets(d, d.ai.scans, ['scans', 'saved']);
   chartOrEmpty('c-scans', s, () => ({
     type: 'bar',
     data: { labels: s.map((r) => bucketLabel(r.bucket, g)), datasets: [
@@ -814,7 +885,7 @@ function drawAI(d, g) {
     }),
   }), 'No lease scans in this range yet');
 
-  const a = d.ai.assistant;
+  const a = fillBuckets(d, d.ai.assistant, ['messages', 'owners']);
   chartOrEmpty('c-agent', a, () => ({
     type: 'line',
     data: { labels: a.map((r) => bucketLabel(r.bucket, g)), datasets: [
@@ -864,7 +935,9 @@ function platformHTML(d) {
 function drawPlatform(d, g) {
   const rows = d.platform.client_over_time || [];
   const apps = [...new Set(rows.map((r) => r.app))];
-  const buckets = [...new Set(rows.map((r) => r.bucket))];
+  // Rows are one per (bucket, app), so the full bucket run is built here rather than by
+  // fillBuckets; a bucket with no row for an app is already drawn as 0 below.
+  const buckets = rows.length ? bucketKeys(d, rows) : [];
   // Colour follows the entity, not its position in the array. If 'unknown' stops appearing,
   // mobile and web must keep the colours they had — a series that changes colour when the
   // data changes is unreadable across two screenshots.
@@ -872,10 +945,10 @@ function drawPlatform(d, g) {
   chartOrEmpty('c-client', rows, () => ({
     type: 'bar',
     data: {
-      labels: buckets.map((b) => bucketLabel(b, g)),
+      labels: buckets.map((b) => bucketLabel(new Date(b).toISOString(), g)),
       datasets: apps.map((app) => barSeries(app,
         buckets.map((b) => {
-          const hit = rows.find((r) => r.bucket === b && r.app === app);
+          const hit = rows.find((r) => parseUtc(r.bucket).getTime() === b && r.app === app);
           return hit ? (hit.writes || 0) : 0;
         }), appColor[app] || '--series-muted')),
     },
