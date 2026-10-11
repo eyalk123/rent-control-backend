@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # account a plan. Sandbox events are still recorded in `subscription_events`. Turn it
     # on only for a backend that serves test accounts.
     REVENUECAT_APPLY_SANDBOX: bool = False
+    # RevenueCat secret API key (v1, `sk_…`), read-only use. Only for a TRANSFER whose
+    # previous owner has no subscription row to move: the event names no product, so the
+    # plan is looked up from RevenueCat. Empty leaves such a transfer unapplied.
+    REVENUECAT_API_KEY: str = ""
 
     # extraction. Model is configurable independently of EXTRACTION_MODEL.
     AGENT_MODEL: str = "claude-sonnet-5-5"

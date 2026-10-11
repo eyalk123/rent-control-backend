@@ -555,6 +555,160 @@ def test_a_transfer_with_nothing_to_move_changes_nothing(client, signing, db_ses
     assert SubscriptionRepository(db_session).get_for_owner(OWNER_B) is None
 
 
+# A TRANSFER whose source has no row (deleted account, or a purchase never applied) is
+# resolved by asking RevenueCat what the target now holds.
+
+
+class _FakeResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise rc.revenuecat_api.requests.HTTPError(f"{self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+def _iso(offset_seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset_seconds))
+
+
+def _subscriber(**subscriptions):
+    return {"subscriber": {"subscriptions": subscriptions}}
+
+
+def _store_entry(expires_in=30 * 86400, **extra):
+    entry = {
+        "expires_date": _iso(expires_in),
+        "store": "app_store",
+        "is_sandbox": False,
+        "unsubscribe_detected_at": None,
+        "billing_issues_detected_at": None,
+        "grace_period_expires_date": None,
+        "original_transaction_id": "2000000123",
+    }
+    entry.update(extra)
+    return entry
+
+
+@pytest.fixture
+def revenuecat_api(monkeypatch):
+    """An API key configured and `requests.get` answered from `calls['response']`."""
+    monkeypatch.setattr(settings, "REVENUECAT_API_KEY", "sk_test")
+    calls = {"urls": [], "response": _FakeResponse(_subscriber())}
+
+    def _fake_get(url, headers=None, timeout=None):
+        calls["urls"].append(url)
+        response = calls["response"]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("app.services.revenuecat_api.requests.get", _fake_get)
+    return calls
+
+
+def test_a_transfer_with_nothing_to_move_takes_the_plan_from_revenuecat(
+    client, signing, db_session, revenuecat_api
+):
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(**{"rentvance.tier_9_15.yearly": _store_entry()})
+    )
+
+    response = _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B]))
+
+    assert response.json()["status"] == "applied"
+    assert revenuecat_api["urls"] == [rc.revenuecat_api.SUBSCRIBER_URL.format(app_user_id=OWNER_B)]
+    row = SubscriptionRepository(db_session).get_for_owner(OWNER_B)
+    assert (row.plan, row.period, row.status, row.source) == (
+        ent.PLAN_TIER_9_15,
+        "yearly",
+        "active",
+        "apple",
+    )
+    assert row.external_id == "2000000123"
+
+
+def test_a_transfer_ignores_expired_store_subscriptions(client, signing, db_session, revenuecat_api):
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(**{"rentvance.tier_9_15.monthly": _store_entry(expires_in=-60)})
+    )
+
+    response = _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B]))
+
+    assert response.json()["status"] == "ignored"
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_B) is None
+
+
+def test_a_transfer_keeps_a_cancelled_but_unexpired_subscription_as_canceled(
+    client, signing, db_session, revenuecat_api
+):
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(
+            **{"rentvance.tier_3_8.monthly": _store_entry(unsubscribe_detected_at=_iso(-60))}
+        )
+    )
+
+    _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B]))
+
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_B).status == "canceled"
+
+
+def test_a_transfer_maps_a_play_base_plan(client, signing, db_session, revenuecat_api):
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(
+            tier_16_plus=_store_entry(store="play_store", product_plan_identifier="monthly")
+        )
+    )
+
+    _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B]))
+
+    row = SubscriptionRepository(db_session).get_for_owner(OWNER_B)
+    assert (row.plan, row.period, row.source) == (ent.PLAN_TIER_16_PLUS, "monthly", "google")
+
+
+def test_a_transfer_skips_sandbox_store_subscriptions_unless_told_to(
+    client, signing, db_session, revenuecat_api, monkeypatch
+):
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(**{"rentvance.tier_9_15.monthly": _store_entry(is_sandbox=True)})
+    )
+    assert _post(client, _transfer("evt_1", [OWNER_A], [OWNER_B])).json()["status"] == "ignored"
+
+    monkeypatch.setattr(settings, "REVENUECAT_APPLY_SANDBOX", True)
+    assert _post(client, _transfer("evt_2", [OWNER_A], [OWNER_B])).json()["status"] == "applied"
+
+
+def test_a_failed_lookup_is_retried_rather_than_recorded(client, signing, db_session, revenuecat_api):
+    from app.models.subscription_event import SubscriptionEvent
+
+    revenuecat_api["response"] = _FakeResponse({}, status_code=500)
+    response = _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B]))
+
+    assert response.status_code == 503
+    assert db_session.query(SubscriptionEvent).filter_by(event_id="evt_move").count() == 0
+
+    # RevenueCat's retry carries the same event id and now succeeds.
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(**{"rentvance.tier_9_15.monthly": _store_entry()})
+    )
+    assert _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B])).json()["status"] == "applied"
+
+
+def test_a_transfer_that_can_move_a_row_does_not_call_revenuecat(
+    client, signing, db_session, revenuecat_api
+):
+    now_ms = int(time.time() * 1000)
+    _post(client, _event(event_id="evt_buy", timestamp_ms=now_ms - 1000))
+
+    _post(client, _transfer("evt_move", [OWNER_A], [OWNER_B], now_ms))
+
+    assert revenuecat_api["urls"] == []
+
+
 def test_a_transfer_to_an_anonymous_id_changes_nothing(client, signing, db_session):
     _post(client, _event(event_id="evt_buy"))
     response = _post(client, _transfer("evt_move", [OWNER_A], ["$RCAnonymousID:abc"]))

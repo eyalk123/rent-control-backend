@@ -32,10 +32,12 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+import sentry_sdk
 from fastapi import HTTPException, status
 
 from app.clock import utc_now_naive
 from app.config import settings
+from app.services import revenuecat_api
 from app.services.billing_catalog import PRODUCT_PLANS
 
 logger = logging.getLogger(__name__)
@@ -338,7 +340,51 @@ class RevenueCatService:
             moved = self.subscription_repository.move(source, target, occurred_at)
             if moved:
                 return IngestResult("applied", "TRANSFER", target)
-        return IngestResult("ignored", "transfer_nothing_to_move", target)
+        return self._transfer_from_store(target, occurred_at)
+
+    def _transfer_from_store(self, target, occurred_at) -> IngestResult:
+        """No row to move: ask RevenueCat what the target now holds.
+
+        Happens when the previous owner's account was deleted, or its purchase was never
+        applied (a sandbox purchase with sandbox off). The store still charges for the
+        subscription, so leaving the target on free would take money for nothing; and the
+        event names no product, so the answer has to come from RevenueCat.
+
+        A lookup that fails is a 503, not an `ignored`: the event is then not recorded,
+        and RevenueCat's retry gets another chance. A missing API key is not retried —
+        nothing about a retry would change it.
+        """
+        try:
+            held = revenuecat_api.current_subscription(target)
+        except revenuecat_api.NotConfigured:
+            logger.warning("TRANSFER with nothing to move and no REVENUECAT_API_KEY to look up")
+            return IngestResult("ignored", "transfer_nothing_to_move", target)
+        except revenuecat_api.LookupFailed as exc:
+            # Sentry ignores HTTP statuses (see app/monitoring.py), so this is the only
+            # record of why the delivery failed.
+            sentry_sdk.capture_exception(exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not look up the transferred subscription.",
+            ) from exc
+
+        if held is None:
+            return IngestResult("ignored", "transfer_nothing_to_move", target)
+
+        self.subscription_repository.upsert(
+            target,
+            plan=held.plan,
+            period=held.period,
+            status=held.status,
+            source=_source_for_store(held.store),
+            external_id=held.external_id,
+            current_period_end=held.current_period_end,
+            grace_until=held.grace_until,
+            price_amount=held.price_amount,
+            price_currency=held.price_currency,
+            last_event_at=occurred_at,
+        )
+        return IngestResult("applied", "TRANSFER_FROM_STORE", target)
 
 
 def parse_body(raw_body: bytes) -> dict:
