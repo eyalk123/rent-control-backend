@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # previous owner has no subscription row to move: the event names no product, so the
     # plan is looked up from RevenueCat. Empty leaves such a transfer unapplied.
     REVENUECAT_API_KEY: str = ""
+    # Paddle server API key (subscriptions read + write) and which API it belongs to
+    # (`sandbox` or `production`). Used only for what RevenueCat cannot do for a web
+    # subscription: cancel it when the account is deleted, fetch its cancel /
+    # update-payment links, and change its plan. See `app/services/paddle_api.py`.
+    PADDLE_API_KEY: str = ""
+    PADDLE_ENV: str = "production"
 
     # extraction. Model is configurable independently of EXTRACTION_MODEL.
     AGENT_MODEL: str = "claude-sonnet-5-5"

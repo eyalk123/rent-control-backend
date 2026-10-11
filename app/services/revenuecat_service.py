@@ -92,11 +92,16 @@ def _is_account(app_user_id) -> bool:
 # CANCELLATION maps to `canceled`, not `expired`: a cancellation ends the *next* renewal,
 # and access continues to `expiration_at_ms`. Revoking on cancellation would take away a
 # period the landlord has already paid for.
+#
+# PRODUCT_CHANGE is absent on purpose. RevenueCat calls it informative only: it "does not
+# mean that the product change has gone into effect". An Apple downgrade waits for the
+# renewal date, and the event does not reliably name the new product. The change arrives
+# as the RENEWAL (Apple) or INITIAL_PURCHASE (Google) that follows, which carries the
+# product actually in force.
 EVENT_STATUS: dict[str, str] = {
     "INITIAL_PURCHASE": "active",
     "RENEWAL": "active",
     "UNCANCELLATION": "active",
-    "PRODUCT_CHANGE": "active",
     "SUBSCRIPTION_EXTENDED": "active",
     "REFUND_REVERSED": "active",
     "TEMPORARY_ENTITLEMENT_GRANT": "active",
@@ -106,6 +111,18 @@ EVENT_STATUS: dict[str, str] = {
     "BILLING_ISSUE": "past_due",
     "SUBSCRIPTION_PAUSED": "paused",
 }
+#
+# A refund arrives as CANCELLATION with `cancel_reason: CUSTOMER_SUPPORT`. The money for
+# the period has gone back, so the period is not kept: it maps to `expired`, not
+# `canceled`. If auto-renew is still on, the next RENEWAL restores the plan.
+_REFUND_REASON = "CUSTOMER_SUPPORT"
+
+#: Statuses that end or suspend a plan. On Google Play, an event carrying one of these for
+#: a *different* purchase than the one on file describes a subscription that has been
+#: replaced (an upgrade issues a new purchase and retires the old one), and must not end
+#: its successor. Apple and Paddle keep one purchase id across a plan change, so the
+#: check is limited to Google, where it is needed.
+_ENDING_STATUSES = frozenset({"canceled", "expired", "past_due", "paused"})
 #
 # TRANSFER is handled on its own (`_transfer`): it changes *whose* subscription it is,
 # not its status, and it names two sets of users instead of one `app_user_id`.
@@ -277,7 +294,21 @@ class RevenueCatService:
             logger.warning("RevenueCat %s event for an anonymous app user id", event_type)
             return IngestResult("ignored", "anonymous_user", None)
 
+        if event_type == "CANCELLATION" and event.get("cancel_reason") == _REFUND_REASON:
+            status_value = "expired"
+
         existing = self.subscription_repository.get_for_owner(owner_id)
+        purchase_id = event.get("original_transaction_id") or event.get("transaction_id")
+        if (
+            status_value in _ENDING_STATUSES
+            and _source_for_store(store) == "google"
+            and existing is not None
+            and existing.external_id
+            and purchase_id
+            and purchase_id != existing.external_id
+        ):
+            return IngestResult("ignored", "superseded_purchase", owner_id)
+
         if (
             existing is not None
             and occurred_at is not None
@@ -309,7 +340,7 @@ class RevenueCatService:
             period=period,
             status=status_value,
             source=_source_for_store(store),
-            external_id=event.get("original_transaction_id") or event.get("transaction_id"),
+            external_id=purchase_id,
             current_period_end=_ms_to_datetime(event.get("expiration_at_ms")),
             grace_until=_ms_to_datetime(event.get("grace_period_expiration_at_ms")),
             price_amount=event.get("price"),

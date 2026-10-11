@@ -1,7 +1,19 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
+
+
+class ManageLinks(BaseModel):
+    """Paddle's own pages for a web subscription. Short-lived; fetch, then open."""
+
+    cancel_url: Optional[str] = None
+    update_payment_method_url: Optional[str] = None
+
+
+class ChangePlanRequest(BaseModel):
+    plan: Literal["tier_3_8", "tier_9_15", "tier_16_plus"]
+    period: Literal["monthly", "yearly"]
 
 
 class SubscriptionRead(BaseModel):

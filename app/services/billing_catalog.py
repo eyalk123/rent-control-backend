@@ -47,3 +47,11 @@ PRODUCT_PLANS: dict[str, tuple[str, str]] = {
     "tier_16_plus:monthly": (ent.PLAN_TIER_16_PLUS, "monthly"),
     "tier_16_plus:yearly": (ent.PLAN_TIER_16_PLUS, "yearly"),
 }
+
+
+def paddle_price_for(plan: str, period: str) -> str | None:
+    """The Paddle price for a plan and period — the reverse lookup a plan change needs."""
+    for product_id, mapped in PRODUCT_PLANS.items():
+        if product_id.startswith("pri_") and mapped == (plan, period):
+            return product_id
+    return None

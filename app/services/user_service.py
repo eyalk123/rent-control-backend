@@ -2,6 +2,7 @@ import hashlib
 import logging
 
 import sentry_sdk
+from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,8 @@ from app.models.supplier import Supplier
 from app.models.support_message import SupportMessage
 from app.models.transaction import Transaction
 from app.repositories.agent_repository import AgentRepository
+from app.repositories.subscription_repository import SubscriptionRepository
+from app.services import paddle_api
 from app.services.firebase_auth import delete_auth_user
 
 logger = logging.getLogger(__name__)
@@ -42,7 +45,19 @@ class UserService:
         survived the deletion of the account they belonged to.
 
         A single anonymous row is left behind — see `DeletedAccount`.
+
+        A web (Paddle) subscription is cancelled first, and a failure to cancel stops the
+        deletion: an account erased while Paddle keeps charging for it is the worst
+        outcome available, and the landlord can simply try again. App Store and Play
+        subscriptions cannot be cancelled by us; the clients tell the landlord so before
+        they confirm.
+
+        The `subscriptions` row is deliberately kept. It holds no name or contact
+        detail — an account id, a store purchase id, a plan and a price — and it is what
+        lets a subscription that is still being paid for follow the landlord to a new
+        account (`RevenueCatService._transfer`).
         """
+        self._cancel_web_subscription(owner_id)
         counts = self._count_owner_data(owner_id)
 
         # Transactions and renters carry their own owner_id, so this reaches the unattached
@@ -109,6 +124,30 @@ class UserService:
         # failure here leaves an empty account the user can sign back into and delete again,
         # never data with no way left to reach it.
         delete_auth_user(owner_id)
+
+    def _cancel_web_subscription(self, owner_id: str) -> None:
+        subscription = SubscriptionRepository(self.db).get_for_owner(owner_id)
+        if (
+            subscription is None
+            or subscription.source != "paddle"
+            or subscription.status == "expired"
+            or not paddle_api.is_subscription_id(subscription.external_id)
+        ):
+            return
+        try:
+            # Paddle's state, not ours: the row can lag a webhook, and cancelling a
+            # subscription Paddle already ended is an error that would block deletion.
+            current = paddle_api.get_subscription(subscription.external_id)
+            if current.get("status") == "canceled":
+                return
+            paddle_api.cancel_now(subscription.external_id)
+        except (paddle_api.NotConfigured, paddle_api.PaddleError) as exc:
+            sentry_sdk.capture_exception(exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="subscription_cancel_failed",
+            ) from exc
+        logger.info("Cancelled web subscription for owner %s before deletion", owner_id)
 
     def _count_owner_data(self, owner_id: str) -> dict[str, int]:
         """Volume of the portfolio, read before it is deleted, for the tombstone."""

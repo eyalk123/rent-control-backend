@@ -249,6 +249,10 @@ def delete_my_account(
     """Deletes the authenticated user's account and all associated data."""
     try:
         user_service.delete_account(owner_id=current_user["user_id"])
+    except HTTPException:
+        # A deliberate refusal (the web subscription could not be cancelled) keeps its
+        # own status and detail so the client can say what happened.
+        raise
     except Exception as exc:
         sentry_sdk.capture_exception(exc)
         raise HTTPException(

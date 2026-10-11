@@ -236,7 +236,6 @@ def test_the_store_decides_the_recorded_source(client, signing, db_session, stor
         ("INITIAL_PURCHASE", "active"),
         ("RENEWAL", "active"),
         ("UNCANCELLATION", "active"),
-        ("PRODUCT_CHANGE", "active"),
         ("CANCELLATION", "canceled"),
         ("EXPIRATION", "expired"),
         ("BILLING_ISSUE", "past_due"),
@@ -428,7 +427,6 @@ def _resolved(db_session, owner=OWNER_A):
     [
         ("INITIAL_PURCHASE", True),
         ("RENEWAL", True),
-        ("PRODUCT_CHANGE", True),
         ("UNCANCELLATION", True),
         ("CANCELLATION", True),  # until the paid period ends
         ("EXPIRATION", False),
@@ -478,14 +476,26 @@ def test_a_cancellation_ends_access_once_the_period_is_over(client, signing, db_
     assert _resolved(db_session) == ent.PLAN_FREE
 
 
-def test_a_product_change_moves_to_the_new_band(client, signing, db_session):
+def test_an_upgrade_takes_effect_with_the_renewal_that_carries_it(client, signing, db_session):
+    """PRODUCT_CHANGE is informative; the RENEWAL naming the new product is the change."""
     now_ms = int(time.time() * 1000)
-    _post(client, _event(event_id="evt_start", timestamp_ms=now_ms - 1000))
+    _post(client, _event(event_id="evt_start", timestamp_ms=now_ms - 2000))
     _post(
         client,
         _event(
             event_id="evt_upgrade",
             event_type="PRODUCT_CHANGE",
+            product_id="pri_01m39c3qa4597sp255tbbhes17",
+            timestamp_ms=now_ms - 1000,
+        ),
+    )
+    assert _resolved(db_session) == ent.PLAN_TIER_9_15
+
+    _post(
+        client,
+        _event(
+            event_id="evt_renewal",
+            event_type="RENEWAL",
             product_id="pri_01m39c3qa4597sp255tbbhes17",
             timestamp_ms=now_ms,
         ),
@@ -714,6 +724,126 @@ def test_a_transfer_to_an_anonymous_id_changes_nothing(client, signing, db_sessi
     response = _post(client, _transfer("evt_move", [OWNER_A], ["$RCAnonymousID:abc"]))
     assert response.json()["status"] == "ignored"
     assert SubscriptionRepository(db_session).get_for_owner(OWNER_A) is not None
+
+
+# ── Refunds and plan changes ─────────────────────────────────────────────────
+
+
+def test_a_refund_ends_the_plan_now(client, signing, db_session):
+    now_ms = int(time.time() * 1000)
+    _post(client, _event(event_id="evt_buy", timestamp_ms=now_ms - 1000))
+
+    _post(
+        client,
+        _event(
+            event_id="evt_refund",
+            event_type="CANCELLATION",
+            cancel_reason="CUSTOMER_SUPPORT",
+            timestamp_ms=now_ms,
+        ),
+    )
+
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_A).status == "expired"
+
+
+def test_an_ordinary_cancellation_keeps_the_paid_period(client, signing, db_session):
+    now_ms = int(time.time() * 1000)
+    _post(client, _event(event_id="evt_buy", timestamp_ms=now_ms - 1000))
+    _post(
+        client,
+        _event(
+            event_id="evt_cancel",
+            event_type="CANCELLATION",
+            cancel_reason="UNSUBSCRIBE",
+            timestamp_ms=now_ms,
+        ),
+    )
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_A).status == "canceled"
+
+
+def test_a_product_change_event_changes_nothing(client, signing, db_session):
+    """Informative only; the RENEWAL or INITIAL_PURCHASE that follows carries the change."""
+    now_ms = int(time.time() * 1000)
+    _post(client, _event(event_id="evt_buy", timestamp_ms=now_ms - 1000))
+
+    response = _post(
+        client,
+        _event(
+            event_id="evt_change",
+            event_type="PRODUCT_CHANGE",
+            product_id="pri_01m39bzfjqd489x258g3srtg9v",  # 3–8
+            timestamp_ms=now_ms,
+        ),
+    )
+
+    assert response.json()["status"] == "ignored"
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_A).plan == ent.PLAN_TIER_9_15
+
+
+def test_a_google_upgrade_is_not_undone_by_the_old_purchase_expiring(client, signing, db_session):
+    now_ms = int(time.time() * 1000)
+    _post(
+        client,
+        _event(
+            event_id="evt_old",
+            product_id="tier_3_8:monthly",
+            store="PLAY_STORE",
+            original_transaction_id="GPA.old",
+            timestamp_ms=now_ms - 2000,
+        ),
+    )
+    _post(
+        client,
+        _event(
+            event_id="evt_new",
+            product_id="tier_9_15:monthly",
+            store="PLAY_STORE",
+            original_transaction_id="GPA.new",
+            timestamp_ms=now_ms - 1000,
+        ),
+    )
+
+    response = _post(
+        client,
+        _event(
+            event_id="evt_old_expired",
+            event_type="EXPIRATION",
+            product_id="tier_3_8:monthly",
+            store="PLAY_STORE",
+            original_transaction_id="GPA.old",
+            timestamp_ms=now_ms,
+        ),
+    )
+
+    assert response.json()["status"] == "ignored"
+    row = SubscriptionRepository(db_session).get_for_owner(OWNER_A)
+    assert (row.plan, row.status) == (ent.PLAN_TIER_9_15, "active")
+
+
+def test_the_current_google_purchase_expiring_still_ends_the_plan(client, signing, db_session):
+    now_ms = int(time.time() * 1000)
+    _post(
+        client,
+        _event(
+            event_id="evt_buy",
+            product_id="tier_9_15:monthly",
+            store="PLAY_STORE",
+            original_transaction_id="GPA.1",
+            timestamp_ms=now_ms - 1000,
+        ),
+    )
+    _post(
+        client,
+        _event(
+            event_id="evt_exp",
+            event_type="EXPIRATION",
+            product_id="tier_9_15:monthly",
+            store="PLAY_STORE",
+            original_transaction_id="GPA.1",
+            timestamp_ms=now_ms,
+        ),
+    )
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_A).status == "expired"
 
 
 # ── Events that must not touch a real account ────────────────────────────────
