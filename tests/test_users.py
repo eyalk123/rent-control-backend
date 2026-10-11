@@ -247,3 +247,45 @@ def test_delete_account_leaves_other_owner_agent_data(client_factory, db_session
     assert len(db_session.scalars(
         select(AgentUsageLog).where(AgentUsageLog.owner_id == OWNER_B)
     ).all()) == 1
+
+
+def test_delete_account_deletes_the_firebase_sign_in(client, monkeypatch):
+    """The backend deletes the Auth user — the clients no longer can, without asking for a
+    fresh sign-in first."""
+    from app.services import user_service
+
+    deleted: list[str] = []
+    monkeypatch.setattr(user_service, "delete_auth_user", deleted.append)
+
+    assert client.delete("/users/me").status_code == 200
+    assert deleted == [OWNER_A]
+
+
+def test_delete_account_fails_when_the_sign_in_cannot_be_deleted(client, db_session, monkeypatch):
+    """Data first, sign-in last: a failure leaves an empty account the user can sign back
+    into and delete again — and is reported as a failure, not a success."""
+    from app.services import user_service
+
+    def boom(uid):
+        raise RuntimeError("auth down")
+
+    monkeypatch.setattr(user_service, "delete_auth_user", boom)
+    make_property(db_session, owner_id=OWNER_A)
+
+    assert client.delete("/users/me").status_code == 500
+
+    db_session.expire_all()
+    assert db_session.scalars(select(Property).where(Property.owner_id == OWNER_A)).all() == []
+
+
+def test_delete_auth_user_treats_an_already_deleted_user_as_deleted(monkeypatch):
+    from firebase_admin import auth
+    from app.services import firebase_auth
+
+    def not_found(uid, app=None):
+        raise auth.UserNotFoundError("gone")
+
+    monkeypatch.setattr(firebase_auth, "get_firebase_app", lambda: object())
+    monkeypatch.setattr(auth, "delete_user", not_found)
+
+    firebase_auth.delete_auth_user(OWNER_A)  # does not raise

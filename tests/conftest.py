@@ -127,3 +127,13 @@ def client_factory(db_session):
 def client(client_factory):
     """Convenience client authenticated as OWNER_A."""
     return client_factory(OWNER_A)
+
+
+@pytest.fixture(autouse=True)
+def _no_firebase_auth_deletion(monkeypatch):
+    """Account deletion ends by deleting the Firebase Auth user. Settings read a local
+    `.env`, so without this a developer's service account would point the suite at the real
+    Firebase project. Tests that care about the call patch it themselves."""
+    from app.services import user_service
+
+    monkeypatch.setattr(user_service, "delete_auth_user", lambda uid: None)

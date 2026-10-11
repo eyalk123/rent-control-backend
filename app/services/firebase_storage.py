@@ -20,23 +20,18 @@ def _blob_path(value: str) -> str | None:
 
 
 def _get_bucket():
-    import json
-    import firebase_admin
-    from firebase_admin import credentials, storage
+    from firebase_admin import storage
     from app.config import settings
+    from app.services.firebase_app import get_firebase_app
 
     bucket_name = settings.FIREBASE_STORAGE_BUCKET
-    sa_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON
-    if not bucket_name or not sa_json:
+    if not bucket_name:
+        return None
+    app = get_firebase_app()
+    if app is None:
         return None
 
-    try:
-        app = firebase_admin.get_app()
-    except ValueError:
-        cred = credentials.Certificate(json.loads(sa_json))
-        app = firebase_admin.initialize_app(cred, {"storageBucket": bucket_name})
-
-    return storage.bucket(app=app)
+    return storage.bucket(bucket_name, app=app)
 
 
 # Clients upload to `{entity_type}/{owner_id}/{uuid}/{filename}` — storage.rules (in the web

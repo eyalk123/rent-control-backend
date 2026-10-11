@@ -24,6 +24,7 @@ from app.models.supplier import Supplier
 from app.models.support_message import SupportMessage
 from app.models.transaction import Transaction
 from app.repositories.agent_repository import AgentRepository
+from app.services.firebase_auth import delete_auth_user
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,8 @@ class UserService:
         self.db = db
 
     def delete_account(self, owner_id: str) -> None:
-        """Erase everything belonging to owner_id, then attempt Firebase Storage cleanup.
+        """Erase everything belonging to owner_id, attempt Firebase Storage cleanup, then
+        delete the Firebase Auth user.
 
         Deletion is scoped by `owner_id`, not by property. Scoping to the owner's properties
         used to miss renters and transactions that were never attached to one, which then
@@ -102,6 +104,11 @@ class UserService:
 
         # Firebase Storage cleanup (optional — requires FIREBASE_STORAGE_BUCKET env var)
         self._delete_firebase_storage(owner_id)
+
+        # Last, and allowed to raise: the sign-in goes only once the data is gone, so a
+        # failure here leaves an empty account the user can sign back into and delete again,
+        # never data with no way left to reach it.
+        delete_auth_user(owner_id)
 
     def _count_owner_data(self, owner_id: str) -> dict[str, int]:
         """Volume of the portfolio, read before it is deleted, for the tombstone."""

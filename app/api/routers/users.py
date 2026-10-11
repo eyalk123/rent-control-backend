@@ -250,6 +250,7 @@ def delete_my_account(
     try:
         user_service.delete_account(owner_id=current_user["user_id"])
     except Exception as exc:
+        sentry_sdk.capture_exception(exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Account deletion failed: {exc}",
