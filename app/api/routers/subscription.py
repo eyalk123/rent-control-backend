@@ -19,9 +19,10 @@ from app.database import get_db
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.schemas.subscription import ChangePlanRequest, ManageLinks, SubscriptionRead
 from app.services import entitlement_service as ent
-from app.services import paddle_api
+from app.services import paddle_api, revenuecat_api
 from app.services.billing_catalog import paddle_price_for
 from app.services.entitlement_gate import EntitlementGate
+from app.services.revenuecat_service import apply_store_subscription
 
 router = APIRouter()
 
@@ -73,6 +74,35 @@ def get_subscription(
         receipt_scans_used=repository.count_scans_since(owner_id, _month_start(), "receipt"),
         agent=state.plan.agent,
     )
+
+
+@router.post("/sync", response_model=SubscriptionRead)
+def sync_subscription(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Ask RevenueCat what this account holds now, and save it.
+
+    Called by the app after a purchase or restore. The webhook stays the normal path, but
+    RevenueCat sends one only when something changes: restoring a purchase the account
+    already owns sends nothing, so a row the webhook never wrote would stay missing.
+
+    Only ever grants or refreshes. Finding nothing leaves the row alone — an expiry is
+    the webhook's to report, and a lookup that misses a web subscription must not end it.
+    """
+    owner_id = current_user["user_id"]
+    try:
+        held = revenuecat_api.current_subscription(owner_id)
+    except revenuecat_api.NotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="sync_unavailable") from exc
+    except revenuecat_api.LookupFailed as exc:
+        sentry_sdk.capture_exception(exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="billing_provider_unavailable") from exc
+
+    if held is not None:
+        apply_store_subscription(SubscriptionRepository(db), owner_id, held, utc_now_naive())
+    return get_subscription(current_user, gate, db)
 
 
 #: Paid plans, smallest first — what "bigger" means for an upgrade.

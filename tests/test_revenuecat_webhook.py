@@ -887,3 +887,57 @@ def test_an_unknown_event_type_is_acknowledged(client, signing, db_session):
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
     assert SubscriptionRepository(db_session).get_for_owner(OWNER_A) is None
+
+
+# POST /subscription/sync: the app asks after a purchase or restore, because RevenueCat
+# sends no webhook when a restore changes nothing.
+
+
+def test_sync_saves_what_revenuecat_reports(client, db_session, revenuecat_api):
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(**{"rentvance.tier_9_15.yearly": _store_entry()})
+    )
+
+    response = client.post("/subscription/sync")
+
+    assert response.status_code == 200
+    assert response.json()["plan"] == ent.PLAN_TIER_9_15
+    assert revenuecat_api["urls"] == [rc.revenuecat_api.SUBSCRIBER_URL.format(app_user_id=OWNER_A)]
+    row = SubscriptionRepository(db_session).get_for_owner(OWNER_A)
+    assert (row.plan, row.period, row.status, row.source) == (
+        ent.PLAN_TIER_9_15,
+        "yearly",
+        "active",
+        "apple",
+    )
+
+
+def test_sync_finding_nothing_leaves_the_row_alone(client, db_session, revenuecat_api):
+    """An expiry is the webhook's to report; a lookup that misses must not end a plan."""
+    SubscriptionRepository(db_session).upsert(
+        OWNER_A, plan=ent.PLAN_TIER_3_8, period="monthly", status="active", source="paddle"
+    )
+
+    assert client.post("/subscription/sync").status_code == 200
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_A).plan == ent.PLAN_TIER_3_8
+
+
+def test_sync_ignores_sandbox_unless_enabled(client, db_session, revenuecat_api, monkeypatch):
+    monkeypatch.setattr(settings, "REVENUECAT_APPLY_SANDBOX", False)
+    revenuecat_api["response"] = _FakeResponse(
+        _subscriber(**{"rentvance.tier_9_15.yearly": _store_entry(is_sandbox=True)})
+    )
+
+    client.post("/subscription/sync")
+
+    assert SubscriptionRepository(db_session).get_for_owner(OWNER_A) is None
+
+
+def test_sync_reports_a_failed_lookup(client, db_session, revenuecat_api):
+    revenuecat_api["response"] = _FakeResponse({}, status_code=500)
+    assert client.post("/subscription/sync").status_code == 502
+
+
+def test_sync_without_an_api_key_is_unavailable(client, monkeypatch):
+    monkeypatch.setattr(settings, "REVENUECAT_API_KEY", "")
+    assert client.post("/subscription/sync").status_code == 503

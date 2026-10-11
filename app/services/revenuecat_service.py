@@ -402,20 +402,25 @@ class RevenueCatService:
         if held is None:
             return IngestResult("ignored", "transfer_nothing_to_move", target)
 
-        self.subscription_repository.upsert(
-            target,
-            plan=held.plan,
-            period=held.period,
-            status=held.status,
-            source=_source_for_store(held.store),
-            external_id=held.external_id,
-            current_period_end=held.current_period_end,
-            grace_until=held.grace_until,
-            price_amount=held.price_amount,
-            price_currency=held.price_currency,
-            last_event_at=occurred_at,
-        )
+        apply_store_subscription(self.subscription_repository, target, held, occurred_at)
         return IngestResult("applied", "TRANSFER_FROM_STORE", target)
+
+
+def apply_store_subscription(subscription_repository, owner_id, held, occurred_at) -> None:
+    """Write what RevenueCat reports the owner holds as their subscription row."""
+    subscription_repository.upsert(
+        owner_id,
+        plan=held.plan,
+        period=held.period,
+        status=held.status,
+        source=_source_for_store(held.store),
+        external_id=held.external_id,
+        current_period_end=held.current_period_end,
+        grace_until=held.grace_until,
+        price_amount=held.price_amount,
+        price_currency=held.price_currency,
+        last_event_at=occurred_at,
+    )
 
 
 def parse_body(raw_body: bytes) -> dict:
