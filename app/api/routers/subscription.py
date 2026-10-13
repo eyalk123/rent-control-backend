@@ -6,20 +6,22 @@ written into the app — would put the boundaries in three codebases and guarant
 disagree the first time a price moves, in the two of them that cannot be hotfixed because
 they are waiting on store review.
 """
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Annotated
 
 import sentry_sdk
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_entitlement_gate
 from app.clock import utc_now_naive
 from app.database import get_db
 from app.repositories.subscription_repository import SubscriptionRepository
-from app.schemas.subscription import ChangePlanRequest, ManageLinks, SubscriptionRead
+from app.schemas.subscription import ChangePlanRequest, DiscountLookup, ManageLinks, SubscriptionRead
 from app.services import entitlement_service as ent
-from app.services import paddle_api, revenuecat_api
+from app.services import discount_service, paddle_api, revenuecat_api
 from app.services.billing_catalog import paddle_price_for
 from app.services.entitlement_gate import EntitlementGate
 from app.services.revenuecat_service import apply_store_subscription
@@ -149,6 +151,55 @@ def get_manage_links(
         cancel_url=urls.get("cancel"),
         update_payment_method_url=urls.get("update_payment_method"),
     )
+
+
+# ── Discount code lookup ─────────────────────────────────────────────────────
+# A fixed window per account, in memory — the same shape as the admin limiter. The lookup
+# tells anyone signed in whether a code exists, so this is the brake on guessing codes by
+# trying them. Per worker, so the real ceiling is this times the worker count; still a few
+# dozen guesses a minute against a 32-character alphabet-and-digits space.
+_DISCOUNT_LOOKUPS_PER_MINUTE = 10
+_discount_hits: dict[str, list[float]] = {}
+_discount_hits_lock = threading.Lock()
+
+
+def _limit_discount_lookups(owner_id: str) -> None:
+    now = time.monotonic()
+    cutoff = now - 60.0
+    with _discount_hits_lock:
+        recent = [t for t in _discount_hits.get(owner_id, []) if t > cutoff]
+        if len(recent) >= _DISCOUNT_LOOKUPS_PER_MINUTE:
+            _discount_hits[owner_id] = recent
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too_many_lookups",
+                headers={"Retry-After": "60"},
+            )
+        recent.append(now)
+        _discount_hits[owner_id] = recent
+        if len(_discount_hits) > 2048:
+            for key in [k for k, v in _discount_hits.items() if not v or max(v) < cutoff]:
+                _discount_hits.pop(key, None)
+
+
+@router.get("/discount", response_model=DiscountLookup)
+def lookup_discount(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    # Paddle's own rule for a code. Matching ignores case, so it is passed on as typed.
+    code: Annotated[str, Query(pattern=r"^[A-Za-z0-9]{1,32}$")],
+):
+    """Whether a Paddle discount code can be used, and what it gives.
+
+    An unusable code is a normal answer (200, `valid: false` and a reason), not an
+    error: the page shows the reason under the field. Errors are reserved for not being
+    able to ask — 429 past the rate limit, 502 when Paddle cannot be reached.
+    """
+    _limit_discount_lookups(current_user["user_id"])
+    try:
+        found = paddle_api.find_discount(code)
+        return discount_service.evaluate(code, found, paddle_api.price_ids_for_product)
+    except (paddle_api.NotConfigured, paddle_api.PaddleError) as exc:
+        raise _paddle_failure(exc) from exc
 
 
 @router.post("/change-plan", response_model=SubscriptionRead)

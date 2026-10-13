@@ -197,3 +197,129 @@ def test_deletion_keeps_the_subscription_row(client, db_session, paddle):
     _web_subscription(db_session, source="apple", external_id="2000000123")
     client.delete("/users/me")
     assert SubscriptionRepository(db_session).get_for_owner(OWNER_A) is not None
+
+
+# ── Discount code lookup ─────────────────────────────────────────────────────
+
+TIER_3_8_MONTHLY = "pri_01m39bzfjqd489x258g3srtg9v"
+
+
+def _discount(**overrides):
+    return {
+        "id": "dsc_01test",
+        "code": "SPRING20",
+        "enabled_for_checkout": True,
+        "type": "percentage",
+        "amount": "20",
+        "currency_code": None,
+        "recur": True,
+        "maximum_recurring_intervals": 3,
+        "usage_limit": None,
+        "times_used": 0,
+        "restrict_to": None,
+        "expires_at": None,
+        **overrides,
+    }
+
+
+@pytest.fixture
+def discounts(monkeypatch):
+    """`state['discount']` is what Paddle finds for any code; the limiter starts empty."""
+    from app.api.routers import subscription as router
+
+    monkeypatch.setattr(router, "_discount_hits", {})
+    state = {"discount": None, "fail": False, "product_prices": {}, "asked": []}
+
+    def find_discount(code):
+        state["asked"].append(code)
+        if state["fail"]:
+            raise paddle_api.PaddleError("paddle down")
+        return state["discount"]
+
+    monkeypatch.setattr(paddle_api, "find_discount", find_discount)
+    monkeypatch.setattr(
+        paddle_api, "price_ids_for_product", lambda pid: state["product_prices"].get(pid, [])
+    )
+    return state
+
+
+def test_a_valid_code_returns_its_terms(client, discounts):
+    discounts["discount"] = _discount()
+
+    response = client.get("/subscription/discount", params={"code": "spring20"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["discount_id"] == "dsc_01test"
+    assert body["type"] == "percentage"
+    assert body["amount"] == "20"
+    assert body["maximum_recurring_intervals"] == 3
+    assert body["plans"] is None  # unrestricted: every plan
+    assert discounts["asked"] == ["spring20"]  # passed on as typed; Paddle ignores case
+
+
+@pytest.mark.parametrize(
+    "found, reason",
+    [
+        (None, "not_found"),
+        (_discount(enabled_for_checkout=False), "not_found"),
+        (_discount(expires_at="2020-01-01T00:00:00Z"), "expired"),
+        (_discount(usage_limit=1, times_used=1), "used_up"),
+        # Expired and used up: expired wins, because nothing can change it.
+        (_discount(expires_at="2020-01-01T00:00:00Z", usage_limit=1, times_used=1), "expired"),
+        (_discount(restrict_to=["pri_someone_else"]), "not_applicable"),
+    ],
+)
+def test_an_unusable_code_says_why(client, discounts, found, reason):
+    discounts["discount"] = found
+
+    body = client.get("/subscription/discount", params={"code": "SPRING20"}).json()
+
+    assert body["valid"] is False
+    assert body["reason"] == reason
+    assert body["discount_id"] is None
+
+
+def test_a_restricted_code_names_the_plans_it_covers(client, discounts):
+    discounts["product_prices"]["pro_big"] = ["pri_01m39c45cxf0jwj12gb7aq6b7h"]
+    discounts["discount"] = _discount(restrict_to=[TIER_3_8_MONTHLY, "pro_big"])
+
+    body = client.get("/subscription/discount", params={"code": "SPRING20"}).json()
+
+    assert body["valid"] is True
+    assert body["plans"] == ["tier_16_plus_yearly", "tier_3_8_monthly"]
+
+
+def test_a_flat_per_seat_code_reads_as_flat(client, discounts):
+    discounts["discount"] = _discount(type="flat_per_seat", amount="500", currency_code="USD")
+
+    body = client.get("/subscription/discount", params={"code": "SPRING20"}).json()
+
+    assert body["type"] == "flat"
+    assert body["currency_code"] == "USD"
+
+
+def test_a_malformed_code_never_reaches_paddle(client, discounts):
+    response = client.get("/subscription/discount", params={"code": "NOT-A-CODE"})
+
+    assert response.status_code == 422
+    assert discounts["asked"] == []
+
+
+def test_lookup_reports_a_paddle_failure_as_502(client, discounts):
+    discounts["fail"] = True
+
+    response = client.get("/subscription/discount", params={"code": "SPRING20"})
+
+    assert response.status_code == 502
+
+
+def test_lookups_are_rate_limited_per_account(client, discounts):
+    for _ in range(10):
+        assert client.get("/subscription/discount", params={"code": "GUESS"}).status_code == 200
+
+    response = client.get("/subscription/discount", params={"code": "GUESS"})
+
+    assert response.status_code == 429
+    assert len(discounts["asked"]) == 10
