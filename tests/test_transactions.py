@@ -216,6 +216,39 @@ def test_list_transactions_filter_by_property(client, db_session):
     assert body[0]["property_id"] == p1.id
 
 
+def test_list_transactions_filter_by_category_matches_any_of_its_categories(client, db_session):
+    prop = make_property(db_session)
+    plumbing = make_expense_category(db_session, name="Plumbing")
+    paint = make_expense_category(db_session, name="Paint")
+    only_plumbing = make_transaction(
+        db_session, type=TransactionTypeEnum.EXPENSE, property_id=prop.id, categories=[plumbing]
+    )
+    # Paint is its primary category; plumbing is only its second.
+    both = make_transaction(
+        db_session, type=TransactionTypeEnum.EXPENSE, property_id=prop.id, categories=[paint, plumbing]
+    )
+    make_transaction(
+        db_session, type=TransactionTypeEnum.EXPENSE, property_id=prop.id, categories=[paint]
+    )
+    body = client.get("/transactions", params={"category_id": plumbing.id}).json()
+    assert {t["id"] for t in body} == {only_plumbing.id, both.id}
+
+
+def test_list_transactions_filter_by_supplier(client, db_session):
+    prop = make_property(db_session)
+    cat = make_expense_category(db_session)
+    s1 = make_supplier(db_session, categories=[cat])
+    s2 = make_supplier(db_session, categories=[cat])
+    t1 = make_transaction(
+        db_session, type=TransactionTypeEnum.EXPENSE, property_id=prop.id, categories=[cat], supplier_id=s1.id
+    )
+    make_transaction(
+        db_session, type=TransactionTypeEnum.EXPENSE, property_id=prop.id, categories=[cat], supplier_id=s2.id
+    )
+    body = client.get("/transactions", params={"supplier_id": s1.id}).json()
+    assert [t["id"] for t in body] == [t1.id]
+
+
 def test_list_transactions_search_by_notes(client, db_session):
     prop = make_property(db_session)
     make_transaction(db_session, property_id=prop.id, notes="electric bill")

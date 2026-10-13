@@ -69,6 +69,8 @@ class TransactionRepository:
         type_filter: TransactionTypeEnum | None = None,
         property_id: int | None = None,
         renter_id: int | None = None,
+        category_id: int | None = None,
+        supplier_id: int | None = None,
         q: str | None = None,
         from_date: date | None = None,
         to_date: date | None = None,
@@ -99,6 +101,16 @@ class TransactionRepository:
             stmt = stmt.where(Transaction.property_id == property_id)
         if renter_id is not None:
             stmt = stmt.where(Transaction.renter_id == renter_id)
+        if category_id is not None:
+            # An expense can carry several categories; it matches on any of them.
+            stmt = stmt.where(
+                or_(
+                    Transaction.category_id == category_id,
+                    Transaction.categories.any(ExpenseCategory.id == category_id),
+                )
+            )
+        if supplier_id is not None:
+            stmt = stmt.where(Transaction.supplier_id == supplier_id)
         if from_date is not None:
             stmt = stmt.where(Transaction.date_of_payment >= from_date)
         if to_date is not None:

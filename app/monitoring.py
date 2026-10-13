@@ -56,6 +56,7 @@ _ALLOWED_QUERY_PARAMS = frozenset(
         "offset",
         "property_id",
         "renter_id",
+        "supplier_id",
         "to_date",
         "type",
         "year",
