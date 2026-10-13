@@ -1,0 +1,286 @@
+/* Admin analytics dashboard styles. See app/analytics/CLAUDE.md for the file map. */
+:root {
+  color-scheme: light;
+  /* Product palette — matches rent-control-web/src/index.css */
+  --navy:            #1A2D4A;
+  --primary:         #2563EB;
+  --accent:          #0D9488;
+  --bg:              #F1F5F9;
+  --surface:         #FFFFFF;
+  --text-primary:    #0F172A;
+  --text-secondary:  #475569;
+  --muted:           #64748B;
+  --outline:         #CBD5E1;
+  --grid:            #E7EDF3;
+  --success:         #059669;
+  --warning:         #D97706;
+  --warning-bg:      #FEF3E2;
+  --error:           #DC2626;
+  --error-bg:        #FEF2F2;
+  /* Validated categorical slots (light). Slots 1 and 2 clear 3:1 against this surface;
+     3 and 4 do not, so they are used only where marks carry visible value labels. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  /* "unknown"/other — deliberately neutral, and dark enough to clear 3:1 on white. */
+  --series-muted: #64748B;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-card: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --navy:           #0E1726;
+    --bg:             #12171F;
+    --surface:        #1A1A19;
+    --text-primary:   #F8FAFC;
+    --text-secondary: #C3C2B7;
+    --muted:          #8C8C85;
+    --outline:        #33383F;
+    --grid:           #2A2F36;
+    --warning-bg:     #2A2113;
+    --error-bg:       #2A1717;
+    /* Same eight hues, stepped for the dark surface — not an automatic flip */
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-muted: #94A3B8;
+  }
+}
+* { box-sizing: border-box; }
+/* Any class that sets `display` beats the UA's [hidden] rule — .login-wrap's flex kept the
+   login box on screen above the dashboard after sign-in. */
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-primary);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+a { color: var(--primary); }
+
+/* ── shell ─────────────────────────────────────────────────────────── */
+header.topbar {
+  background: var(--navy); color: #fff;
+  padding: 12px 20px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+header.topbar h1 { font-size: 16px; }
+header.topbar .meta { color: #9FB3CC; font-size: 12px; margin-left: auto; }
+.health-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 12px; color: #fff; cursor: pointer;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px; padding: 3px 10px;
+}
+.health-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #94A3B8; }
+.health-chip.ok .dot { background: #34D399; }
+.health-chip.bad .dot { background: #FBBF24; }
+
+/* Tabs and controls share one bar that stays put while the page scrolls under it. */
+.bar {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--surface); border-bottom: 1px solid var(--outline);
+}
+.bar-inner {
+  max-width: 1240px; margin: 0 auto; padding-inline: 16px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.tabs { display: flex; gap: 2px; overflow-x: auto; margin-right: auto; }
+.tabs button {
+  border: 0; background: none; font: inherit; font-size: 13.5px; font-weight: 550;
+  color: var(--text-secondary); padding: 13px 12px 11px; cursor: pointer;
+  border-bottom: 2px solid transparent; white-space: nowrap;
+}
+.tabs button:hover { color: var(--text-primary); }
+.tabs button[aria-selected="true"] { color: var(--primary); border-bottom-color: var(--primary); }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-block: 8px; }
+main { max-width: 1240px; margin: 0 auto; padding-block: 20px; padding-inline: 16px; }
+
+/* ── controls ──────────────────────────────────────────────────────── */
+.segmented { display: inline-flex; border: 1px solid var(--outline); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented button {
+  border: 0; background: var(--surface); color: var(--text-secondary);
+  padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.segmented button + button { border-left: 1px solid var(--outline); }
+.segmented button[aria-pressed="true"] { background: var(--primary); color: #fff; }
+select, input[type=email], input[type=password] {
+  font: inherit; padding: 6px 10px; border: 1px solid var(--outline);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary);
+}
+button.primary {
+  background: var(--primary); color: #fff; border: 0; border-radius: var(--radius-sm);
+  padding: 9px 16px; font: inherit; cursor: pointer;
+}
+button.ghost {
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--outline); border-radius: var(--radius-sm);
+  padding: 6px 12px; font: inherit; cursor: pointer;
+}
+
+/* ── cards & tiles ─────────────────────────────────────────────────── */
+section.block { margin-bottom: 26px; }
+section.block > h2 { font-size: 15px; margin-bottom: 10px; }
+.grid { display: grid; gap: 14px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 14px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); margin-bottom: 14px; }
+.kpis.four, .charts.four { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+.charts { grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
+.card {
+  background: var(--surface); border: 1px solid var(--outline);
+  border-radius: var(--radius-card); padding: 16px; min-width: 0;
+}
+.card > h3 {
+  font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 6px;
+}
+.tile > h3 { margin-bottom: 2px; }
+.tile .value {
+  /* Proportional figures on a display-size number; tabular only where digits stack. */
+  font-size: 28px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15;
+  margin-top: 2px;
+}
+.tile .value.small { font-size: 21px; }
+.tile .caption { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.kpi { display: flex; flex-direction: column; }
+.kpi .value { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; margin-top: 4px; }
+.kpi .caption { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.kpi .spark { position: relative; height: 40px; margin-top: 12px; }
+
+/* The explanatory note behind each card title. Hover or focus shows it; it is the only place
+   the note lives, so it must work from the keyboard too. */
+.info {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--outline);
+  font-size: 10px; font-weight: 700; font-style: normal; color: var(--muted); cursor: help;
+}
+.info:hover::after, .info:focus::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
+  width: max-content; max-width: 260px; z-index: 10;
+  background: var(--navy); color: #fff; padding: 8px 10px; border-radius: 8px;
+  font-size: 12px; font-weight: 400; line-height: 1.4; text-align: left;
+}
+
+/* Charts must reserve room for the x-axis band, or the card grows a nested scrollbar. */
+.chart-wrap { position: relative; height: 240px; }
+
+/* ── bars (funnel + breakdowns) ────────────────────────────────────── */
+.funnel { display: flex; flex-direction: column; gap: 8px; }
+.funnel-step { display: grid; grid-template-columns: 170px 1fr; gap: 12px; align-items: center; }
+.funnel-label { font-size: 12.5px; color: var(--text-secondary); text-align: right; }
+.funnel-track { background: var(--grid); border-radius: var(--radius-sm); overflow: hidden; height: 34px; position: relative; }
+.funnel-bar {
+  height: 100%; background: var(--series-1);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; padding-inline: 10px;
+  color: #fff; font-weight: 600; font-size: 13px;
+  min-width: 2px;
+  transition: width .25s ease;
+}
+.funnel-bar.zero { background: var(--grid); }
+/* Value sits outside when the bar is too narrow to hold it without clipping. */
+.funnel-outside { position: absolute; inset-block: 0; display: flex; align-items: center; padding-left: 8px; font-weight: 600; font-size: 13px; color: var(--text-primary); }
+.funnel-drop { font-size: 11.5px; color: var(--muted); margin-left: 182px; }
+.funnel-drop.bad { color: var(--warning); }
+
+.hbars { display: flex; flex-direction: column; gap: 8px; }
+.hbar { display: grid; grid-template-columns: 140px 1fr 90px; gap: 10px; align-items: center; font-size: 12.5px; }
+.hbar-label { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { background: var(--grid); border-radius: 6px; height: 18px; overflow: hidden; }
+.hbar-fill { height: 100%; background: var(--series-1); border-radius: 6px; min-width: 2px; }
+.hbar-value { text-align: right; font-variant-numeric: tabular-nums; }
+.hbar-value span { color: var(--muted); margin-left: 6px; }
+/* Narrow cards: label and value share a line, the bar runs full width underneath. */
+.charts.four .hbar { grid-template-columns: 1fr auto; row-gap: 4px; }
+.charts.four .hbar-track { grid-column: 1 / -1; order: 3; height: 10px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.card-head h3 { font-size: 13px; color: var(--text-secondary); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+
+/* ── misc ──────────────────────────────────────────────────────────── */
+table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+table.data th { color: var(--muted); font-weight: 600; }
+table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll-x { overflow-x: auto; }
+
+.empty {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; min-height: 120px;
+  color: var(--muted); font-size: 13px; text-align: center; padding: 16px;
+}
+.banner { border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px; font-size: 13px; }
+.banner.error { background: var(--error-bg); color: var(--error); border: 1px solid var(--error); }
+.banner.warn  { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+.banner strong { display: block; margin-bottom: 3px; }
+.caveats { font-size: 12px; color: var(--muted); margin: 0; padding-left: 18px; }
+.caveats li { margin-bottom: 6px; }
+details.notes { margin-top: 8px; }
+details.notes summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--grid); color: var(--text-secondary); }
+.pill.ok { background: #DCFCE7; color: #166534; }
+.pill.bad { background: var(--error-bg); color: var(--error); }
+
+/* ── click-through: any mark that opens the owner list ─────────────── */
+.drill { cursor: pointer; }
+.drill:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.card.drill:hover { border-color: var(--primary); }
+.hbar.drill:hover .hbar-label, .funnel-step.drill:hover .funnel-label { color: var(--primary); text-decoration: underline; }
+td.drill:hover, tr.drill:hover td { background: var(--grid); }
+td.drill { text-decoration: underline dotted var(--outline); text-underline-offset: 3px; }
+
+dialog.drill-modal {
+  width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+  padding: 0; border: 1px solid var(--outline); border-radius: var(--radius-card);
+  background: var(--surface); color: var(--text-primary);
+}
+dialog.drill-modal::backdrop { background: rgba(15, 23, 42, 0.45); }
+.drill-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 16px 18px 12px; border-bottom: 1px solid var(--outline);
+}
+.drill-head h2 { font-size: 15px; }
+.drill-head .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.drill-head button { margin-left: auto; }
+.drill-body { padding: 4px 18px 16px; overflow: auto; max-height: calc(100vh - 140px); }
+.drill-body table.data th { position: sticky; top: 0; background: var(--surface); }
+.drill-body td { white-space: nowrap; }
+
+/* ── login ─────────────────────────────────────────────────────────── */
+.login-wrap { min-height: 72vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login { background: var(--surface); border: 1px solid var(--outline); border-radius: var(--radius-card); padding: 26px; width: 100%; max-width: 380px; }
+.login h2 { font-size: 17px; margin-bottom: 4px; }
+.login p { color: var(--muted); font-size: 12.5px; margin: 0 0 18px; }
+.login label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.login input { width: 100%; margin-bottom: 12px; }
+.login button { width: 100%; }
+.login .msg { margin-top: 12px; font-size: 12.5px; }
+.login .msg.error { color: var(--error); }
+.login button.google {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--surface); color: var(--text-primary);
+  border: 1px solid var(--outline); border-radius: var(--radius-sm);
+  padding: 10px 16px; font: inherit; font-weight: 550; cursor: pointer;
+}
+.login button.google:hover { background: var(--bg); }
+.login .divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 16px 0 14px; color: var(--muted); font-size: 12px;
+}
+.login .divider::before, .login .divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--outline);
+}
+@media (max-width: 560px) {
+  /* The bar wraps to three rows here; pinned, it would eat a quarter of the screen. */
+  .bar { position: static; }
+  .funnel-step { grid-template-columns: 1fr; }
+  .funnel-label { text-align: left; }
+  .funnel-drop { margin-left: 0; }
+  .hbar { grid-template-columns: 90px 1fr 70px; }
+  .kpi .value { font-size: 34px; }
+}

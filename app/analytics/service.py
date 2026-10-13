@@ -1,9 +1,10 @@
 """Runs the dashboard queries and assembles one JSON payload.
 
-Everything here is read-only and aggregate. Nothing in the returned structure is a renter
+Everything here is read-only. The dashboard payload is aggregate: nothing in it is a renter
 name, phone, email, address or any other tenant field — see `queries.py` for the per-query
-reasoning, and `tests/test_admin_analytics.py::test_payload_contains_no_pii` for the check
-that keeps it true.
+reasoning, and `tests/test_admin_analytics.py` for the checks that keep it true. The one
+exception is `get_owner_list`, which names *owners* (our users, never their renters) for the
+click-through list; its SQL lives apart in `drilldown.py`.
 
 The response is cached in memory for CACHE_TTL_SECONDS so that refreshing the page does not
 re-run every query. In-process on purpose: the brief rules out adding Redis or any other
@@ -23,6 +24,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.analytics import drilldown as D
 from app.analytics import queries as Q
 from app.clock import utc_now_naive
 from app.config import settings
@@ -182,7 +184,6 @@ def build_payload(db: Session, range_key: str, granularity: str, country: str | 
             "signup_platform": _rows(db, Q.SIGNUP_PLATFORM_SPLIT, p),
             "language": _rows(db, Q.LANGUAGE_SPLIT, p),
             "owner_country": _rows(db, Q.COUNTRY_SPLIT, p),
-            "property_country": _rows(db, Q.PROPERTY_COUNTRY_SPLIT, p),
         },
         "subscriptions": {
             "state": _rows(db, Q.SUBSCRIPTION_STATE, p),
@@ -195,7 +196,6 @@ def build_payload(db: Session, range_key: str, granularity: str, country: str | 
             "comparison": _rows(db, Q.COUNTRY_COMPARISON, simple),
             "signups": _rows(db, Q.COUNTRY_SIGNUPS_OVER_TIME, {**simple, "granularity": granularity}),
             "active": _rows(db, Q.COUNTRY_ACTIVE_OVER_TIME, {**simple, "granularity": granularity}),
-            "property_country": _rows(db, Q.PROPERTY_COUNTRY_SPLIT, {**p, "country": None}),
         },
         "operations": {
             "jobs": _rows(db, Q.JOB_HEALTH, {"since": since}),
@@ -332,6 +332,53 @@ def get_analytics(db: Session, range_key: str, granularity: str, country: str | 
                 _cache.pop(k, None)
 
     return payload
+
+
+def get_owner_list(
+    db: Session,
+    segment: str,
+    range_key: str,
+    granularity: str,
+    country: str | None,
+    bucket: str | None = None,
+    value: str | None = None,
+    group: str | None = None,
+    exclude: str | None = None,
+) -> dict:
+    """The owners behind one clicked mark. Not cached: it is one small query, and a cached
+    list of names is one more copy of them in memory than there needs to be.
+
+    Raises ValueError for an unknown segment or an unreadable bucket — the router turns that
+    into a 400, after authentication, so it reveals nothing to a stranger."""
+    if segment not in D.STATEMENTS:
+        raise ValueError(f"unknown segment {segment!r}")
+    since, until, granularity = resolve_window(range_key, granularity)
+    lo, hi = D.time_slice(segment, since, until, granularity, D.parse_bucket(bucket))
+
+    min_n, max_n = D.PROPERTY_BANDS.get(value or "", (None, None))
+    if segment == "property_band" and min_n is None:
+        raise ValueError(f"unknown property band {value!r}")
+
+    params = {
+        "since": since,
+        "until": until,
+        "country": (country or "").strip().upper() or None,
+        "lo": lo,
+        "hi": hi,
+        "value": value or None,
+        "group": group or None,
+        "exclude": exclude or None,
+        "weeks": D.RETENTION_WEEKS.get(value or "") if segment == "retention" else None,
+        "min_n": min_n,
+        "max_n": max_n,
+        "daily_message_limit": settings.AGENT_DAILY_MESSAGE_LIMIT,
+        "limit": D.ROW_LIMIT,
+    }
+    rows = _rows(db, D.STATEMENTS[segment], params)
+    total = rows[0]["total"] if rows else 0
+    for row in rows:
+        row.pop("total", None)
+    return {"segment": segment, "total": total, "limit": D.ROW_LIMIT, "owners": rows}
 
 
 def clear_cache() -> None:

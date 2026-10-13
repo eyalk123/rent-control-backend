@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>RentVance — Product Metrics</title>
+<!--
+  Internal analytics dashboard. Served by GET /admin/dashboard; the CSS and JS beside it by
+  GET /admin/assets/<name>.
+
+  This page ships NO data. It is a login box and an empty frame; every number arrives from
+  GET /admin/analytics after the browser authenticates, so serving it to a stranger
+  discloses nothing.
+
+  English-only LTR on purpose — the product is Hebrew-first and RTL, this admin page is not.
+
+  File map, conventions and how to add a chart: app/analytics/CLAUDE.md.
+-->
+<!-- Pin an exact version that actually exists on the CDN. 4.4.3 does NOT — cdnjs 404s it,
+     which left `Chart` undefined and broke the page's startup. Verify any change to this
+     line returns 200 before shipping it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<link rel="stylesheet" href="./assets/dashboard.css">
+</head>
+<body>
+
+<div id="login-view" class="login-wrap">
+  <form class="login" id="login-form">
+    <h2>RentVance metrics</h2>
+    <p>Internal dashboard. Sign in with your RentVance account.</p>
+
+    <button class="google" type="button" id="google-btn">
+      <!-- Inline so the button needs no external image request. -->
+      <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+        <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/>
+        <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/>
+        <path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"/>
+        <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/>
+      </svg>
+      Continue with Google
+    </button>
+
+    <div class="divider"><span>or</span></div>
+
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button class="primary" type="submit" id="login-btn">Sign in</button>
+    <div class="msg" id="login-msg" hidden></div>
+  </form>
+</div>
+
+<div id="app-view" hidden>
+  <header class="topbar">
+    <h1>RentVance — Product Metrics</h1>
+    <button class="health-chip" id="health-chip" type="button" hidden>
+      <span class="dot"></span><span id="health-text"></span>
+    </button>
+    <span class="meta" id="meta"></span>
+    <button class="ghost" id="signout" style="color:#9FB3CC;border-color:#2E4468">Sign out</button>
+  </header>
+
+  <div class="bar">
+    <div class="bar-inner">
+      <nav class="tabs" role="tablist" id="tabs" aria-label="Dashboard sections">
+        <button role="tab" data-tab="overview">Overview</button>
+        <button role="tab" data-tab="subscriptions">Subscriptions</button>
+        <button role="tab" data-tab="growth">Growth</button>
+        <button role="tab" data-tab="countries">Countries</button>
+        <button role="tab" data-tab="ai">AI</button>
+        <button role="tab" data-tab="platform">Platform</button>
+        <button role="tab" data-tab="health">Health</button>
+      </nav>
+      <div class="controls">
+        <span class="segmented" id="range-seg" aria-label="Date range">
+          <button data-v="7d">7d</button><button data-v="30d">30d</button>
+          <button data-v="90d" aria-pressed="true">90d</button><button data-v="all">All</button>
+        </span>
+        <select id="country" aria-label="Country"><option value="">All countries</option></select>
+        <button class="ghost" id="refresh">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <main role="tabpanel" id="panel">
+    <div id="banners"></div>
+    <div id="sections"></div>
+  </main>
+</div>
+
+<!-- One list for every chart: whatever was clicked, the owners behind it in the same table. -->
+<dialog class="drill-modal" id="drill" aria-labelledby="drill-title">
+  <div class="drill-head">
+    <div><h2 id="drill-title"></h2><div class="sub" id="drill-sub"></div></div>
+    <button class="ghost" type="button" id="drill-close">Close</button>
+  </div>
+  <div class="drill-body" id="drill-body"></div>
+</dialog>
+
+<script>
+// Injected server-side by GET /admin/dashboard.
+const FIREBASE_CONFIG = __FIREBASE_CONFIG__;
+</script>
+<script src="./assets/core.js"></script>
+<script src="./assets/charts.js"></script>
+<script src="./assets/blocks.js"></script>
+<script src="./assets/drill.js"></script>
+<script src="./assets/overview.js"></script>
+<script src="./assets/subscriptions.js"></script>
+<script src="./assets/countries.js"></script>
+<script src="./assets/growth.js"></script>
+<script src="./assets/ai.js"></script>
+<script src="./assets/platform.js"></script>
+<script src="./assets/health.js"></script>
+<script src="./assets/main.js"></script>
+</body>
+</html>

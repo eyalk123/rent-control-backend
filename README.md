@@ -552,8 +552,8 @@ The Subscriptions tab was built before billing went live: until the first Revenu
 lands it says so and shows zeros, then fills in with no code change. The Countries tab ignores
 the page's country filter, since its job is comparing countries.
 
-It adds **no new service and no new process**. The page is a single static HTML file served
-by a route here; the queries run on the connection this app already holds; the 60-second
+It adds **no new service and no new process**. The page is a few static files (HTML, CSS, plain
+JS, no build step) served by a route here; the queries run on the connection this app already holds; the 60-second
 response cache is a dict in memory. Nothing to deploy, nothing billed per second.
 
 | Piece | Where |
@@ -561,7 +561,10 @@ response cache is a dict in memory. Nothing to deploy, nothing billed per second
 | The SQL — every query, with its caveats | `app/analytics/queries.py` |
 | Assembly, caching, the funnel self-check | `app/analytics/service.py` |
 | Routes + the admin gate + rate limiting | `app/api/routers/admin.py` |
-| The page | `app/static/admin_dashboard.html` |
+| The SQL behind the click-through owner lists | `app/analytics/drilldown.py` |
+| The page — shell, CSS, shared JS, one file per tab | `app/static/admin/` |
+| File map, recipes, how to check a change | `app/analytics/CLAUDE.md` |
+| Seed a scratch DB and check the lists, or preview the page | `ops/analytics_check.py` |
 | What is and isn't measurable, and why | `ANALYTICS_FEASIBILITY.md` |
 
 ### Turning it on
@@ -598,9 +601,35 @@ Four layers, in this order:
    a 403 would confirm to the holder of any working account that the route exists and that
    only authorisation stands in the way. Missing token, invalid token and valid-but-not-admin
    are all the same 404.
-4. Both routes are rate-limited per IP (`ADMIN_RATE_LIMIT_PER_MINUTE`, default 30), *before*
+4. All three routes are rate-limited per IP (`ADMIN_RATE_LIMIT_PER_MINUTE`, default 30), *before*
    authentication — otherwise the route is a free oracle for testing stolen tokens, and every
    attempt costs a Firebase round-trip.
+
+### Who is behind a number
+
+Every bar, point, slice, tile and table cell that counts owners can be clicked. It opens one
+list, the same table for every chart: name, email, country, signup date, signup platform,
+plan, property count and last activity, newest first, capped at 500 rows (the header says
+when it was cut).
+
+It is a third route, `GET /admin/analytics/owners?segment=…`, behind the same token, allowlist
+and 404s as the other two. **It returns identity** — owners' names and emails, never a
+renter's — so it is kept apart from the aggregates:
+
+- All of its SQL is in `app/analytics/drilldown.py`, one `seg` CTE per segment wrapped in one
+  shared SELECT. `queries.py` stays aggregate-only and its PII test still holds.
+- A segment may *filter* on renters, transactions or lease scans, but only selects from
+  `owners` and per-owner counts. `tests/test_admin_analytics.py` greps it for tenant columns.
+- Each segment restates the aggregate behind its chart, so the list is the same people the
+  number counted. A time bucket is clipped to the window, as the chart's first bucket is.
+- Not cached, and every call is logged as `admin owner list uid=… segment=… rows=…`.
+
+Deliberately not clickable: deletions (the tombstone is anonymous), total assistant spend,
+webhook health, the job and data-health tables, and percentages.
+
+**Adding a clickable chart:** add a segment to `drilldown.SEGMENTS`, then in the page pass a
+descriptor `{ t, s, v, g, b, x }` — to `hbars` items, `tile`/`kpi`, `drillCell`, or wrap a
+Chart.js config in `clickable(config, (datasetIndex, index) => descriptor)`.
 
 ### What the queries cost
 
@@ -629,8 +658,8 @@ of range, granularity and country, so refreshing the page does not re-run anythi
    names, phones, emails or addresses. `tests/test_admin_analytics.py` greps every query for
    PII column names and will fail you if you slip.
 2. Add it to the payload in `service.py::build_payload`.
-3. Render it in `admin_dashboard.html`: add the card in the section's `*HTML()` function and
-   draw it in the matching `draw*()`. Use `chartOrEmpty()` — it renders "no data yet" rather
+3. Render it in the tab's file in `app/static/admin/`: add the card in its `*HTML()` function
+   and draw it in the matching `draw*()`. Use `chartOrEmpty()` — it renders "no data yet" rather
    than an empty chart that reads as zero.
 4. If the number can mislead, add a caveat in `service.py::_caveats()`. It ships with the
    data and renders at the bottom of the page, so a figure is never read without the reason

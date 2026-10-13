@@ -156,6 +156,25 @@ def test_dashboard_shell_is_public_but_carries_no_data(anon_client):
         assert f'"{marker}":' not in body, "dashboard shell must not embed analytics data"
 
 
+def test_every_asset_the_shell_loads_is_served(anon_client):
+    """The shell is split into files; a renamed one would load as a 404 and blank the page."""
+    body = anon_client.get("/admin/dashboard").text
+    names = re.findall(r'(?:src|href)="\./assets/([^"]+)"', body)
+    assert "core.js" in names and "main.js" in names and "dashboard.css" in names
+    assert names[-1] == "main.js", "main.js boots the page and must load last"
+    for name in names:
+        res = anon_client.get(f"/admin/assets/{name}")
+        assert res.status_code == 200, name
+        assert res.headers["content-type"].startswith(("text/javascript", "text/css")), name
+        for marker in ("live_owners", "step_signed_up"):
+            assert f'"{marker}":' not in res.text, f"{name} embeds analytics data"
+
+
+@pytest.mark.parametrize("name", ["index.html", "nope.js", "..%2Fadmin.py", "%2E%2E%2F%2E%2E%2Fconfig.py"])
+def test_assets_outside_the_allowlist_are_404(anon_client, name):
+    assert anon_client.get(f"/admin/assets/{name}").status_code == 404
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Rate limiting
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +257,7 @@ def test_every_windowed_query_filters_on_time():
     whole small tables by design."""
     unbounded = {"DATA_HEALTH", "PER_OWNER_DISTRIBUTION", "DEVICE_PLATFORM_SPLIT",
                  "SIGNUP_PLATFORM_SPLIT", "LANGUAGE_SPLIT", "COUNTRY_SPLIT",
-                 "PROPERTY_COUNTRY_SPLIT", "OWNER_TOTALS", "SCOPED_OWNERS",
+                 "OWNER_TOTALS", "SCOPED_OWNERS",
                  "WRITE_EVENTS", "COUNTRY_EXPR", "_COUNTRY_OWNERS",
                  # Current subscription state — a snapshot of one small table.
                  "SUBSCRIPTION_STATE", "ACCOUNT_PLANS"}
@@ -296,3 +315,112 @@ def test_unknown_range_falls_back_rather_than_raising():
     since, _, gran = analytics_service.resolve_window("nonsense", "nonsense")
     assert since == analytics_service.EPOCH_START
     assert gran == "week"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Owner lists — the click-through behind every chart
+# ─────────────────────────────────────────────────────────────────────────────
+# This route returns identity (owner name and email), so the access-control cases are
+# repeated for it rather than assumed from /admin/analytics.
+
+from datetime import datetime  # noqa: E402
+
+from app.analytics import drilldown as D  # noqa: E402
+
+OWNERS_URL = "/admin/analytics/owners?segment=all_owners"
+
+
+def test_owner_list_without_token_is_404(anon_client):
+    settings.ADMIN_OWNER_IDS = ADMIN_UID
+    assert anon_client.get(OWNERS_URL).status_code == 404
+
+
+def test_owner_list_with_non_admin_token_is_404(anon_client, monkeypatch):
+    settings.ADMIN_OWNER_IDS = ADMIN_UID
+    monkeypatch.setattr(
+        admin.id_token, "verify_firebase_token", lambda *a, **k: {"sub": OTHER_UID}
+    )
+    res = anon_client.get(OWNERS_URL, headers={"Authorization": "Bearer valid"})
+    assert res.status_code == 404
+
+
+def test_owner_list_empty_allowlist_denies_everyone(anon_client, monkeypatch):
+    settings.ADMIN_OWNER_IDS = ""
+    monkeypatch.setattr(
+        admin.id_token, "verify_firebase_token", lambda *a, **k: {"sub": ADMIN_UID}
+    )
+    res = anon_client.get(OWNERS_URL, headers={"Authorization": "Bearer valid"})
+    assert res.status_code == 404
+
+
+def test_owner_list_unknown_segment_is_400_for_the_admin(anon_client, monkeypatch, db_session):
+    """Only after authentication — a stranger gets the 404 above, never this."""
+    from app.database import get_db
+
+    settings.ADMIN_OWNER_IDS = ADMIN_UID
+    app.dependency_overrides[get_db] = lambda: db_session
+    monkeypatch.setattr(
+        admin.id_token, "verify_firebase_token", lambda *a, **k: {"sub": ADMIN_UID}
+    )
+    try:
+        res = anon_client.get("/admin/analytics/owners?segment=no_such_thing",
+                              headers={"Authorization": "Bearer valid"})
+    finally:
+        app.dependency_overrides.clear()
+    assert res.status_code == 400
+
+
+# Everything get_owner_list supplies.
+DRILL_BINDS = {"since", "until", "country", "lo", "hi", "value", "group", "exclude", "weeks",
+               "min_n", "max_n", "daily_message_limit", "limit"}
+
+
+@pytest.mark.parametrize("name", sorted(D.STATEMENTS))
+def test_owner_list_binds_are_all_supplied(name):
+    binds = set(re.findall(r"(?<!:):([a-z_][a-z0-9_]*)", D.STATEMENTS[name]))
+    unknown = binds - DRILL_BINDS
+    assert not unknown, f"{name} binds {unknown}, which get_owner_list never supplies"
+
+
+@pytest.mark.parametrize("name", sorted(D.STATEMENTS))
+def test_owner_list_parens_balanced(name):
+    sql = D.STATEMENTS[name]
+    assert sql.count("(") == sql.count(")"), f"{name} has unbalanced parentheses"
+
+
+# Owner name and email are the point of this file. Renter fields and lease content are not:
+# a segment may filter on those tables, but must never read their personal columns.
+TENANT_PII = [c for c in PII_COLUMNS if c not in ("display_name",)]
+
+
+@pytest.mark.parametrize("name", sorted(D.STATEMENTS))
+def test_owner_list_selects_no_tenant_pii(name):
+    sql = D.STATEMENTS[name].lower()
+    for column in TENANT_PII:
+        assert column not in sql, f"{name} references tenant column '{column}'"
+    assert not re.search(r"\baddress\b", sql), f"{name} references address"
+    # The only email selected is the owner's own.
+    assert re.findall(r"[a-z_]+\.email\b", sql) == ["o.email"], f"{name} selects a foreign email"
+
+
+def test_owner_list_does_not_widen_the_aggregate_pii_rule():
+    """queries.py must stay aggregate-only: owner identity lives in drilldown.py alone."""
+    for name, sql in ALL_QUERIES.items():
+        assert "email" not in sql.lower(), f"{name} mentions email"
+
+
+def test_bucket_is_clipped_to_the_window():
+    since, until = datetime(2026, 7, 15, 9), datetime(2026, 10, 14)
+    # The first weekly bucket starts before the window does; the chart only counted from since.
+    lo, hi = D.time_slice("signups", since, until, "week", datetime(2026, 7, 13))
+    assert (lo, hi) == (since, datetime(2026, 7, 20))
+    # No bucket: the whole window.
+    assert D.time_slice("signups", since, until, "day", None) == (since, until)
+    # Retention cohorts are weekly whatever the page's granularity.
+    assert D.time_slice("retention", since, until, "day", datetime(2026, 9, 7))[1] == datetime(2026, 9, 14)
+
+
+def test_bucket_accepts_both_iso_shapes_the_page_sends():
+    assert D.parse_bucket("2026-10-05T00:00:00") == datetime(2026, 10, 5)
+    assert D.parse_bucket("2026-10-05T00:00:00.000Z") == datetime(2026, 10, 5)
+    assert D.parse_bucket(None) is None

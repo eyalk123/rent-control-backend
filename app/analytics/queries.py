@@ -509,8 +509,7 @@ GROUP BY 1
 ORDER BY 2 DESC
 """
 
-# Both countries, because they answer different questions: where the account holder signed up
-# (who your users are) and where the buildings are (whose rules and features you must build).
+# Where the account holder signed up — who your users are.
 COUNTRY_SPLIT = f"""
 WITH {SCOPED_OWNERS},
 prop_counts AS (SELECT owner_id, count(*) AS n FROM properties GROUP BY owner_id)
@@ -521,17 +520,6 @@ FROM scoped_owners s
 LEFT JOIN prop_counts p ON p.owner_id = s.id
 GROUP BY s.country
 ORDER BY owners DESC
-"""
-
-PROPERTY_COUNTRY_SPLIT = f"""
-WITH {SCOPED_OWNERS}
-SELECT COALESCE(p.country, 'IL (assumed)') AS country,
-       count(*)                            AS properties,
-       count(DISTINCT p.owner_id)          AS owners
-FROM properties p
-JOIN scoped_owners s ON s.id = p.owner_id
-GROUP BY 1
-ORDER BY 2 DESC
 """
 
 

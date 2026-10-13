@@ -1,12 +1,15 @@
 """Internal, admin-only product analytics.
 
-Two routes, layered so that the page itself carries no data and the data itself carries no
-identity:
+Three routes, layered so that the page itself carries no data:
 
 * ``GET /admin/dashboard`` — a static HTML shell with a login box. **It contains no
-  analytics.** Anyone who finds the URL gets an empty page and a password prompt.
-* ``GET /admin/analytics`` — the JSON, behind a valid Firebase ID token *and* membership of
-  ``ADMIN_OWNER_IDS``.
+  analytics.** Anyone who finds the URL gets an empty page and a password prompt. Its CSS
+  and JS come from ``GET /admin/assets/<name>`` (``app/static/admin/``), equally data-free.
+* ``GET /admin/analytics`` — the aggregate JSON, behind a valid Firebase ID token *and*
+  membership of ``ADMIN_OWNER_IDS``. Counts only, no identity.
+* ``GET /admin/analytics/owners`` — the owners behind one clicked number, behind the same
+  gate. This one **does** carry identity (owner name and email, never a renter's); its SQL is
+  kept apart in ``app/analytics/drilldown.py``.
 
 Three deliberate choices:
 
@@ -54,7 +57,17 @@ router = APIRouter()
 _bearer = HTTPBearer(auto_error=False)
 _google_request = google_requests.Request()
 
-_DASHBOARD_HTML = Path(__file__).resolve().parents[2] / "static" / "admin_dashboard.html"
+_DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "static" / "admin"
+_DASHBOARD_HTML = _DASHBOARD_DIR / "index.html"
+
+# The page's CSS and JS, by exact name. An allowlist rather than a static mount: nothing else in
+# the folder — or above it — is reachable, whatever the request path says.
+_ASSET_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+_ASSETS = {
+    p.name: _ASSET_TYPES[p.suffix]
+    for p in _DASHBOARD_DIR.glob("*")
+    if p.suffix in _ASSET_TYPES
+}
 
 # ── rate limiting ────────────────────────────────────────────────────────────
 # A fixed window per client IP, in memory. No Redis: the brief rules out adding a service,
@@ -180,6 +193,23 @@ def admin_dashboard() -> HTMLResponse:
     )
 
 
+# Not rate limited: one page load fetches every asset at once, which would spend a third of
+# the per-minute budget before the first number arrived. The limiter guards the token check,
+# and these carry no data and check no token.
+@router.get("/assets/{name}")
+def admin_dashboard_asset(name: str) -> Response:
+    """The page's code. As public as the shell: no data, no config, no secrets."""
+    media_type = _ASSETS.get(name)
+    if media_type is None:
+        raise _not_found()
+    return Response(
+        content=(_DASHBOARD_DIR / name).read_bytes(),
+        media_type=media_type,
+        # Revalidate on every load, so a deploy is picked up without a hard refresh.
+        headers={"Cache-Control": "no-cache", "X-Robots-Tag": "noindex, nofollow"},
+    )
+
+
 @router.get("/analytics", dependencies=[Depends(rate_limit)])
 def admin_analytics(
     response: Response,
@@ -193,3 +223,34 @@ def admin_analytics(
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return analytics_service.get_analytics(db, range, granularity, country)
+
+
+@router.get("/analytics/owners", dependencies=[Depends(rate_limit)])
+def admin_analytics_owners(
+    response: Response,
+    admin_uid: Annotated[str, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    segment: Annotated[str, Query(pattern="^[a-z_]{1,40}$")],
+    range: Annotated[str, Query(pattern="^(7d|30d|90d|all)$")] = "90d",
+    granularity: Annotated[str, Query(pattern="^(day|week)$")] = "week",
+    country: Annotated[str | None, Query(max_length=2)] = None,
+    bucket: Annotated[str | None, Query(max_length=40)] = None,
+    value: Annotated[str | None, Query(max_length=200)] = None,
+    group: Annotated[str | None, Query(max_length=40)] = None,
+    exclude: Annotated[str | None, Query(max_length=400)] = None,
+) -> dict:
+    """The owners behind one clicked bar, point, slice or cell. **Returns identity** — owner
+    name and email, never a renter's — so it sits behind the same gate as the aggregates, and
+    every call is logged by admin uid and segment (never by what came back)."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    try:
+        result = analytics_service.get_owner_list(
+            db, segment, range, granularity, country, bucket, value, group, exclude
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    logger.info(
+        "admin owner list uid=%s segment=%s rows=%d", admin_uid, segment, result["total"]
+    )
+    return result
