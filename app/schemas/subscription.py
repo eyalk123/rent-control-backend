@@ -11,6 +11,29 @@ class ManageLinks(BaseModel):
     update_payment_method_url: Optional[str] = None
 
 
+class DiscountLookup(BaseModel):
+    """What a discount code gives, before checkout. Every field past `reason` is set only
+    when `valid` is true."""
+
+    code: str
+    valid: bool
+    #: Why an invalid code cannot be used.
+    reason: Optional[Literal["not_found", "expired", "used_up", "not_applicable"]] = None
+    #: `dsc_…` — what the client hands Paddle's price preview to show discounted prices.
+    discount_id: Optional[str] = None
+    type: Optional[Literal["percentage", "flat"]] = None
+    #: A percentage ("20"), or a flat amount in minor units of `currency_code` ("500").
+    amount: Optional[str] = None
+    currency_code: Optional[str] = None
+    #: False: the first payment only. True: `maximum_recurring_intervals` payments, or
+    #: every payment when that is null.
+    recur: bool = False
+    maximum_recurring_intervals: Optional[int] = None
+    expires_at: Optional[datetime] = None
+    #: `<plan>_<period>` keys the code covers; null means every plan.
+    plans: Optional[list[str]] = None
+
+
 class ChangePlanRequest(BaseModel):
     plan: Literal["tier_3_8", "tier_9_15", "tier_16_plus"]
     period: Literal["monthly", "yearly"]
