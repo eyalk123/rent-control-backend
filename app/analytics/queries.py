@@ -551,6 +551,40 @@ _ENTITLED = """(
         )
     )"""
 
+
+# Whole days since the owner last opened the app, as a bar: 0–9 are single days, 10 is
+# "10–29" and 30 is "30+". last_seen_at is stamped on authenticated requests (at most hourly,
+# see owner_repository); signup stamps it too, so NULL is only a pre-column row and falls back
+# to created_at. A snapshot of today, so it ignores the page's range — like OWNER_TOTALS.
+LAST_SEEN_EXPR = """
+    COALESCE(o.last_seen_at, o.created_at)
+"""
+DAYS_SINCE_SEEN = """
+    (CASE WHEN d.n >= 30 THEN 30 WHEN d.n >= 10 THEN 10 ELSE d.n END)
+"""
+_SEEN_DAYS = f"""
+    CROSS JOIN LATERAL (SELECT GREATEST(0, floor(extract(epoch FROM
+        (now() AT TIME ZONE 'UTC') - {LAST_SEEN_EXPR}) / 86400))::int AS n) d
+"""
+# Paying as the "Paying subscribers" tile counts it: an entitling subscription, trials and
+# grandfathered accounts excluded.
+PAYING_OWNER = f"""
+    EXISTS (SELECT 1 FROM subscriptions sub
+            WHERE sub.owner_id = o.id AND {_ENTITLED} AND lower(sub.status) <> 'trialing')
+"""
+
+LAST_SEEN_DAYS = f"""
+WITH {SCOPED_OWNERS}
+SELECT {DAYS_SINCE_SEEN}                                       AS days,
+       count(*) FILTER (WHERE {PAYING_OWNER})                  AS paying,
+       count(*) FILTER (WHERE NOT {PAYING_OWNER})              AS not_paying
+FROM scoped_owners s
+JOIN owners o ON o.id = s.id
+{_SEEN_DAYS}
+GROUP BY 1
+ORDER BY 1
+"""
+
 # Every subscription row as it stands now, grouped by the facts the page slices on. A
 # snapshot, so it is not windowed.
 #

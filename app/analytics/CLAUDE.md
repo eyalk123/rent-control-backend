@@ -22,7 +22,7 @@ This file is the map: **read only the files a change needs.**
 | Startup | `main.js` | control listeners, then `initAuth()`. Loads last |
 | Tests | `tests/test_admin_analytics.py` | access control, binds, PII greps, asset allowlist |
 
-Tab → payload key: overview `funnel`, `growth.totals` · subscriptions `subscriptions.*`,
+Tab → payload key: overview `funnel`, `growth.totals`, `growth.last_seen` · subscriptions `subscriptions.*`,
 `engagement.distribution` · growth `growth.*`, `engagement.*` · countries `countries.*` ·
 ai `ai.*` · platform `platform.*` · health `operations.*`.
 

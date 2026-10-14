@@ -109,6 +109,7 @@ const valueLabels = {
     ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     ctx.fillStyle = css('--text-secondary');
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    if (opts.stacked) { drawStackLabels(chart, ctx); ctx.restore(); return; }
     chart.data.datasets.forEach((ds, i) => {
       const meta = chart.getDatasetMeta(i);
       if (meta.hidden) return;
@@ -121,6 +122,25 @@ const valueLabels = {
     ctx.restore();
   },
 };
+/** Stacked bars: each part inside its own segment (white, so only on dark fills such as
+ *  --series-1 and --series-muted, and only where it fits), the total above the stack. */
+function drawStackLabels(chart, ctx) {
+  chart.data.labels.forEach((_, j) => {
+    let total = 0, top = Infinity, x = null;
+    chart.data.datasets.forEach((ds, i) => {
+      const meta = chart.getDatasetMeta(i);
+      const el = meta.data[j], v = ds.data[j] || 0;
+      if (meta.hidden || !el || !v) return;
+      total += v; x = el.x; top = Math.min(top, el.y);
+      if (Math.abs(el.base - el.y) < 16) return;
+      ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle';
+      ctx.fillText(nf.format(v), el.x, (el.y + el.base) / 2);
+    });
+    if (!total) return;
+    ctx.fillStyle = css('--text-secondary'); ctx.textBaseline = 'bottom';
+    ctx.fillText(nf.format(total), x, top - 4);
+  });
+}
 // Guarded. This used to be a bare `Chart.register(...)` at the top level, and when the CDN
 // 404'd it threw here — which stopped the rest of the script, including the Firebase
 // initialisation at the bottom. The visible symptom was "No Firebase App has been created"

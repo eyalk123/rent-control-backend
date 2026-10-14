@@ -68,6 +68,9 @@ function overviewHTML(d) {
     section('Activation funnel', card('Signup → first report export',
       'Each step requires every step before it, so the funnel can only go down. Cohort starts ' +
       d.window.cohort_floor + '.', funnelBody(d))) +
+    section('Last seen', canvasCard('Days since each owner last opened the app',
+      'Counted from today, so the range picker does not change it. Paying means a paid plan right now, trials and grandfathered accounts excluded. Click a part of a bar to see who is in it.',
+      'c-last-seen')) +
     notesFor(d, ['funnel']);
 }
 function drawOverview(d) {
@@ -75,6 +78,29 @@ function drawOverview(d) {
   sparkline('k-active', fillBuckets(d, d.engagement.active_owners, ['active_owners']).map((r) => r.active_owners));
   sparkline('k-scans', fillBuckets(d, d.ai.scans, ['scans']).map((r) => r.scans));
   sparkline('k-agent', fillBuckets(d, d.ai.assistant, ['messages']).map((r) => r.messages));
+
+  // One bar per day 0–9, then 10–29 and 30+ (sent as 10 and 30). Empty bars still draw, as 0.
+  const seen = d.growth.last_seen || [];
+  const byBar = Object.fromEntries(seen.map((r) => [r.days, r]));
+  const bars = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 30];
+  const barLabel = (n) => (n === 0 ? 'Today' : n === 10 ? '10–29' : n === 30 ? '30+' : String(n));
+  const barTitle = (n) => (n === 0 ? 'today' : n === 1 ? '1 day ago' : n === 30 ? '30+ days ago' :
+    (n === 10 ? '10–29' : n) + ' days ago');
+  const halves = [['paying', 'Paying', '--series-1'], ['not_paying', 'Not paying', '--series-muted']];
+  const axis = (text) => ({ display: true, text, color: css('--muted'), font: { size: 11 } });
+  chartOrEmpty('c-last-seen', seen, () => {
+    const opts = baseOptions();
+    opts.plugins.valueLabels = { enabled: true, stacked: true };
+    opts.scales.x = Object.assign(opts.scales.x, { stacked: true, title: axis('Days since last seen') });
+    opts.scales.y = Object.assign(opts.scales.y, { stacked: true, title: axis('Owners') });
+    return clickable({
+      type: 'bar',
+      data: { labels: bars.map(barLabel), datasets: halves.map(([key, label, color]) =>
+        barSeries(label, bars.map((n) => (byBar[n] || {})[key] || 0), color)) },
+      options: opts,
+    }, (ds, i) => ({ t: halves[ds][1] + ' owners last seen ' + barTitle(bars[i]),
+                     s: 'last_seen', v: String(bars[i]), g: halves[ds][0] }));
+  }, 'No owners yet');
 }
 
 TAB_RENDER.overview = [overviewHTML, drawOverview];

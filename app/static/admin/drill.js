@@ -95,26 +95,70 @@ async function openDrill(desc) {
   renderDrill(body, scope);
 }
 
+// The popup's columns. `sort` is the value a header double-click orders by; `cell` draws it.
+const drillDay = (iso) => iso ? parseUtc(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+const drillPlan = (r) => (PLAN_LABELS[r.plan] || OWNER_PLAN_LABELS[r.plan] || r.plan) + (r.on_trial ? ' · trial' : '');
+const DRILL_COLUMNS = [
+  { label: 'Name', sort: (r) => (r.name || '').toLowerCase(), cell: (r) => esc(r.name || '—') },
+  { label: 'Email', sort: (r) => (r.email || '').toLowerCase(), cell: (r) => esc(r.email || '—') },
+  { label: 'Country', sort: (r) => countryName(r.country), cell: (r) => esc(countryName(r.country)) },
+  { label: 'Signed up', sort: (r) => r.signed_up, cell: (r) => drillDay(r.signed_up) },
+  { label: 'Platform', sort: (r) => r.platform, cell: (r) => esc(r.platform || '—') },
+  { label: 'Plan', sort: (r) => drillPlan(r), cell: (r) => esc(drillPlan(r)) },
+  { label: 'Properties', num: true, sort: (r) => r.properties, cell: (r) => num(r.properties) },
+  { label: 'Last active', sort: (r) => r.last_active, cell: (r) => drillDay(r.last_active),
+    note: 'Last time they added or changed something.' },
+  { label: 'Last seen', sort: (r) => r.last_seen, cell: (r) => drillDay(r.last_seen),
+    note: 'Last time they opened the app.' },
+];
+// The list on screen and its sort. A new list starts unsorted (newest signup first, as sent).
+const drillView = { body: null, scope: '', col: null, dir: null };
+
 function renderDrill(body, scope) {
-  const rows = body.owners || [];
+  Object.assign(drillView, { body, scope, col: null, dir: null });
+  drawDrillTable();
+}
+
+function drawDrillTable() {
+  const { body, scope, col, dir } = drillView;
+  const rows = (body.owners || []).slice();
   $('#drill-sub').textContent = scope + ' · ' + num(body.total) + ' owner' + (body.total === 1 ? '' : 's') +
     (body.total > rows.length ? ' · showing the newest ' + num(rows.length) : '');
   if (!rows.length) {
     $('#drill-body').innerHTML = '<div class="empty">No owners in this group.</div>';
     return;
   }
-  const day = (iso) => iso ? parseUtc(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-  const plan = (r) => (PLAN_LABELS[r.plan] || OWNER_PLAN_LABELS[r.plan] || r.plan) + (r.on_trial ? ' · trial' : '');
-  $('#drill-body').innerHTML = '<table class="data"><thead><tr><th>Name</th><th>Email</th><th>Country</th>' +
-    '<th>Signed up</th><th>Platform</th><th>Plan</th><th class="num">Properties</th><th>Last active</th>' +
+  if (col !== null) {
+    const key = DRILL_COLUMNS[col].sort, sign = dir === 'desc' ? -1 : 1;
+    // Blanks always last, whichever way.
+    rows.sort((a, b) => {
+      const x = key(a), y = key(b);
+      const xe = x === null || x === undefined || x === '', ye = y === null || y === undefined || y === '';
+      if (xe || ye) return xe === ye ? 0 : xe ? 1 : -1;
+      return (x < y ? -1 : x > y ? 1 : 0) * sign;
+    });
+  }
+  $('#drill-body').innerHTML = '<table class="data"><thead><tr>' + DRILL_COLUMNS.map((c, i) =>
+      '<th data-col="' + i + '"' + (c.num ? ' class="num"' : '') +
+      ' title="' + esc((c.note ? c.note + ' ' : '') + 'Double-click to sort.') + '">' + esc(c.label) +
+      (i === col ? (dir === 'desc' ? ' ▼' : ' ▲') : '') + '</th>').join('') +
     '</tr></thead><tbody>' + rows.map((r) =>
       // The uid rides in the tooltip: it is what to search for in Firebase or the database.
-      '<tr title="' + esc(r.id) + '"><td>' + esc(r.name || '—') + '</td><td>' + esc(r.email || '—') + '</td>' +
-      '<td>' + esc(countryName(r.country)) + '</td><td>' + day(r.signed_up) + '</td>' +
-      '<td>' + esc(r.platform || '—') + '</td><td>' + esc(plan(r)) + '</td>' +
-      '<td class="num">' + num(r.properties) + '</td><td>' + day(r.last_active) + '</td></tr>').join('') +
+      '<tr title="' + esc(r.id) + '">' + DRILL_COLUMNS.map((c) =>
+        '<td' + (c.num ? ' class="num"' : '') + '>' + c.cell(r) + '</td>').join('') + '</tr>').join('') +
     '</tbody></table>';
 }
+
+// Double-click a header: descending, then ascending, then back to unsorted.
+$('#drill-body').addEventListener('dblclick', (e) => {
+  const th = e.target.closest('th[data-col]');
+  if (!th || !drillView.body) return;
+  const i = Number(th.dataset.col);
+  if (drillView.col !== i) Object.assign(drillView, { col: i, dir: 'desc' });
+  else if (drillView.dir === 'desc') drillView.dir = 'asc';
+  else Object.assign(drillView, { col: null, dir: null });
+  drawDrillTable();
+});
 
 $('#drill-close').addEventListener('click', () => $('#drill').close());
 // A click on the backdrop lands on the <dialog> itself; one inside lands on its children.

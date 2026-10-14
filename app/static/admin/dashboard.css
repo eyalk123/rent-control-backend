@@ -249,6 +249,7 @@ dialog.drill-modal::backdrop { background: rgba(15, 23, 42, 0.45); }
 .drill-head button { margin-left: auto; }
 .drill-body { padding: 4px 18px 16px; overflow: auto; max-height: calc(100vh - 140px); }
 .drill-body table.data th { position: sticky; top: 0; background: var(--surface); }
+.drill-body table.data th { cursor: pointer; user-select: none; white-space: nowrap; }
 .drill-body td { white-space: nowrap; }
 
 /* ── login ─────────────────────────────────────────────────────────── */

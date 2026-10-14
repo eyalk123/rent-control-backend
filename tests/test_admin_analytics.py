@@ -258,6 +258,9 @@ def test_every_windowed_query_filters_on_time():
     unbounded = {"DATA_HEALTH", "PER_OWNER_DISTRIBUTION", "DEVICE_PLATFORM_SPLIT",
                  "SIGNUP_PLATFORM_SPLIT", "LANGUAGE_SPLIT", "COUNTRY_SPLIT",
                  "OWNER_TOTALS", "SCOPED_OWNERS",
+                 # Days since each owner last opened the app — a snapshot of today.
+                 "LAST_SEEN_DAYS", "DAYS_SINCE_SEEN", "LAST_SEEN_EXPR",
+                 "_SEEN_DAYS", "PAYING_OWNER",
                  "WRITE_EVENTS", "COUNTRY_EXPR", "_COUNTRY_OWNERS",
                  # Current subscription state — a snapshot of one small table.
                  "SUBSCRIPTION_STATE", "ACCOUNT_PLANS"}

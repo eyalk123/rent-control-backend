@@ -154,6 +154,7 @@ def build_payload(db: Session, range_key: str, granularity: str, country: str | 
         },
         "growth": {
             "totals": totals,
+            "last_seen": _rows(db, Q.LAST_SEEN_DAYS, p),
             "signups": _rows(db, Q.SIGNUPS_OVER_TIME, p),
             "deletions": _rows(db, Q.DELETIONS_OVER_TIME, simple),
         },

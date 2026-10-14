@@ -7,7 +7,7 @@ so the boundary is a file boundary and can be reviewed as one.
 What it returns, and what it never does:
 
 * **Owners only** — the landlord accounts. Name, email, country, signup date, signup platform,
-  plan, property count and last activity. These are *our* users' account details, which the
+  plan, property count, last activity and last seen. These are *our* users' account details, which the
   admin already sees in the database and in Firebase.
 * **Never a tenant field.** A segment may *filter* on renters, transactions or lease scans
   ("owners who added a renter"), but the SELECT reads from `owners` and per-owner counts only.
@@ -114,6 +114,17 @@ SEGMENTS: dict[str, str] = {
         FROM write_events e
         JOIN scoped_owners s ON s.id = e.owner_id
         WHERE e.created_at >= :lo AND e.created_at < :hi
+    """,
+
+    # LAST_SEEN_DAYS, one bar. `value` is the bar (0–9, "10" = 10–29, "30" = 30+); `group`
+    # "paying" / "not_paying" is the stacked half, NULL the whole bar.
+    "last_seen": f"""
+        SELECT s.id FROM scoped_owners s
+        JOIN owners o ON o.id = s.id
+        {Q._SEEN_DAYS}
+        WHERE {Q.DAYS_SINCE_SEEN} = CAST(:value AS int)
+          AND (CAST(:group AS text) IS NULL
+               OR (CAST(:group AS text) = 'paying') = {Q.PAYING_OWNER})
     """,
 
     # RETENTION_COHORTS, one cell. `weeks` NULL = the whole cohort (the Size column);
@@ -368,6 +379,7 @@ SELECT o.id,
        COALESCE(pd.on_trial, false)          AS on_trial,
        COALESCE(pc.n, 0)                     AS properties,
        lw.t                                  AS last_active,
+       COALESCE(o.last_seen_at, o.created_at) AS last_seen,
        count(*) OVER ()                      AS total
 FROM picked k
 JOIN owners o                  ON o.id = k.id

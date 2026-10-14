@@ -93,10 +93,12 @@ def seed(db) -> None:
     for i in range(40):
         oid = f"owner-{i}"
         created = now - timedelta(days=random.randint(0, 85), hours=random.randint(0, 23))
-        ins("INSERT INTO owners (id, email, display_name, country, created_at, granted_plan, tour_state) "
-            "VALUES (:id, :e, :n, :c, :t, :g, '{}')",
+        # Every 7th never stamped, to exercise the created_at fallback.
+        seen = None if i % 7 == 0 else now - timedelta(days=random.randint(0, 45), hours=random.randint(0, 23))
+        ins("INSERT INTO owners (id, email, display_name, country, created_at, granted_plan, tour_state, "
+            "last_seen_at) VALUES (:id, :e, :n, :c, :t, :g, '{}', :s)",
             id=oid, e=f"o{i}@example.test", n=f"Owner {i}", c=random.choice(countries), t=created,
-            g="tier_16_plus" if i % 9 == 0 else None)
+            g="tier_16_plus" if i % 9 == 0 else None, s=seen)
         ins("INSERT INTO legal_acceptances (owner_id, document, version, locale, platform, accepted_at) "
             "VALUES (:o, 'terms', '1', :l, :p, :t)",
             o=oid, l=random.choice(["he", "en"]), p=random.choice(["ios", "android", "web"]), t=created)
@@ -181,6 +183,12 @@ def verify(db) -> int:
             check("cohort " + w, r["cohort_size"], "retention", country, bucket=w)
             check("week 1 " + w, r["retained_week_1"], "retention", country, bucket=w, value="week_1")
             check("week 4 " + w, r["retained_week_4"], "retention", country, bucket=w, value="week_4")
+        for r in d["growth"]["last_seen"]:
+            for half in ("paying", "not_paying"):
+                check(f"last seen {r['days']}d {half}", r[half], "last_seen", country,
+                      value=str(r["days"]), group=half)
+            check(f"last seen {r['days']}d", r["paying"] + r["not_paying"], "last_seen", country,
+                  value=str(r["days"]))
         dist = d["engagement"]["distribution"]
         for b, v in zip(dist["buckets"], dist["properties"]):
             check("band " + b, v, "property_band", country, value=b)
