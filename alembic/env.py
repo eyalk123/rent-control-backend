@@ -19,6 +19,7 @@ from app.models.notification_settings import NotificationSettings
 from app.models.owner import Owner
 from app.models.property import Property
 from app.models.property_file import PropertyFile
+from app.models.property_valuation import PropertyValuation
 from app.models.renter import Renter
 from app.models.report_export import ReportExport
 from app.models.supplier import Supplier

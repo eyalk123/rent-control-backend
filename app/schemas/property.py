@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.schemas.property_valuation import PropertyValuationCreate
 from app.schemas.stored_file import StoredFile
 
 
@@ -50,6 +51,10 @@ class PropertyCreate(BaseModel):
     type: PropertyType
     sq_ft: Optional[int] = None
     purchase_price: Optional[float] = None
+    purchase_date: Optional[date] = None
+    # A new entry for the value history, added by the form's "+" before the save. Appended,
+    # never a replacement: earlier values stay in the history.
+    valuation: Optional[PropertyValuationCreate] = None
     image_url: StoredFile = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
@@ -79,6 +84,11 @@ class PropertyCreate(BaseModel):
     def normalize_property_owner_create(cls, v):
         return _normalize_optional_str(v)
 
+    @field_validator("purchase_price")
+    @classmethod
+    def normalize_purchase_price_create(cls, v):
+        return _normalize_purchase_price(v)
+
 
 class PropertyUpdate(BaseModel):
     address: Optional[str] = None
@@ -87,6 +97,10 @@ class PropertyUpdate(BaseModel):
     type: Optional[PropertyType] = None
     sq_ft: Optional[int] = None
     purchase_price: Optional[float] = None
+    purchase_date: Optional[date] = None
+    # A new entry for the value history, added by the form's "+" before the save. Appended,
+    # never a replacement: earlier values stay in the history.
+    valuation: Optional[PropertyValuationCreate] = None
     image_url: StoredFile = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
@@ -115,6 +129,21 @@ class PropertyUpdate(BaseModel):
     @classmethod
     def normalize_property_owner_update(cls, v):
         return _normalize_optional_str(v)
+
+    @field_validator("purchase_price")
+    @classmethod
+    def normalize_purchase_price_update(cls, v):
+        return _normalize_purchase_price(v)
+
+
+def _normalize_purchase_price(v):
+    """0 means "not entered" (an old mobile build sent it for a blank field), so it is stored
+    as no price at all; a negative price is a typo."""
+    if v is None:
+        return None
+    if v < 0:
+        raise ValueError("purchase_price cannot be negative")
+    return v or None
 
 
 def _parse_parking_numbers(v):
@@ -147,6 +176,10 @@ class PropertyRead(BaseModel):
     type: PropertyType
     sq_ft: Optional[int] = None
     purchase_price: Optional[float] = None
+    purchase_date: Optional[date] = None
+    # The latest entry of the value history (see PropertyValuation), or None if there is none.
+    current_value: Optional[float] = None
+    current_value_date: Optional[date] = None
     image_url: Optional[str] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None

@@ -10,6 +10,7 @@ from app.database import get_db
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
 from app.schemas.property_file import PropertyFileCreate, PropertyFileRead
+from app.schemas.property_valuation import PropertyValuationCreate, PropertyValuationRead
 from app.schemas.renter import PropertyRenterSummary
 from app.services.firebase_storage import release_file_urls
 from app.services.property_service import PropertyService
@@ -165,4 +166,44 @@ def delete_property_file(
     url = file.url
     file_repo.delete(file)
     release_file_urls(file_repo.session, current_user["user_id"], [url])
+    return None
+
+
+@router.get("/{property_id}/valuations", response_model=list[PropertyValuationRead])
+def list_property_valuations(
+    property_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+):
+    """The property's value history, newest first. The first entry is `current_value`."""
+    valuations = property_service.list_valuations(property_id, owner_id=current_user["user_id"])
+    if valuations is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return valuations
+
+
+@router.post("/{property_id}/valuations", response_model=PropertyValuationRead, status_code=201)
+def create_property_valuation(
+    property_id: int,
+    data: PropertyValuationCreate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+):
+    valuation = property_service.add_valuation(property_id, data, owner_id=current_user["user_id"])
+    if valuation is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return valuation
+
+
+@router.delete("/{property_id}/valuations/{valuation_id}", status_code=204)
+def delete_property_valuation(
+    property_id: int,
+    valuation_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    property_service: Annotated[PropertyService, Depends(get_property_service)],
+):
+    if not property_service.delete_valuation(
+        property_id, valuation_id, owner_id=current_user["user_id"]
+    ):
+        raise HTTPException(status_code=404, detail="Valuation not found")
     return None

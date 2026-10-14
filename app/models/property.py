@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text, select
+from sqlalchemy import Column, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, select
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 
@@ -49,6 +49,7 @@ class Property(Base):
     # Optional: an inherited or managed property may have no price the owner knows or
     # wants to record, and demanding one at signup loses the account.
     purchase_price = Column(Float, nullable=True)
+    purchase_date = Column(Date, nullable=True)
     image_url = Column(String, nullable=True)
     # The human owner (see PropertyOwner). Their name is read as `property_owner`, below.
     property_owner_id = Column(
@@ -84,6 +85,24 @@ class Property(Base):
     # Joined, not lazy: nearly every read of a property names its owner (lists, reports,
     # the assistant), and a many-to-one join costs nothing next to an extra query per row.
     owner_record = relationship(PropertyOwner, lazy="joined")
+    # Newest first, so the current value is the first entry. Selectin: the list and the
+    # detail both show the current value, and a handful of rows per property is nothing.
+    valuations = relationship(
+        "PropertyValuation",
+        back_populates="property",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="(PropertyValuation.valued_on.desc(), PropertyValuation.id.desc())",
+    )
+
+    @property
+    def current_value(self) -> float | None:
+        return self.valuations[0].value if self.valuations else None
+
+    @property
+    def current_value_date(self):
+        return self.valuations[0].valued_on if self.valuations else None
 
     @hybrid_property
     def property_owner(self) -> str | None:

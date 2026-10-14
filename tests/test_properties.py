@@ -205,3 +205,118 @@ def test_property_files_other_owner_blocked(client_factory, db_session):
     prop = make_property(db_session, owner_id=OWNER_B)
     client_a = client_factory(OWNER_A)
     assert client_a.get(f"/properties/{prop.id}/files").status_code == 404
+
+
+# --- Purchase date and value history -------------------------------------------------
+
+
+def test_purchase_price_and_date_round_trip_and_clear(client):
+    payload = {**VALID_PAYLOAD, "purchase_price": 1_800_000, "purchase_date": "2019-06-01"}
+    body = client.post("/properties", json=payload).json()
+    assert body["purchase_price"] == 1_800_000
+    assert body["purchase_date"] == "2019-06-01"
+
+    cleared = client.patch(
+        f"/properties/{body['id']}", json={"purchase_price": None, "purchase_date": None}
+    ).json()
+    assert cleared["purchase_price"] is None
+    assert cleared["purchase_date"] is None
+
+
+def test_purchase_price_zero_is_stored_as_none(client):
+    """0 is what an old mobile build sent for a blank field — not a price."""
+    body = client.post("/properties", json={**VALID_PAYLOAD, "purchase_price": 0}).json()
+    assert body["purchase_price"] is None
+
+
+def test_purchase_price_negative_rejected(client):
+    resp = client.post("/properties", json={**VALID_PAYLOAD, "purchase_price": -5})
+    assert resp.status_code == 422
+
+
+def test_property_without_valuations_has_no_current_value(client):
+    body = client.post("/properties", json=VALID_PAYLOAD).json()
+    assert body["current_value"] is None
+    assert body["current_value_date"] is None
+
+
+def test_create_with_valuation_sets_current_value(client):
+    payload = {**VALID_PAYLOAD, "valuation": {"value": 3_000_000, "valued_on": "2026-01-10"}}
+    body = client.post("/properties", json=payload).json()
+    assert body["current_value"] == 3_000_000
+    assert body["current_value_date"] == "2026-01-10"
+    assert "valuation" not in body
+
+
+def test_update_with_valuation_appends_to_history(client):
+    created = client.post(
+        "/properties",
+        json={**VALID_PAYLOAD, "valuation": {"value": 3_000_000, "valued_on": "2025-01-10"}},
+    ).json()
+    updated = client.patch(
+        f"/properties/{created['id']}",
+        json={"valuation": {"value": 3_200_000, "valued_on": "2026-01-10"}},
+    ).json()
+    assert updated["current_value"] == 3_200_000
+
+    history = client.get(f"/properties/{created['id']}/valuations").json()
+    assert [v["value"] for v in history] == [3_200_000, 3_000_000]
+
+
+def test_current_value_is_latest_by_date_not_by_entry(client, db_session):
+    """Backfilling an older estimate must not displace the newer one."""
+    prop = make_property(db_session)
+    client.post(f"/properties/{prop.id}/valuations", json={"value": 900, "valued_on": "2026-03-01"})
+    client.post(f"/properties/{prop.id}/valuations", json={"value": 700, "valued_on": "2024-03-01"})
+
+    body = client.get(f"/properties/{prop.id}").json()
+    assert body["current_value"] == 900
+    assert body["current_value_date"] == "2026-03-01"
+    listed = next(p for p in client.get("/properties").json() if p["id"] == prop.id)
+    assert listed["current_value"] == 900
+
+    history = client.get(f"/properties/{prop.id}/valuations").json()
+    assert [v["valued_on"] for v in history] == ["2026-03-01", "2024-03-01"]
+
+
+def test_valuation_validation(client, db_session):
+    prop = make_property(db_session)
+    url = f"/properties/{prop.id}/valuations"
+    assert client.post(url, json={"value": 0, "valued_on": "2026-01-01"}).status_code == 422
+    assert client.post(url, json={"value": 100}).status_code == 422
+    future = (date.today() + timedelta(days=3)).isoformat()
+    assert client.post(url, json={"value": 100, "valued_on": future}).status_code == 400
+
+
+def test_delete_valuation_falls_back_to_previous(client, db_session):
+    prop = make_property(db_session)
+    url = f"/properties/{prop.id}/valuations"
+    client.post(url, json={"value": 700, "valued_on": "2024-03-01"})
+    newest = client.post(url, json={"value": 900, "valued_on": "2026-03-01"}).json()
+
+    assert client.delete(f"{url}/{newest['id']}").status_code == 204
+    assert client.get(f"/properties/{prop.id}").json()["current_value"] == 700
+    assert client.delete(f"{url}/{newest['id']}").status_code == 404
+
+
+def test_valuations_are_owner_scoped(client_factory, db_session):
+    prop = make_property(db_session, owner_id=OWNER_A)
+    client_a = client_factory(OWNER_A)
+    entry = client_a.post(
+        f"/properties/{prop.id}/valuations", json={"value": 500, "valued_on": "2026-01-01"}
+    ).json()
+
+    client_b = client_factory(OWNER_B)
+    url = f"/properties/{prop.id}/valuations"
+    assert client_b.get(url).status_code == 404
+    assert client_b.post(url, json={"value": 1, "valued_on": "2026-01-01"}).status_code == 404
+    assert client_b.delete(f"{url}/{entry['id']}").status_code == 404
+
+
+def test_deleting_property_removes_its_valuations(client, db_session):
+    from app.models.property_valuation import PropertyValuation
+
+    prop = make_property(db_session)
+    client.post(f"/properties/{prop.id}/valuations", json={"value": 500, "valued_on": "2026-01-01"})
+    assert client.delete(f"/properties/{prop.id}").status_code == 204
+    assert db_session.query(PropertyValuation).count() == 0

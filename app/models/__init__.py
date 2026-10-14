@@ -14,6 +14,7 @@ from app.models.owner import Owner
 from app.models.owner_client_day import OwnerClientDay
 from app.models.property import Property, PropertyTypeEnum
 from app.models.property_owner import PropertyOwner
+from app.models.property_valuation import PropertyValuation
 from app.models.renter import Renter
 from app.models.subscription import Subscription
 from app.models.subscription_event import SubscriptionEvent
@@ -48,6 +49,7 @@ __all__ = [
     "Property",
     "PropertyTypeEnum",
     "PropertyOwner",
+    "PropertyValuation",
     "Renter",
     "Subscription",
     "SubscriptionEvent",

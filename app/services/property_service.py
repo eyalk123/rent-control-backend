@@ -1,12 +1,17 @@
 import json
 
+from fastapi import HTTPException
+
 from app.models.property import Property, PropertyTypeEnum
+from app.models.property_valuation import PropertyValuation
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.repositories.property_repository import PropertyRepository
+from app.repositories.property_valuation_repository import PropertyValuationRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas.property_valuation import PropertyValuationCreate
 from app.schemas.renter import PropertyRenterSummary
 from app.services import country_service
 from app.services.entitlement_gate import EntitlementGate
@@ -44,6 +49,7 @@ class PropertyService:
         self.property_owner_service = PropertyOwnerService(
             PropertyOwnerRepository(property_repository.session)
         )
+        self.valuation_repository = PropertyValuationRepository(property_repository.session)
 
     def _mark_locked(self, owner_id: str, properties: list):
         """Tag each property with whether the plan still allows writing to it.
@@ -159,6 +165,7 @@ class PropertyService:
             type=property_type,
             sq_ft=data.sq_ft,
             purchase_price=data.purchase_price,
+            purchase_date=data.purchase_date,
             image_url=data.image_url,
             number_of_rooms=data.number_of_rooms,
             parking_numbers=parking_numbers_str,
@@ -187,6 +194,9 @@ class PropertyService:
             # onto every row it writes.
             currency_code=country_service.effective_currency(country, owner_currency).code,
         )
+        if data.valuation is not None:
+            self._check_valuation_date(data.valuation, owner_id)
+            property.valuations.append(self._valuation(data.valuation))
         created = self.property_repository.create(property)
         return self.property_repository.get_by_id(created.id, owner_id)
 
@@ -200,6 +210,11 @@ class PropertyService:
         if self.entitlement_gate is not None:
             self.entitlement_gate.require_property_unlocked(owner_id, property_id)
         update_dict = data.model_dump(exclude_unset=True)
+        # Not a column: a new history entry, committed with the rest of the save.
+        update_dict.pop("valuation", None)
+        if data.valuation is not None:
+            self._check_valuation_date(data.valuation, owner_id)
+            property.valuations.append(self._valuation(data.valuation))
         if "property_owner_id" in update_dict or "property_owner" in update_dict:
             update_dict["property_owner_id"] = self._property_owner_id(update_dict, owner_id)
         update_dict.pop("property_owner", None)
@@ -253,6 +268,40 @@ class PropertyService:
 
         self.property_repository.delete_obj(property)
         release_file_urls(self.property_repository.session, owner_id, urls)
+        return True
+
+    @staticmethod
+    def _valuation(data: PropertyValuationCreate) -> PropertyValuation:
+        return PropertyValuation(value=data.value, valued_on=data.valued_on)
+
+    def _check_valuation_date(self, data: PropertyValuationCreate, owner_id: str) -> None:
+        """A value dated in the future would read as the current one until that day came."""
+        if data.valued_on > owner_today(self.property_repository.session, owner_id):
+            raise HTTPException(status_code=400, detail="valued_on cannot be in the future")
+
+    def list_valuations(self, property_id: int, owner_id: str) -> list[PropertyValuation] | None:
+        """The property's value history, newest first. None when the property is not found."""
+        if self.get_property(property_id, owner_id) is None:
+            return None
+        return self.valuation_repository.get_by_property(property_id)
+
+    def add_valuation(
+        self, property_id: int, data: PropertyValuationCreate, owner_id: str
+    ) -> PropertyValuation | None:
+        if self.get_property(property_id, owner_id) is None:
+            return None
+        self._check_valuation_date(data, owner_id)
+        valuation = self._valuation(data)
+        valuation.property_id = property_id
+        return self.valuation_repository.create(valuation)
+
+    def delete_valuation(self, property_id: int, valuation_id: int, owner_id: str) -> bool:
+        if self.get_property(property_id, owner_id) is None:
+            return False
+        valuation = self.valuation_repository.get_by_id(valuation_id, property_id)
+        if valuation is None:
+            return False
+        self.valuation_repository.delete(valuation)
         return True
 
     def get_property_renters(self, property_id: int, owner_id: str, include_ended: bool = False):
