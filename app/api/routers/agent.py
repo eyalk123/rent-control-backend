@@ -22,6 +22,7 @@ from app.api.dependencies import (
 from app.services import entitlement_service as ent
 from app.services.entitlement_gate import EntitlementGate
 from app.schemas.agent import AgentChatRequest, AgentStatusResponse, ConversationRead
+from app.schemas.utc import as_utc
 from app.services.agent_service import AgentService
 
 router = APIRouter()
@@ -123,7 +124,7 @@ def get_conversation(
                 "id": m.id,
                 "role": m.role,
                 "content": json.loads(m.content),
-                "created_at": m.created_at.isoformat(),
+                "created_at": as_utc(m.created_at).isoformat(),
             }
             for m in messages
         ],

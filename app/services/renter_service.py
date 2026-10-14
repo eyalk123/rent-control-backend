@@ -31,6 +31,7 @@ from app.services.lease_periods import (
     schedule_end,
 )
 from app.services.firebase_storage import release_file_urls
+from app.repositories.owner_repository import owner_today
 
 # Columns holding a Storage path.
 _FILE_FIELDS = ("full_contract_url", "id_image_url")
@@ -647,7 +648,7 @@ class RenterService:
     ) -> list[OverdueRenterRead]:
         import calendar
 
-        today = date.today()
+        today = owner_today(self.renter_repository.session, owner_id)
         # Back-compat: the existing /renters/overdue endpoint passes a single
         # property_owner; fold it into the multi-value scope filter.
         if property_owner is not None and not property_owners:
@@ -704,7 +705,7 @@ class RenterService:
         property_owners: list[str] | None = None,
         renter_ids: list[int] | None = None,
     ) -> list[ExpiringRenterRead]:
-        today = date.today()
+        today = owner_today(self.renter_repository.session, owner_id)
         renters = self.renter_repository.get_expiring_leases(
             owner_id=owner_id,
             days_until=days_until,

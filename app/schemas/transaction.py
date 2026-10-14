@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.stored_file import StoredFile
+from app.schemas.utc import UtcDatetime
 
 
 class TransactionType(str, Enum):
@@ -82,8 +83,8 @@ class TransactionRead(BaseModel):
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     property_name: Optional[str] = None
     renter_name: Optional[str] = None
     category_name: Optional[str] = None

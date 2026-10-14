@@ -1,4 +1,3 @@
-from datetime import date
 from typing import Annotated
 
 import sentry_sdk
@@ -31,6 +30,7 @@ from app.schemas.tour_state import TourStateRead, TourStateUpdate
 from app.services import country_service
 from app.services.export_service import build_export_zip
 from app.services.user_service import UserService
+from app.repositories.owner_repository import owner_today
 
 router = APIRouter()
 
@@ -233,7 +233,7 @@ def export_my_data(
             detail="Export failed. Please try again.",
         )
 
-    filename = f"rentvance-export-{date.today().isoformat()}.zip"
+    filename = f"rentvance-export-{owner_today(db, current_user["user_id"]).isoformat()}.zip"
     return Response(
         content=content,
         media_type="application/zip",

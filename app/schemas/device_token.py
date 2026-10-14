@@ -1,8 +1,8 @@
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
 from app.models.device_token import DevicePlatformEnum
+from app.schemas.utc import UtcDatetime
 
 
 class DeviceTokenCreate(BaseModel):
@@ -16,7 +16,7 @@ class DeviceTokenRead(BaseModel):
     token: str
     platform: DevicePlatformEnum
     locale: str | None
-    created_at: datetime
-    last_used_at: datetime
+    created_at: UtcDatetime
+    last_used_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)

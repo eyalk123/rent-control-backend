@@ -14,6 +14,7 @@ from app.schemas.renter import PropertyRenterSummary
 from app.services.firebase_storage import release_file_urls
 from app.services.property_service import PropertyService
 from app.services.property_sheet_service import SheetFormats, generate_property_sheet_pdf
+from app.repositories.owner_repository import owner_today
 
 router = APIRouter()
 
@@ -73,7 +74,8 @@ def property_sheet(
     if property is None:
         raise HTTPException(status_code=404, detail="Property not found")
     content = generate_property_sheet_pdf(
-        property, owner_id, lang, SheetFormats(*_owner_formats(db, owner_id))
+        property, owner_id, lang, SheetFormats(*_owner_formats(db, owner_id)),
+        today=owner_today(db, owner_id),
     )
     return Response(
         content=content,

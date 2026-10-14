@@ -40,6 +40,12 @@ class Owner(Base):
     # `localStorage` / `AsyncStorage`, so it did not survive signing in on a second device.
     # NULL means "not chosen", which falls back to the device's own language.
     language = Column(String(5), nullable=True)
+    # IANA zone (``Asia/Jerusalem``) reported by the client on every request through the
+    # ``X-Client-Timezone`` header, and the calendar every business "today" is read on —
+    # overdue rent, expiring leases, reminders. See ``owner_repository.owner_today``. NULL
+    # means no client has reported one yet (an app build from before the header), which
+    # reads as UTC: the behaviour every account had before this column existed.
+    timezone = Column(String(64), nullable=True)
     # A plan granted outright, independent of anything ever being paid. NULL is the
     # normal case; every account that existed before billing was introduced carries the
     # top tier here, permanently, because they built their portfolio on a product that

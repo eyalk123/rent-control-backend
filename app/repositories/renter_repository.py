@@ -8,6 +8,7 @@ from app.models.owner import Owner
 from app.models.property import Property
 from app.models.renter import Renter
 from app.models.transaction import Transaction
+from app.repositories.owner_repository import owner_today
 
 
 def effective_lease_end():
@@ -186,7 +187,7 @@ class RenterRepository:
         property_owners: list[str] | None = None,
         renter_ids: list[int] | None = None,
     ) -> list[Renter]:
-        today = date.today()
+        today = owner_today(self.session, owner_id)
         first_of_month = date(today.year, today.month, 1)
         if today.month == 12:
             first_of_next_month = date(today.year + 1, 1, 1)
@@ -232,7 +233,7 @@ class RenterRepository:
         property_owners: list[str] | None = None,
         renter_ids: list[int] | None = None,
     ) -> list[Renter]:
-        today = date.today()
+        today = owner_today(self.session, owner_id)
         cutoff = today + timedelta(days=days_until)
 
         stmt = (
@@ -267,7 +268,7 @@ class RenterRepository:
     ) -> list[Renter]:
         """Renters with a currently-active lease in scope — used by the rule
         preview to estimate how many renters a rule matches."""
-        today = date.today()
+        today = owner_today(self.session, owner_id)
         stmt = (
             select(Renter)
             .join(Property, Renter.property_id == Property.id)
@@ -287,7 +288,7 @@ class RenterRepository:
         owner_id: str,
         active_only: bool = True,
     ) -> list[Renter]:
-        today = date.today()
+        today = owner_today(self.session, owner_id)
         stmt = (
             select(Renter)
             .join(Property, Renter.property_id == Property.id)

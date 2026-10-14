@@ -27,6 +27,7 @@ from app.config import settings
 from app.models.property import Property
 from app.services import entitlement_service as ent
 from app.services.entitlement_service import PlanLimits
+from app.schemas.utc import as_utc
 
 def _month_start() -> datetime:
     """00:00 UTC on the first of the current month — when the scan allowance resets."""
@@ -287,7 +288,7 @@ class EntitlementGate:
                 "limit": allowance,
                 "used": used,
                 "required_plan": ent.PLANS[1].plan,
-                "resets_at": _next_month_start().isoformat(),
+                "resets_at": as_utc(_next_month_start()).isoformat(),
             },
         )
 

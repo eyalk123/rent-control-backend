@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 from dateutil.relativedelta import relativedelta
 
+from app.clock import utc_today
 from app.services.lease_periods import (
     is_tenancy_ended,
     period_index_on,
@@ -41,7 +42,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories.cpi_index_repository import CpiIndexRepository, reference_period
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
-from app.repositories.owner_repository import OwnerRepository
+from app.repositories.owner_repository import OwnerRepository, owner_today
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
 from app.repositories.supplier_repository import SupplierRepository
@@ -498,6 +499,9 @@ class AgentTools:
     def __init__(self, db: Session):
         self.db = db
         self._money_cache: dict[str, MoneyStyle] = {}
+        # The landlord's calendar day, set per tool call in `dispatch` — every "current"
+        # renter, rent and year a tool reports is judged on it, not on the server's UTC day.
+        self._today: date = utc_today()
         property_repo = PropertyRepository(db)
         renter_repo = RenterRepository(db)
         transaction_repo = TransactionRepository(db)
@@ -546,6 +550,7 @@ class AgentTools:
             return {"error": f"{name} is not available for this account"}
         params = dict(tool_input or {})
         params.pop("owner_id", None)  # never let the model set the tenant
+        self._today = owner_today(self.db, owner_id)
         try:
             method = getattr(self, f"_tool_{name}")
             return method(owner_id, params)
@@ -560,8 +565,7 @@ class AgentTools:
             return {"error": "not found"}
 
     # -- tools ----------------------------------------------------------------------
-    @staticmethod
-    def _current_renters(prop_renters: list) -> list:
+    def _current_renters(self, prop_renters: list) -> list:
         """The tenancies on a property that have not finished.
 
         The app's occupancy rule, ``PropertyRead.hasRenters``. Past tenants stay attached
@@ -570,10 +574,9 @@ class AgentTools:
         lease it ever had. Not the repository's stricter active window either: a lease
         signed to start next month still holds the property.
         """
-        today = date.today()
         return [
             r for r in prop_renters
-            if not is_tenancy_ended(r.terminated_on, r.lease_end, today)
+            if not is_tenancy_ended(r.terminated_on, r.lease_end, self._today)
         ]
 
     def _grouped_renters(self, owner_id: str):
@@ -587,20 +590,19 @@ class AgentTools:
                 by_prop[r.property_id].append(r)
         return properties, by_prop
 
-    @staticmethod
-    def _current_renter(prop_renters: list):
+    def _current_renter(self, prop_renters: list):
         """The renter to show as 'current': an active lease if one exists, else the most
         recent by lease start."""
         if not prop_renters:
             return None
-        today = date.today()
+        today = self._today
         active = [
             r for r in prop_renters
             if r.lease_start and r.lease_end and r.lease_start <= today <= r.lease_end
         ]
         # An ended tenancy is never "current": on a flat whose last tenant moved out the
         # answer is that there is nobody, not the person who used to be there.
-        pool = active or AgentTools._current_renters(prop_renters)
+        pool = active or self._current_renters(prop_renters)
         if not pool:
             return None
         return sorted(pool, key=lambda r: (r.lease_start or date.min), reverse=True)[0]
@@ -618,7 +620,7 @@ class AgentTools:
             current_rent = None
             if current:
                 years = _load_lease_years(current.lease_years)
-                current_rent = years[_current_year_index(current.lease_start, years)]["amount"] if years else None
+                current_rent = years[_current_year_index(current.lease_start, years, self._today)]["amount"] if years else None
             out.append(
                 {
                     "id": p.id,
@@ -673,7 +675,7 @@ class AgentTools:
         rows = []
         for r in self.renter_service.list_renters(owner_id):
             years = _load_lease_years(r.lease_years)
-            current = years[_current_year_index(r.lease_start, years)]["amount"] if years else None
+            current = years[_current_year_index(r.lease_start, years, self._today)]["amount"] if years else None
             rows.append(
                 {
                     "id": r.id,
@@ -867,7 +869,7 @@ class AgentTools:
             if property_id is not None and r.property_id != property_id:
                 continue
             years = _load_lease_years(r.lease_years)
-            idx = _current_year_index(r.lease_start, years)
+            idx = _current_year_index(r.lease_start, years, self._today)
             current_amount = years[idx]["amount"] if years else None
             out.append(
                 {
@@ -967,7 +969,7 @@ class AgentTools:
 
         requested = params.get("year")
         if requested is None:
-            idx = _current_year_index(r.lease_start, years)
+            idx = _current_year_index(r.lease_start, years, self._today)
         else:
             idx = int(requested) - 1
             if idx < 0 or idx >= len(years):
@@ -1099,7 +1101,7 @@ class AgentTools:
     def _tool_get_report_summary(self, owner_id: str, params: dict) -> dict:
         style = self._money(owner_id)
         report_type = params.get("type")
-        year = params.get("year") or date.today().year
+        year = params.get("year") or self._today.year
         if report_type == "income_expense":
             data = report_service.get_income_expense_data(
                 self.db,

@@ -1,7 +1,7 @@
-from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
+from app.schemas.utc import UtcDatetime
 
 
 class MonthCell(BaseModel):
@@ -87,6 +87,6 @@ class ReportExportRead(BaseModel):
     owners: list[str] | None = None
     # True when it was downloaded as a ZIP holding one file per owner.
     split_by_owner: bool = False
-    created_at: datetime
+    created_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)

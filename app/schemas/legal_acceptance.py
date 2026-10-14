@@ -1,9 +1,9 @@
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.device_token import DevicePlatformEnum
 from app.models.legal_acceptance import LegalDocumentEnum
+from app.schemas.utc import UtcDatetime
 
 
 class LegalAcceptanceCreate(BaseModel):
@@ -26,7 +26,7 @@ class LegalAcceptanceRead(BaseModel):
     version: str
     locale: str
     platform: DevicePlatformEnum
-    accepted_at: datetime
+    accepted_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -25,11 +25,15 @@ value is UTC either way; what differs is whether the tzinfo travels with it.
 Use :func:`utc_now` for anything that stays in Python, :func:`utc_now_naive` for anything
 written to or compared against a column, and :func:`utc_today` for "which UTC day is it".
 
-Business dates are a different question and do **not** belong here: a lease that starts
-today, a payment dated today and a report's date range are the *user's* calendar, not the
-server's, and those keep using ``date.today()``.
+Business dates are a different question: a lease that starts today, a payment dated today
+and "is this rent overdue yet" are the *landlord's* calendar, not the server's. For those use
+:func:`today_in` with the account's timezone — in practice
+``app.repositories.owner_repository.owner_today`` — never ``date.today()``, which is the
+host's calendar and on Railway is simply UTC.
 """
 from datetime import date, datetime, timezone
+from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def utc_now() -> datetime:
@@ -53,3 +57,27 @@ def utc_today() -> date:
     For comparing against stored timestamps, which are UTC. Not for business dates.
     """
     return datetime.now(timezone.utc).date()
+
+
+@lru_cache(maxsize=512)
+def _zone(name: str) -> ZoneInfo | None:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def is_valid_timezone(name: str | None) -> bool:
+    """Whether ``name`` is an IANA zone this server knows, e.g. ``Asia/Jerusalem``."""
+    return bool(name) and _zone(name) is not None
+
+
+def today_in(tz_name: str | None) -> date:
+    """Today's date on the calendar of the IANA zone ``tz_name``.
+
+    Falls back to the UTC calendar when the zone is unknown or not set — an account whose
+    client has never reported a timezone keeps exactly the behaviour it had before
+    accounts carried one.
+    """
+    zone = _zone(tz_name) if tz_name else None
+    return datetime.now(zone or timezone.utc).date()

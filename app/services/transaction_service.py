@@ -29,6 +29,7 @@ from app.services.activity_diff import changed_fields
 from app.services.entitlement_gate import EntitlementGate
 from app.services.firebase_storage import release_file_urls
 from app.services.lease_periods import rent_for_month
+from app.repositories.owner_repository import owner_today
 
 # Snapshots the service maintains itself — the address and the renter's name follow their
 # foreign key, and the expected amount is re-quoted from the lease. None of the three is
@@ -179,7 +180,7 @@ class TransactionService:
                     detail="Renter not found or does not belong to the selected property",
                 )
         currency_code = property.currency_code or settings.DEFAULT_CURRENCY
-        date_of_payment = data.date_of_payment or date.today()
+        date_of_payment = data.date_of_payment or owner_today(self.property_repository.session, owner_id)
         payment_method = (
             PaymentMethodEnum(data.payment_method.value) if data.payment_method else None
         )
@@ -206,7 +207,7 @@ class TransactionService:
         return self.get_transaction(created.id, owner_id)
 
     def get_summary(self, owner_id: str) -> TransactionSummaryResponse:
-        today = date.today()
+        today = owner_today(self.property_repository.session, owner_id)
         # First day of the month 5 months ago (covers 6 months total including current)
         year, month = today.year, today.month - 5
         if month <= 0:

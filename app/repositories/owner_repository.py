@@ -1,16 +1,32 @@
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.clock import utc_now_naive
+from app.clock import today_in, utc_now_naive
 from app.models.owner import Owner
 from app.schemas.tour_state import MAX_ENTRIES
 
 # How stale last_seen_at may get before a "same claims" request triggers a write.
 # Keeps the profile fresh without a DB write on every authenticated request.
 LAST_SEEN_THROTTLE = timedelta(hours=1)
+
+
+def owner_today(session: Session, owner_id: str) -> date:
+    """Today on the landlord's own calendar — the "today" every business rule means.
+
+    Overdue rent, an expiring lease, "is this tenancy still running" and a payment dated
+    today all turn on which day it is *for the landlord*. The server runs on UTC, which is
+    a different day for several hours of every day almost anywhere else: in New York the
+    UTC date rolls over at 8pm, so rent became "overdue" the evening before it was due.
+
+    ``session.get`` is answered from the identity map after the first call in a request,
+    so calling this per query costs one primary-key lookup per request, not per call.
+    UTC when the account has no timezone yet (see ``Owner.timezone``).
+    """
+    owner = session.get(Owner, owner_id) if owner_id else None
+    return today_in(owner.timezone if owner is not None else None)
 
 
 class OwnerRepository:
@@ -26,8 +42,13 @@ class OwnerRepository:
         email: str | None,
         display_name: str | None,
         picture_url: str | None,
+        timezone: str | None = None,
     ) -> Owner:
         """Create or refresh the owner's profile from Firebase token claims.
+
+        ``timezone`` is the IANA zone the client reported (already validated by the
+        caller); ``None`` means "not reported" and leaves the stored one alone, so an old
+        app build that sends no header never erases what a newer one recorded.
 
         Throttled: writes only when the row is missing, a claim changed, or last_seen_at
         is stale (older than LAST_SEEN_THROTTLE). Otherwise returns the row untouched.
@@ -45,6 +66,7 @@ class OwnerRepository:
                 email=email,
                 display_name=display_name,
                 picture_url=picture_url,
+                timezone=timezone,
                 last_seen_at=now,
             )
             self.session.add(candidate)
@@ -75,8 +97,13 @@ class OwnerRepository:
             or owner.picture_url != picture_url
         )
         last_seen_stale = owner.last_seen_at is None or (now - owner.last_seen_at) >= LAST_SEEN_THROTTLE
+        # Not throttled: a landlord who lands in another country should have their "today"
+        # follow them on the first request, not an hour later.
+        timezone_changed = timezone is not None and owner.timezone != timezone
 
-        if claims_changed or last_seen_stale:
+        if claims_changed or last_seen_stale or timezone_changed:
+            if timezone is not None:
+                owner.timezone = timezone
             owner.email = email
             owner.display_name = display_name
             owner.picture_url = picture_url

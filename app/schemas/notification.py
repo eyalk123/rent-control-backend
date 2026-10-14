@@ -1,10 +1,10 @@
 import json
-from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.notification import NotificationTypeEnum
+from app.schemas.utc import UtcDatetime
 
 
 def _as_list(v):
@@ -55,7 +55,7 @@ class NotificationRead(BaseModel):
     data: dict = {}
     read: bool
     dismissed: bool
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 # ── settings ────────────────────────────────────────────────────────────────

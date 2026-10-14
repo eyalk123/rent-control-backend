@@ -1,5 +1,4 @@
 import json
-from datetime import date
 
 from app.models.property import Property, PropertyTypeEnum
 from app.repositories.activity_log_repository import ActivityLogRepository
@@ -14,6 +13,7 @@ from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
 from app.services.firebase_storage import release_file_urls
 from app.services.property_owner_service import PropertyOwnerService
+from app.repositories.owner_repository import owner_today
 
 # Columns holding a Storage path.
 _FILE_FIELDS = ("image_url", "basic_contract_url", "land_registry_url")
@@ -274,7 +274,7 @@ class PropertyService:
             owner_id=owner_id,
             active_only=not include_ended,
         )
-        today = date.today()
+        today = owner_today(self.property_repository.session, owner_id)
         summaries = []
         for r in renters:
             lease_years_data = r.lease_years

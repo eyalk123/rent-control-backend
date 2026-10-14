@@ -1,7 +1,7 @@
-from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel
+from app.schemas.utc import UtcDatetime
 
 
 class ManageLinks(BaseModel):
@@ -29,7 +29,7 @@ class DiscountLookup(BaseModel):
     #: every payment when that is null.
     recur: bool = False
     maximum_recurring_intervals: Optional[int] = None
-    expires_at: Optional[datetime] = None
+    expires_at: Optional[UtcDatetime] = None
     #: `<plan>_<period>` keys the code covers; null means every plan.
     plans: Optional[list[str]] = None
 
@@ -75,7 +75,7 @@ class SubscriptionRead(BaseModel):
     source: Optional[str] = None
     status: Optional[str] = None
     period: Optional[str] = None
-    current_period_end: Optional[datetime] = None
+    current_period_end: Optional[UtcDatetime] = None
 
     #: What the store reported, for display only. Never used to bill or reconcile:
     #: Apple and Google re-map their own FX, so the same plan legitimately reads

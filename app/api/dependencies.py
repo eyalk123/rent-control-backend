@@ -10,6 +10,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from sqlalchemy.orm import Session
 
+from app.clock import is_valid_timezone
 from app.config import settings
 from app.countries.config import DEFAULT_COUNTRY
 from app.services import country_service
@@ -121,12 +122,17 @@ def get_current_owner(
         # covered — and only those.
         request.state.owner_id = uid
 
+    # The device's IANA zone, so business "today" is the landlord's day (see
+    # `owner_repository.owner_today`). Anything unrecognised is dropped, never stored:
+    # a bad header must not move someone's overdue date.
+    reported_tz = request.headers.get("X-Client-Timezone")
     try:
         owner_repository.upsert(
             uid=uid,
             email=current_user.get("email"),
             display_name=current_user.get("name"),
             picture_url=current_user.get("picture"),
+            timezone=reported_tz if is_valid_timezone(reported_tz) else None,
         )
     except Exception as exc:
         logger.warning("Owner profile upsert failed for %s: %s", uid, exc)

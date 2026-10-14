@@ -1,7 +1,7 @@
-from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.utc import UtcDatetime
 
 
 class AgentChatRequest(BaseModel):
@@ -27,7 +27,7 @@ class AgentStatusResponse(BaseModel):
 class ConversationRead(BaseModel):
     id: int
     title: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)

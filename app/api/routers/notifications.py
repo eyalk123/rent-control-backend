@@ -15,6 +15,7 @@ from app.repositories.notification_repository import NotificationRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.notification import NotificationRead
 from app.services.reminder_service import ReminderService, _VOLATILE_DATA_KEYS
+from app.repositories.owner_repository import owner_today
 
 router = APIRouter()
 
@@ -116,7 +117,7 @@ def list_notifications(
     # Alerts about a renter on a locked property would open a 402. Hidden, not deleted.
     hidden_renters = reminder_service.hidden_renter_ids(owner_id)
 
-    today = date.today()
+    today = owner_today(renter_repository.session, owner_id)
     result: list[NotificationRead] = []
     for n, group_read in representatives:
         if status == "unread" and group_read:

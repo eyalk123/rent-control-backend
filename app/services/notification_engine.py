@@ -28,6 +28,7 @@ from app.services.cpi_indexing_service import (
     compute_cpi_amount,
 )
 from app.services.renter_service import RenterService
+from app.repositories.owner_repository import owner_today
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ class NotificationEngine:
     def evaluate_owner(self, owner_id: str, today: date | None = None) -> list[Candidate]:
         """Resolve effective rules per event and return de-duplicated candidates.
         Returns an empty list if the owner has disabled notifications entirely."""
-        today = today or date.today()
+        today = today or owner_today(self.renter_repository.session, owner_id)
         settings = self.settings_repository.get(owner_id)
         if settings is not None and not settings.master_enabled:
             return []
@@ -371,7 +372,7 @@ class NotificationEngine:
         """Estimate, without persisting, how many renters a draft rule matches
         and roughly how many reminders it would produce per cycle (one per
         matched renter per offset)."""
-        today = today or date.today()
+        today = today or owner_today(self.renter_repository.session, owner_id)
         clean_offsets = sorted({o for o in offsets if o >= 0})
         scope = dict(
             property_ids=property_ids, property_owners=property_owners, renter_ids=renter_ids

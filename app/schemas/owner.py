@@ -1,6 +1,6 @@
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
+from app.schemas.utc import UtcDatetime
 
 
 class OwnerRead(BaseModel):
@@ -18,8 +18,8 @@ class OwnerRead(BaseModel):
     # which is the point: there is nothing to migrate and nothing renders differently.
     currency: str | None = None
     language: str | None = None
-    created_at: datetime
-    updated_at: datetime
-    last_seen_at: datetime | None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+    last_seen_at: UtcDatetime | None
 
     model_config = ConfigDict(from_attributes=True)

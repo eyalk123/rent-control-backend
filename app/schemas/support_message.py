@@ -9,13 +9,13 @@ the base64 against an actual decode, and the decoded total against a byte cap.
 """
 import base64
 import binascii
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import settings
 from app.models.support_message import SupportMessageTypeEnum
+from app.schemas.utc import UtcDatetime
 
 #: What a screenshot is allowed to be. Deliberately images only: this field exists
 #: to show us a screen, and widening it to documents would turn a support form into
@@ -75,6 +75,6 @@ class SupportMessageRead(BaseModel):
 
     id: int
     type: SupportMessageTypeEnum
-    created_at: datetime
+    created_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)
