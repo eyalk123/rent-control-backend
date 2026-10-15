@@ -191,12 +191,12 @@ class TestTheJobIsScopedNotNoOpped:
 
 
 class TestTheAssistant:
-    def test_ten_tools_become_nine_without_index_linkage(self):
+    def test_eleven_tools_become_ten_without_index_linkage(self):
         from app.services.agent_tools import TOOL_SCHEMAS, tool_schemas_for
 
-        assert len(TOOL_SCHEMAS) == 10
-        assert len(tool_schemas_for("IL")) == 10
-        assert len(tool_schemas_for("US")) == 9
+        assert len(TOOL_SCHEMAS) == 11
+        assert len(tool_schemas_for("IL")) == 11
+        assert len(tool_schemas_for("US")) == 10
 
     def test_the_cpi_tool_is_the_one_removed(self):
         from app.services.agent_tools import tool_schemas_for

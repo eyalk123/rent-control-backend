@@ -161,6 +161,25 @@ def _parse_parking_numbers(v):
     return None
 
 
+class PropertyReturnsRead(BaseModel):
+    """Yields and appreciation, computed by `app.services.property_returns` — the one place
+    they are calculated. Ratios are fractions (0.042 is 4.2%). A figure is null when an
+    input is missing, and `unavailable` maps its name to why (e.g. "no_current_value")."""
+
+    gross_yield: Optional[float] = None
+    net_yield: Optional[float] = None
+    appreciation: Optional[float] = None
+    appreciation_pct: Optional[float] = None
+    appreciation_per_year: Optional[float] = None
+    annual_rent: Optional[float] = None
+    net_income_12m: Optional[float] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+    unavailable: dict[str, str] = {}
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Import after PropertyBriefRead is defined to avoid circular import
 from app.schemas.renter import RenterRead
 
@@ -180,6 +199,9 @@ class PropertyRead(BaseModel):
     # The latest entry of the value history (see PropertyValuation), or None if there is none.
     current_value: Optional[float] = None
     current_value_date: Optional[date] = None
+    # Set by PropertyService on reads (list and detail), not stored. Null on a locked stub
+    # and on the write responses.
+    returns: Optional[PropertyReturnsRead] = None
     image_url: Optional[str] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None

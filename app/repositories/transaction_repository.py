@@ -217,3 +217,33 @@ class TransactionRepository:
         self.session.delete(transaction)
         self.session.commit()
         return True
+
+
+    def totals_by_property(
+        self, owner_id: str, property_ids: "list[int]", after: date, until: date
+    ) -> dict[int, tuple[Decimal, Decimal]]:
+        """{property_id: (revenue, expenses)} for transactions whose effective date falls
+        after ``after`` and on or before ``until`` — one grouped query for any number of
+        properties. Properties with nothing in the window are absent."""
+        if not property_ids:
+            return {}
+        stmt = (
+            select(Transaction.property_id, Transaction.type, func.sum(Transaction.amount))
+            .where(
+                Transaction.owner_id == owner_id,
+                Transaction.property_id.in_(property_ids),
+                EFFECTIVE_DATE > after,
+                EFFECTIVE_DATE <= until,
+            )
+            .group_by(Transaction.property_id, Transaction.type)
+        )
+        out: dict[int, tuple[Decimal, Decimal]] = {}
+        for property_id, tx_type, total in self.session.execute(stmt):
+            revenue, expenses = out.get(property_id, (Decimal("0"), Decimal("0")))
+            amount = Decimal(str(total or 0))
+            if tx_type == TransactionTypeEnum.REVENUE:
+                revenue += amount
+            else:
+                expenses += amount
+            out[property_id] = (revenue, expenses)
+        return out

@@ -160,7 +160,7 @@ _AGG_FIELDS: dict[str, dict[str, str]] = {
     "properties": {
         "id": "num", "address": "str", "city": "str", "type": "str",
         "property_owner": "str", "occupied": "bool", "renter_count": "num",
-        "current_lease_end": "date", "purchase_price": "num",
+        "current_lease_end": "date", "purchase_price": "num", "current_value": "num",
     },
     "renters": {
         "id": "num", "name": "str", "property_id": "num", "has_property": "bool",
@@ -174,7 +174,7 @@ _AGG_FIELDS: dict[str, dict[str, str]] = {
         "date_of_payment": "date", "month_for": "date",
     },
 }
-_AGG_MONEY = {"purchase_price", "current_monthly_rent", "amount"}
+_AGG_MONEY = {"purchase_price", "current_value", "current_monthly_rent", "amount"}
 _AGG_OPS = {"count", "sum", "avg", "min", "max"}
 _MAX_AGG_ROWS = 5000
 
@@ -300,6 +300,28 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
+        "name": "get_property_returns",
+        "description": (
+            "Yields and appreciation, computed by the server — the same figures the app shows. "
+            "Use for ANY question about yield, return, ROI, appreciation, how much a property has "
+            "gone up, or which property performs best/worst; never derive them yourself. "
+            "gross_yield = current monthly rent x 12 / current value. net_yield = (revenue - "
+            "expenses over the last 12 months) / current value. appreciation = current value - "
+            "purchase price; per_year is compound growth since the purchase date. Values are the "
+            "owner's own estimates, so say which value and date a figure is based on. A figure "
+            "that is null comes with `unavailable`: tell the user what is missing (e.g. "
+            "no_current_value -> they can add a value on the property page) instead of guessing. "
+            "Omit property_id for every property (with ranking-ready numbers)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "property_id": {"type": "integer", "description": "One property. Omit for all."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "list_renters",
         "description": (
             "List renters (each renter IS a lease): name, property, lease start and computed end, "
@@ -338,7 +360,8 @@ TOOL_SCHEMAS: list[dict] = [
             "Dates are ISO YYYY-MM-DD. Optional group_by returns a per-group breakdown.\n"
             "Fields — properties: id, address, city, type, property_owner, occupied(bool — has a "
             "renter whose lease has not ended), renter_count (every renter ever linked, past "
-            "tenants included), current_lease_end(date), purchase_price(money). "
+            "tenants included), current_lease_end(date), purchase_price(money), "
+            "current_value(money — the owner's latest estimate; null when none recorded). "
             "renters: id, name, property_id, has_property(bool), lease_start(date), lease_end(date), "
             "contract_term_years, option_years, current_monthly_rent(money), rent_escalation_mode, "
             "payment_frequency, insurance_type. "
@@ -447,7 +470,7 @@ TOOL_REQUIREMENTS: dict[str, str] = {
 
 
 def tool_schemas_for(country_code: str | None) -> list[dict]:
-    """The tools this owner's country can actually use — ten become nine outside Israel.
+    """The tools this owner's country can actually use — eleven become ten outside Israel.
 
     Filtered before the schemas reach the model rather than after: a tool the model can see
     is a tool it will eventually call, and refusing it at dispatch wastes a round-trip and
@@ -667,6 +690,9 @@ class AgentTools:
                     "renter_count": len(prop_renters),
                     "current_lease_end": max(lease_ends).isoformat() if lease_ends else None,
                     "purchase_price": _num(p.purchase_price),
+                    # None, not 0, when no value is recorded: a sum must not count an
+                    # unvalued property as worth nothing.
+                    "current_value": _num(p.current_value) if p.current_value is not None else None,
                 }
             )
         return rows
@@ -837,6 +863,12 @@ class AgentTools:
             "apartment": p.apartment,
             "purchase_price": _num(p.purchase_price),
             "purchase_price_display": format_money(p.purchase_price, style),
+            "purchase_date": _iso(p.purchase_date),
+            "current_value": _num(p.current_value) if p.current_value is not None else None,
+            "current_value_display": (
+                format_money(p.current_value, style) if p.current_value is not None else None
+            ),
+            "current_value_date": _iso(p.current_value_date),
             "property_tax": _num(p.property_tax) if p.property_tax is not None else None,
             "house_committee": _num(p.house_committee) if p.house_committee is not None else None,
             "status": "occupied" if current else "vacant",
@@ -859,6 +891,62 @@ class AgentTools:
                 "net_display": format_money(net, style),
             },
         }
+
+    def _tool_get_property_returns(self, owner_id: str, params: dict) -> dict:
+        """Reads `returns` off the property service — the one place they are computed — and
+        adds display strings. Nothing is calculated here."""
+        style = self._money(owner_id)
+        property_id = params.get("property_id")
+        if property_id is not None:
+            p = self.property_service.get_property(property_id, owner_id)
+            if p is None:
+                return {"error": "not found"}
+            properties = [p]
+        else:
+            properties = self.property_service.list_properties(owner_id, include_locked=False)
+
+        def pct(ratio, signed=False):
+            if ratio is None:
+                return None
+            sign = "+" if signed and ratio > 0 else ""
+            return "{}{:.1f}%".format(sign, ratio * 100)
+
+        def money(amount):
+            return format_money(amount, style) if amount is not None else None
+
+        out = []
+        for p in properties:
+            r = p.returns
+            out.append(
+                {
+                    "property_id": p.id,
+                    "address": p.address,
+                    "city": p.city,
+                    "current_value": money(p.current_value),
+                    "current_value_date": _iso(p.current_value_date),
+                    "purchase_price": money(p.purchase_price),
+                    "purchase_date": _iso(p.purchase_date),
+                    "annual_rent": money(r.annual_rent),
+                    "net_income_last_12_months": money(r.net_income_12m),
+                    "window": {"after": _iso(r.window_start), "until": _iso(r.window_end)},
+                    "gross_yield": r.gross_yield,
+                    "gross_yield_display": pct(r.gross_yield),
+                    "net_yield": r.net_yield,
+                    "net_yield_display": pct(r.net_yield),
+                    "appreciation": r.appreciation,
+                    "appreciation_display": (
+                        ("+" if r.appreciation > 0 else "") + money(r.appreciation)
+                        if r.appreciation is not None
+                        else None
+                    ),
+                    "appreciation_pct_display": pct(r.appreciation_pct, signed=True),
+                    "appreciation_per_year_display": pct(r.appreciation_per_year, signed=True),
+                    "unavailable": r.unavailable,
+                }
+            )
+        if property_id is not None:
+            return out[0]
+        return {"count": len(out), "properties": out}
 
     def _tool_list_renters(self, owner_id: str, params: dict) -> dict:
         style = self._money(owner_id)

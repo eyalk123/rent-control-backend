@@ -104,7 +104,7 @@ is what makes the caps burst-safe under concurrency.
 | `AGENT_RETENTION_DAYS` | `90` | Age-out for conversations. One of four windows swept by `POST /internal/run-retention` (with `ACTIVITY_LOG_RETENTION_DAYS`, `NOTIFICATION_RETENTION_DAYS` and `CLIENT_USAGE_RETENTION_DAYS`, all `365`). `0` disables a class; a window without a scheduled job deletes nothing. `?dry_run=true` counts without deleting |
 
 Tables: `agent_conversations`, `agent_messages`, `agent_usage_logs` (`app/models/agent.py`). All
-ten tools in `app/services/agent_tools.py` are **read-only** — the agent answers and cites, it
+eleven tools in `app/services/agent_tools.py` are **read-only** — the agent answers and cites, it
 never writes. `agent_messages` stores replies verbatim, which means tenant PII at rest; account
 deletion removes it (`user_service.delete_account`).
 

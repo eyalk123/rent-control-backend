@@ -18,6 +18,7 @@ from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
 from app.services.firebase_storage import release_file_urls
 from app.services.property_owner_service import PropertyOwnerService
+from app.services.property_returns import returns_for_properties
 from app.repositories.owner_repository import owner_today
 
 # Columns holding a Storage path.
@@ -88,6 +89,20 @@ class PropertyService:
             locked=True,
         )
 
+    def _attach_returns(self, owner_id: str, properties: list) -> None:
+        """Set `returns` on each property — one transactions query for the whole list.
+
+        Like `locked`, an attribute on the ORM instance that travels to the response and is
+        never written back. Judged on the landlord's own calendar day.
+        """
+        if not properties:
+            return
+        session = self.property_repository.session
+        today = owner_today(session, owner_id)
+        by_id = returns_for_properties(session, owner_id, properties, today)
+        for property in properties:
+            property.returns = by_id[property.id]
+
     def list_properties(self, owner_id: str, include_locked: bool = True):
         """Every property, with locked ones reduced to a stub.
 
@@ -97,9 +112,13 @@ class PropertyService:
         properties = self._mark_locked(
             owner_id, self.property_repository.get_all_by_owner(owner_id)
         )
-        if self.entitlement_gate is None:
-            return properties
-        hidden = self.entitlement_gate.hidden_property_ids(owner_id)
+        hidden = (
+            self.entitlement_gate.hidden_property_ids(owner_id)
+            if self.entitlement_gate is not None
+            else set()
+        )
+        # Not for a locked property: it reaches the client only as a stub.
+        self._attach_returns(owner_id, [p for p in properties if p.id not in hidden])
         if not hidden:
             return properties
         if not include_locked:
@@ -114,6 +133,7 @@ class PropertyService:
         # confirming it exists through a 402.
         if self.entitlement_gate is not None:
             self.entitlement_gate.require_property_unlocked(owner_id, property_id)
+        self._attach_returns(owner_id, [property])
         return self._mark_locked(owner_id, [property])[0]
 
     def _owner_country_and_currency(self, owner_id: str) -> tuple[str | None, str | None]:
