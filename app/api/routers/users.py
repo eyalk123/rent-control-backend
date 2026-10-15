@@ -233,7 +233,7 @@ def export_my_data(
             detail="Export failed. Please try again.",
         )
 
-    filename = f"rentvance-export-{owner_today(db, current_user["user_id"]).isoformat()}.zip"
+    filename = f"rentvance-export-{owner_today(db, current_user['user_id']).isoformat()}.zip"
     return Response(
         content=content,
         media_type="application/zip",
