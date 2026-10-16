@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, true
 from sqlalchemy.orm import relationship
 
 from app.clock import utc_now_naive
@@ -30,6 +30,11 @@ class PropertyMortgage(Base):
     charge_day = Column(Integer, nullable=False)
     # Optional: when the mortgage is paid off. From the day after, it no longer counts.
     end_date = Column(Date, nullable=True)
+    # Whether part of the loan is on the prime track, whose rate follows the Bank of Israel:
+    # the one part of the payment a rate decision moves. Asked so the owner can be told when
+    # the rate changes. On unless the owner turns it off — most Israeli mortgages have a prime
+    # part, and an owner who isn't sure is better told once too often than missed.
+    has_prime_track = Column(Boolean, nullable=False, default=True, server_default=true())
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 

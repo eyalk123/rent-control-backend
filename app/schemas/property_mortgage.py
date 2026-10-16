@@ -27,6 +27,8 @@ class MortgageCreate(BaseModel):
     payment_from: Optional[date] = None
     charge_day: int = Field(ge=1, le=31)
     end_date: Optional[date] = None
+    # Part of the loan is on the prime track. On unless sent off — see PropertyMortgage.
+    has_prime_track: bool = True
 
     _monthly_payment_positive = field_validator("monthly_payment")(_positive)
 
@@ -37,6 +39,7 @@ class MortgageUpdate(BaseModel):
     charge_day: Optional[int] = Field(default=None, ge=1, le=31)
     # Sent as null to clear it.
     end_date: Optional[date] = None
+    has_prime_track: Optional[bool] = None
 
 
 class MortgagePaymentCreate(BaseModel):
@@ -60,6 +63,7 @@ class MortgageRead(BaseModel):
     property_id: int
     charge_day: int
     end_date: Optional[date] = None
+    has_prime_track: bool = True
     # The payment in force on the owner's today; null before the first entry starts and
     # after `end_date`. Set by MortgageService, not stored.
     current_payment: Optional[float] = None

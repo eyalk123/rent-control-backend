@@ -174,6 +174,23 @@ def test_form_creates_property_with_mortgage(client):
     assert [p["effective_from"] for p in m["payments"]] == [TODAY.isoformat()]
 
 
+def test_prime_track_defaults_on_and_follows_the_form(client):
+    """On unless the form turns it off; an edit sets it either way."""
+    prop = client.post(
+        "/properties", json={**_FORM, "mortgage": {"monthly_payment": 5000, "charge_day": 10}}
+    ).json()
+    assert prop["mortgage"]["has_prime_track"] is True
+    form = {"monthly_payment": 5000, "charge_day": 10}
+    url = f"/properties/{prop['id']}"
+    off = client.patch(url, json={"mortgage": {**form, "has_prime_track": False}}).json()
+    assert off["mortgage"]["has_prime_track"] is False
+    on = client.patch(url, json={"mortgage": {**form, "has_prime_track": True}}).json()
+    assert on["mortgage"]["has_prime_track"] is True
+    # A save that leaves the mortgage out leaves the switch too.
+    client.patch(url, json={"mortgage": {**form, "has_prime_track": False}})
+    assert client.patch(url, json={"city": "Haifa"}).json()["mortgage"]["has_prime_track"] is False
+
+
 def test_property_without_mortgage_reads_null(client):
     assert client.post("/properties", json=_FORM).json()["mortgage"] is None
 

@@ -354,6 +354,7 @@ class PropertyService:
             entry.amount = data.monthly_payment
         mortgage.charge_day = data.charge_day
         mortgage.end_date = data.end_date
+        mortgage.has_prime_track = data.has_prime_track
 
     @staticmethod
     def _valuation(data: PropertyValuationCreate) -> PropertyValuation:

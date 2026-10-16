@@ -64,7 +64,10 @@ class MortgageService:
         if self.repository.get_by_property(property_id):
             raise HTTPException(status_code=409, detail="This property already has a mortgage")
         mortgage = PropertyMortgage(
-            property_id=property_id, charge_day=data.charge_day, end_date=data.end_date
+            property_id=property_id,
+            charge_day=data.charge_day,
+            end_date=data.end_date,
+            has_prime_track=data.has_prime_track,
         )
         mortgage.payments.append(
             MortgagePayment(
@@ -86,6 +89,8 @@ class MortgageService:
             mortgage.charge_day = fields["charge_day"]
         if "end_date" in fields:
             mortgage.end_date = fields["end_date"]
+        if fields.get("has_prime_track") is not None:
+            mortgage.has_prime_track = fields["has_prime_track"]
         return self._with_current([self.repository.save(mortgage)], owner_id)[0]
 
     def delete(self, property_id: int, mortgage_id: int, owner_id: str) -> bool:
