@@ -13,6 +13,13 @@ def _positive(v: float) -> float:
 
 
 class MortgageCreate(BaseModel):
+    """A mortgage as the property form and `POST /mortgages` send it.
+
+    From the property form it is also the *edit*: there `monthly_payment` corrects the amount
+    in force today instead of adding one. A change from a date on is
+    `POST /mortgages/{id}/payments`, which keeps the months before it as they were.
+    """
+
     # Principal and interest together — the figure on the bank statement.
     monthly_payment: float
     # When that payment applies from. Omitted means today: the owner is saying what they

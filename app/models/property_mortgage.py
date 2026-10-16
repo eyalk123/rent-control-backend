@@ -13,8 +13,11 @@ class PropertyMortgage(Base):
     — a wrong number shown as right is worse than none. The bank's own figure, typed in, is
     the one thing that is always correct.
 
-    One property per mortgage. A loan registered on several properties needs a rule for
-    splitting it, which has not been decided; a property may carry several mortgages.
+    One property per mortgage, and — by the API, not the schema — one mortgage per property.
+    An Israeli mortgage is normally one loan split into tracks with a single monthly payment,
+    so a second loan on the same flat is rare enough not to design the form around. The table
+    would hold more if that changes. A loan registered on several properties needs a rule for
+    splitting it, which has not been decided.
     """
 
     __tablename__ = "property_mortgages"
@@ -41,18 +44,24 @@ class PropertyMortgage(Base):
         order_by="(MortgagePayment.effective_from.desc(), MortgagePayment.id.desc())",
     )
 
+    def entry_on(self, day) -> "MortgagePayment | None":
+        """The payment entry in force on `day`: the latest that had started by then, ignoring
+        `end_date`. None before the first entry starts."""
+        for payment in self.payments:
+            if payment.effective_from <= day:
+                return payment
+        return None
+
     def payment_on(self, day) -> float | None:
-        """The monthly payment in force on `day`: the latest entry that had started by then.
+        """The monthly payment in force on `day`.
 
         None before the first entry and after `end_date` — a mortgage not yet running, or
         already paid off, costs nothing that month.
         """
         if self.end_date is not None and day > self.end_date:
             return None
-        for payment in self.payments:
-            if payment.effective_from <= day:
-                return payment.amount
-        return None
+        entry = self.entry_on(day)
+        return entry.amount if entry is not None else None
 
 
 class MortgagePayment(Base):

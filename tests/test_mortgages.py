@@ -137,17 +137,100 @@ def test_owner_scoped(client_factory, db_session):
     assert b.delete(f"{_url(prop.id)}/{m['id']}").status_code == 404
 
 
+def test_one_mortgage_per_property(client, db_session):
+    prop = make_property(db_session)
+    assert client.post(_url(prop.id), json={"monthly_payment": 5000, "charge_day": 10}).status_code == 201
+    assert client.post(_url(prop.id), json={"monthly_payment": 2000, "charge_day": 1}).status_code == 409
+
+
 def test_deleting_mortgage_or_property_removes_everything(client, db_session):
     prop = make_property(db_session)
     first = client.post(_url(prop.id), json={"monthly_payment": 5000, "charge_day": 10}).json()
-    client.post(_url(prop.id), json={"monthly_payment": 2000, "charge_day": 1})
-
     assert client.delete(f"{_url(prop.id)}/{first['id']}").status_code == 204
-    assert len(client.get(_url(prop.id)).json()) == 1
+    assert client.get(_url(prop.id)).json() == []
+    assert db_session.query(MortgagePayment).count() == 0
 
+    client.post(_url(prop.id), json={"monthly_payment": 2000, "charge_day": 1})
     assert client.delete(f"/properties/{prop.id}").status_code == 204
     assert db_session.query(PropertyMortgage).count() == 0
     assert db_session.query(MortgagePayment).count() == 0
+
+
+# --- the property form's switch ------------------------------------------------------------
+
+_FORM = {"address": "1 Herzl St", "city": "Tel Aviv", "type": "apartment"}
+
+
+def test_form_creates_property_with_mortgage(client):
+    body = client.post(
+        "/properties",
+        json={**_FORM, "mortgage": {"monthly_payment": 5358, "charge_day": 10, "end_date": "2049-10-10"}},
+    )
+    assert body.status_code == 201, body.text
+    m = body.json()["mortgage"]
+    assert m["current_payment"] == 5358
+    assert m["charge_day"] == 10
+    assert m["end_date"] == "2049-10-10"
+    assert [p["effective_from"] for p in m["payments"]] == [TODAY.isoformat()]
+
+
+def test_property_without_mortgage_reads_null(client):
+    assert client.post("/properties", json=_FORM).json()["mortgage"] is None
+
+
+def test_form_edit_corrects_todays_amount_without_adding_history(client):
+    prop = client.post(
+        "/properties", json={**_FORM, "mortgage": {"monthly_payment": 5385, "charge_day": 10}}
+    ).json()
+    body = client.patch(
+        f"/properties/{prop['id']}",
+        json={"mortgage": {"monthly_payment": 5358, "charge_day": 12, "end_date": None}},
+    ).json()
+    m = body["mortgage"]
+    assert m["current_payment"] == 5358
+    assert m["charge_day"] == 12
+    assert [p["amount"] for p in m["payments"]] == [5358]  # corrected, not appended
+
+
+def test_form_edit_corrects_the_entry_in_force_not_a_future_one(client):
+    prop = client.post(
+        "/properties",
+        json={**_FORM, "mortgage": {"monthly_payment": 5000, "payment_from": "2024-01-01", "charge_day": 10}},
+    ).json()
+    m = prop["mortgage"]
+    client.post(
+        f"{_url(prop['id'])}/{m['id']}/payments",
+        json={"amount": 6000, "effective_from": (TODAY + timedelta(days=40)).isoformat()},
+    )
+    body = client.patch(
+        f"/properties/{prop['id']}", json={"mortgage": {"monthly_payment": 5100, "charge_day": 10}}
+    ).json()
+    assert [p["amount"] for p in body["mortgage"]["payments"]] == [6000, 5100]
+
+
+def test_form_switch_off_deletes_mortgage_and_history(client, db_session):
+    prop = client.post(
+        "/properties", json={**_FORM, "mortgage": {"monthly_payment": 5000, "charge_day": 10}}
+    ).json()
+    body = client.patch(f"/properties/{prop['id']}", json={"mortgage": None}).json()
+    assert body["mortgage"] is None
+    assert db_session.query(PropertyMortgage).count() == 0
+    assert db_session.query(MortgagePayment).count() == 0
+
+
+def test_form_save_without_mortgage_key_leaves_it(client):
+    """Older mobile builds never send `mortgage`; their saves must not delete it."""
+    prop = client.post(
+        "/properties", json={**_FORM, "mortgage": {"monthly_payment": 5000, "charge_day": 10}}
+    ).json()
+    body = client.patch(f"/properties/{prop['id']}", json={"city": "Haifa"}).json()
+    assert body["mortgage"]["current_payment"] == 5000
+
+
+def test_form_mortgage_refused_outside_israel(client, db_session):
+    prop = make_property(db_session, country="GB")
+    r = client.patch(f"/properties/{prop.id}", json={"mortgage": {"monthly_payment": 1, "charge_day": 1}})
+    assert r.status_code == 422
 
 
 # --- the cash flow after it ----------------------------------------------------------------
@@ -160,8 +243,7 @@ def test_cash_flow_on_the_property(client, db_session):
         db_session, property_id=prop.id, amount=6000, type=TransactionTypeEnum.EXPENSE,
         date_of_payment=TODAY - timedelta(days=10),
     )
-    client.post(_url(prop.id), json={"monthly_payment": 5000, "charge_day": 10})
-    client.post(_url(prop.id), json={"monthly_payment": 358, "charge_day": 15})
+    client.post(_url(prop.id), json={"monthly_payment": 5358, "charge_day": 10})
 
     r = client.get(f"/properties/{prop.id}").json()["returns"]
     assert r["monthly_mortgage"] == 5358

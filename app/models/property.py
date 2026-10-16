@@ -108,6 +108,11 @@ class Property(Base):
     )
 
     @property
+    def mortgage(self):
+        """The property's mortgage, or None. One per property — see PropertyMortgage."""
+        return self.mortgages[0] if self.mortgages else None
+
+    @property
     def current_value(self) -> float | None:
         return self.valuations[0].value if self.valuations else None
 

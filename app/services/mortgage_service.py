@@ -61,6 +61,8 @@ class MortgageService:
     def create(self, property_id: int, data: MortgageCreate, owner_id: str) -> PropertyMortgage | None:
         if self._property(property_id, owner_id) is None:
             return None
+        if self.repository.get_by_property(property_id):
+            raise HTTPException(status_code=409, detail="This property already has a mortgage")
         mortgage = PropertyMortgage(
             property_id=property_id, charge_day=data.charge_day, end_date=data.end_date
         )

@@ -3,6 +3,7 @@ import json
 from fastapi import HTTPException
 
 from app.models.property import Property, PropertyTypeEnum
+from app.models.property_mortgage import MortgagePayment, PropertyMortgage
 from app.models.property_valuation import PropertyValuation
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.owner_repository import OwnerRepository
@@ -11,6 +12,7 @@ from app.repositories.property_repository import PropertyRepository
 from app.repositories.property_valuation_repository import PropertyValuationRepository
 from app.repositories.renter_repository import RenterRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas.property_mortgage import MortgageCreate
 from app.schemas.property_valuation import PropertyValuationCreate
 from app.schemas.renter import PropertyRenterSummary
 from app.services import country_service
@@ -102,6 +104,15 @@ class PropertyService:
         by_id = returns_for_properties(session, owner_id, properties, today)
         for property in properties:
             property.returns = by_id[property.id]
+        self._attach_current_payment(properties, today)
+
+    @staticmethod
+    def _attach_current_payment(properties: list, today) -> None:
+        """Set `current_payment` on each property's mortgage — like `returns`, an attribute
+        that travels to the response and is never written back."""
+        for property in properties:
+            for mortgage in property.mortgages:
+                mortgage.current_payment = mortgage.payment_on(today)
 
     def list_properties(self, owner_id: str, include_locked: bool = True):
         """Every property, with locked ones reduced to a stub.
@@ -217,8 +228,12 @@ class PropertyService:
         if data.valuation is not None:
             self._check_valuation_date(data.valuation, owner_id)
             property.valuations.append(self._valuation(data.valuation))
+        if data.mortgage is not None:
+            self._set_mortgage(property, data.mortgage, owner_id)
         created = self.property_repository.create(property)
-        return self.property_repository.get_by_id(created.id, owner_id)
+        return self._with_current_payment(
+            self.property_repository.get_by_id(created.id, owner_id), owner_id
+        )
 
     def update_property(self, property_id: int, data: PropertyUpdate, owner_id: str):
         property = self.property_repository.get_by_id(property_id, owner_id)
@@ -235,6 +250,11 @@ class PropertyService:
         if data.valuation is not None:
             self._check_valuation_date(data.valuation, owner_id)
             property.valuations.append(self._valuation(data.valuation))
+        # Not a column either. Present-and-null is the switch turned off; absent is "leave
+        # it", which is all an older client ever sends.
+        if "mortgage" in update_dict:
+            update_dict.pop("mortgage")
+            self._set_mortgage(property, data.mortgage, owner_id)
         if "property_owner_id" in update_dict or "property_owner" in update_dict:
             update_dict["property_owner_id"] = self._property_owner_id(update_dict, owner_id)
         update_dict.pop("property_owner", None)
@@ -267,7 +287,9 @@ class PropertyService:
         ]
         self.property_repository.update(property, update_dict)
         release_file_urls(self.property_repository.session, owner_id, replaced)
-        return self.property_repository.get_by_id(property_id, owner_id)
+        return self._with_current_payment(
+            self.property_repository.get_by_id(property_id, owner_id), owner_id
+        )
 
     def delete_property(self, property_id: int, owner_id: str) -> bool:
         property = self.property_repository.get_by_id(property_id, owner_id)
@@ -289,6 +311,49 @@ class PropertyService:
         self.property_repository.delete_obj(property)
         release_file_urls(self.property_repository.session, owner_id, urls)
         return True
+
+    def _with_current_payment(self, property, owner_id: str):
+        self._attach_current_payment(
+            [property], owner_today(self.property_repository.session, owner_id)
+        )
+        return property
+
+    def _set_mortgage(self, property, data: MortgageCreate | None, owner_id: str) -> None:
+        """Apply the form's mortgage switch to `property`, committed with the rest of the save.
+
+        None deletes the mortgage and its payment history (the switch turned off; the form
+        confirms first). Otherwise the property's one mortgage is created, or corrected: the
+        charge day and end date are replaced, and so is the amount *in force today* — a typo
+        fixed is not a change of payment, so it adds nothing to the history. A change from a
+        date on goes through `POST /mortgages/{id}/payments` instead.
+
+        Gated on the capability like the mortgage routes, on the property's country (a new
+        property has already copied the account's).
+        """
+        if data is None:
+            property.mortgages.clear()
+            return
+        if not country_service.capabilities_for(property.country).mortgage:
+            config = country_service.config_for(property.country)
+            raise HTTPException(
+                status_code=422, detail=f"Mortgages are not available in {config.name} yet."
+            )
+        today = owner_today(self.property_repository.session, owner_id)
+        mortgage = property.mortgage
+        if mortgage is None:
+            mortgage = PropertyMortgage()
+            mortgage.payments.append(
+                MortgagePayment(
+                    amount=data.monthly_payment, effective_from=data.payment_from or today
+                )
+            )
+            property.mortgages.append(mortgage)
+        else:
+            # The entry today's payment comes from; the newest one if none has started yet.
+            entry = mortgage.entry_on(today) or mortgage.payments[0]
+            entry.amount = data.monthly_payment
+        mortgage.charge_day = data.charge_day
+        mortgage.end_date = data.end_date
 
     @staticmethod
     def _valuation(data: PropertyValuationCreate) -> PropertyValuation:

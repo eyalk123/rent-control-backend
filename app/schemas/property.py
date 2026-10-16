@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.schemas.property_mortgage import MortgageCreate, MortgageRead
 from app.schemas.property_valuation import PropertyValuationCreate
 from app.schemas.stored_file import StoredFile
 
@@ -55,6 +56,8 @@ class PropertyCreate(BaseModel):
     # A new entry for the value history, added by the form's "+" before the save. Appended,
     # never a replacement: earlier values stay in the history.
     valuation: Optional[PropertyValuationCreate] = None
+    # The form's mortgage switch, on. Israel only (422 elsewhere).
+    mortgage: Optional[MortgageCreate] = None
     image_url: StoredFile = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
@@ -101,6 +104,11 @@ class PropertyUpdate(BaseModel):
     # A new entry for the value history, added by the form's "+" before the save. Appended,
     # never a replacement: earlier values stay in the history.
     valuation: Optional[PropertyValuationCreate] = None
+    # The form's mortgage switch. Omitted: the mortgage is left alone (older mobile builds
+    # never send it). An object: creates the mortgage, or corrects it — the amount in force
+    # today is overwritten, not added to the history. `null`: the switch was turned off, and
+    # the mortgage and its history are deleted.
+    mortgage: Optional[MortgageCreate] = None
     image_url: StoredFile = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
@@ -205,6 +213,8 @@ class PropertyRead(BaseModel):
     # The latest entry of the value history (see PropertyValuation), or None if there is none.
     current_value: Optional[float] = None
     current_value_date: Optional[date] = None
+    # The property's mortgage, or None — which is what the form's mortgage switch reads.
+    mortgage: Optional[MortgageRead] = None
     # Set by PropertyService on reads (list and detail), not stored. Null on a locked stub
     # and on the write responses.
     returns: Optional[PropertyReturnsRead] = None
