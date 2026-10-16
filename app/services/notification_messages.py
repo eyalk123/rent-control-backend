@@ -82,6 +82,27 @@ _MESSAGES = {
             ),
         },
     },
+    # The Bank of Israel moved the rate, to owners whose mortgage has a prime track. Prime,
+    # not the bank's own rate, because prime is the figure on the mortgage statement.
+    "mortgage_rate_change": {
+        "en": {
+            "title_up": "The prime rate went up",
+            "title_down": "The prime rate went down",
+            "body": (
+                "Prime is now {new}% (was {old}%). If part of your mortgage is on prime, "
+                "your monthly payment changes too. Update it on the property when you see "
+                "the new amount."
+            ),
+        },
+        "he": {
+            "title_up": "ריבית הפריים עלתה",
+            "title_down": "ריבית הפריים ירדה",
+            "body": (
+                "הפריים עומד עכשיו על {new}% (היה {old}%). אם חלק מהמשכנתא שלך במסלול "
+                "פריים, גם ההחזר החודשי ישתנה. עדכנו אותו בנכס כשתראו את הסכום החדש."
+            ),
+        },
+    },
     # One push instead of a burst: the index publishes for the whole portfolio at once,
     # so an owner with many CPI leases would otherwise get a pile of notifications in
     # the same second.
@@ -156,6 +177,20 @@ def render_cpi_rent_change(
         delta=format_delta(data.get("delta"), data.get("delta_percent"), style),
         date=_format_date(data.get("effective_date")),
     )
+
+
+def render_mortgage_rate_change(locale: str, *, data: dict) -> tuple[str, str]:
+    copy = _MESSAGES["mortgage_rate_change"][normalize_locale(locale)]
+    new, old = data.get("new_prime"), data.get("old_prime")
+    up = new is not None and old is not None and new > old
+    return copy["title_up" if up else "title_down"], copy["body"].format(
+        new=_format_rate(new), old=_format_rate(old)
+    )
+
+
+def _format_rate(value: float | None) -> str:
+    """``4.75`` -> ``4.75``, ``5.0`` -> ``5``."""
+    return "—" if value is None else f"{value:g}"
 
 
 def render_cpi_digest(locale: str, *, count: int) -> tuple[str, str]:

@@ -68,6 +68,7 @@ All env vars are declared in `app/config.py` (`Settings`) — that file is the s
 | `CPI_INDEX_ID` | No | Override for Israel's configured series id; the per-country series lives in `app/countries/config.py` (`IndexSeries`). Default `120010` (general Consumer Price Index) |
 | `BOI_API_BASE_URL` | No | **Fallback** CPI source (Bank of Israel SDMX); default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2` |
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — BOI's republication of the same series as `CPI_INDEX_ID` |
+| `BOI_RATE_SERIES_CODE` | No | Default `MNT_RIB_BOI_D` — the Bank of Israel interest rate, daily. Stored as its changes in `policy_rates` and read by the mortgage rate-change alert. Refreshed inline by `run-reminders`, only when someone has a prime-track mortgage |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`; past it `run-cpi-indexing` returns 503 instead of a green 200 |
 | `ANTHROPIC_API_KEY` | No | Enables `POST /extract/lease`, `POST /extract/receipt` and the chat agent; empty ⇒ all return 503 |
 | `EXTRACTION_MODEL` | No | Lease **and receipt** extraction model; default `claude-sonnet-5-5`. Current models reject a forced `tool_choice`, so `_call_tool` asks for the tool and retries once when the reply has no call — keep it that way when changing models |

@@ -86,6 +86,24 @@ def _collapse(rows: list[Notification]) -> list[tuple[Notification, bool]]:
     return out
 
 
+def _owner_level(n: Notification, group_read: bool) -> NotificationRead:
+    """A feed item that names no renter: the mortgage rate change. Carries the property
+    when only one mortgage is concerned, so the client can open it."""
+    data = json.loads(n.data) if n.data else {}
+    property_ids = data.get("property_ids") or []
+    return NotificationRead(
+        id=n.id,
+        type=n.type,
+        renter_id=0,
+        property_id=property_ids[0] if len(property_ids) == 1 else None,
+        offset=n.offset,
+        data=data,
+        read=group_read,
+        dismissed=n.dismissed_at is not None,
+        created_at=n.sent_at,
+    )
+
+
 @router.get("", response_model=list[NotificationRead])
 def list_notifications(
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -93,13 +111,19 @@ def list_notifications(
     notification_repository: Annotated[NotificationRepository, Depends(get_notification_repository)],
     renter_repository: Annotated[RenterRepository, Depends(get_renter_repository)],
     status: Literal["unread", "all"] = "all",
+    include_mortgage_alerts: bool = False,
 ):
     """The in-app feed. Freshens itself on read (persists any newly-due rows, no
     push) so the website stays current without waiting for the daily cron.
 
     Multiple offsets for the same (type, renter, period) — e.g. the default
     rent-due offsets [0, 3] — are collapsed to a single, most-urgent item so the
-    feed reads as a to-handle list. Push (the cron path) still fires per offset."""
+    feed reads as a to-handle list. Push (the cron path) still fires per offset.
+
+    `mortgage_rate_change` is about the owner, not a renter, and app builds older than it
+    render any unknown type as an overdue-rent row. Clients that know it ask for it with
+    `include_mortgage_alerts`; everyone else never sees it here (the push still reaches
+    them — it needs only a title and a route)."""
     owner_id = current_user["user_id"]
     # Off means off: with notifications disabled nothing is generated or reconciled, so
     # the stored rows are frozen and would go stale. They are kept, not dismissed — on
@@ -123,6 +147,10 @@ def list_notifications(
         if status == "unread" and group_read:
             continue
         if _lapsed(n, today):
+            continue
+        if n.type == NotificationTypeEnum.MORTGAGE_RATE_CHANGE:
+            if include_mortgage_alerts:
+                result.append(_owner_level(n, group_read))
             continue
         if n.entity_id in hidden_renters:
             continue

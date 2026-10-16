@@ -18,6 +18,9 @@ class NotificationTypeEnum(str, enum.Enum):
     OVERDUE = "overdue"
     LEASE_EXPIRING = "lease_expiring"
     CPI_RENT_CHANGE = "cpi_rent_change"
+    # Owner-level, not about a renter: `entity_id` is 0 and `period_key` the day the Bank
+    # of Israel rate changed. See NotificationEngine._rate_candidates.
+    MORTGAGE_RATE_CHANGE = "mortgage_rate_change"
 
 
 class Notification(Base):

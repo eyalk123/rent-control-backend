@@ -28,6 +28,8 @@ from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
 from app.repositories.cpi_index_repository import CpiIndexRepository
+from app.repositories.policy_rate_repository import PolicyRateRepository
+from app.repositories.property_mortgage_repository import PropertyMortgageRepository
 from app.repositories.job_run_repository import JobRunRepository
 from app.repositories.legal_acceptance_repository import LegalAcceptanceRepository
 from app.repositories.owner_repository import OwnerRepository
@@ -43,6 +45,7 @@ from app.services.agent_service import AgentService
 from app.services.boi_index_service import BoiIndexService
 from app.services.cbs_index_service import CbsIndexService
 from app.services.cpi_indexing_service import CpiIndexingService
+from app.services.policy_rate_service import PolicyRateService
 from app.services.lease_generation_service import LeaseGenerationService
 from app.services.device_token_service import DeviceTokenService
 from app.services.document_extraction_service import DocumentExtractionService
@@ -445,6 +448,7 @@ def get_notification_engine(
     property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
     cpi_index_repository: Annotated[CpiIndexRepository, Depends(get_cpi_index_repository)],
     owner_repository: Annotated[OwnerRepository, Depends(get_owner_repository)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> NotificationEngine:
     # Deliberately *without* the entitlement gate. The engine's candidates are what
     # `ReminderService._dismiss_resolved` reconciles against, so a locked renter missing
@@ -462,6 +466,14 @@ def get_notification_engine(
         renter_service=renter_service,
         renter_repository=renter_repository,
         cpi_index_repository=cpi_index_repository,
+        mortgage_repository=PropertyMortgageRepository(db),
+        policy_rate_repository=PolicyRateRepository(db),
+    )
+
+
+def get_policy_rate_service(db: Annotated[Session, Depends(get_db)]) -> PolicyRateService:
+    return PolicyRateService(
+        PolicyRateRepository(db), settings.BOI_API_BASE_URL, settings.BOI_RATE_SERIES_CODE
     )
 
 

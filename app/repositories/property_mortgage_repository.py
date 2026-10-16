@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.property import Property
 from app.models.property_mortgage import MortgagePayment, PropertyMortgage
 
 
@@ -13,6 +14,26 @@ class PropertyMortgageRepository:
             select(PropertyMortgage)
             .where(PropertyMortgage.property_id == property_id)
             .order_by(PropertyMortgage.id)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def prime_for_owner(self, owner_id: str) -> list[PropertyMortgage]:
+        """The owner's mortgages with a prime track — what a rate change concerns."""
+        stmt = (
+            select(PropertyMortgage)
+            .join(Property, Property.id == PropertyMortgage.property_id)
+            .where(Property.owner_id == owner_id, PropertyMortgage.has_prime_track.is_(True))
+            .order_by(PropertyMortgage.id)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def owner_ids_with_prime(self) -> list[str]:
+        """Every owner with at least one prime-track mortgage."""
+        stmt = (
+            select(Property.owner_id)
+            .join(PropertyMortgage, PropertyMortgage.property_id == Property.id)
+            .where(PropertyMortgage.has_prime_track.is_(True))
+            .distinct()
         )
         return list(self.session.scalars(stmt).all())
 

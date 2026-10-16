@@ -12,12 +12,14 @@ from app.api.dependencies import (
     get_cpi_indexing_service,
     get_lease_generation_service,
     get_job_run_repository,
+    get_policy_rate_service,
     get_reminder_service,
     get_retention_service,
 )
 from app.config import settings
 from app.repositories.job_run_repository import JobRunRepository
 from app.services.cpi_indexing_service import CpiIndexingService
+from app.services.policy_rate_service import PolicyRateService
 from app.services.lease_generation_service import LeaseGenerationService
 from app.services.reminder_service import ReminderService
 from app.services.retention_service import RetentionService
@@ -137,6 +139,7 @@ def run_reminders(
         LeaseGenerationService, Depends(get_lease_generation_service)
     ],
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
+    policy_rate_service: Annotated[PolicyRateService, Depends(get_policy_rate_service)],
 ):
     """Send overdue-rent and expiring-lease pushes. Intended to be called once a
     day by an external scheduler with the X-Cron-Secret header.
@@ -182,10 +185,21 @@ def run_reminders(
             # Already logged and recorded as a failed run by _record.
             logger.warning("Inline CPI catch-up failed; sending reminders anyway")
 
+    # The Bank of Israel rate, for the mortgage rate-change alert. Only fetched when someone
+    # has a prime-track mortgage to be told about, and best-effort like the catch-ups above:
+    # it never raises, and an unreachable upstream only delays the alert to the next run.
+    rate_changes = 0
+    if reminder_service.engine.prime_mortgage_owner_ids():
+        try:
+            rate_changes = policy_rate_service.refresh()["added"]
+        except Exception:
+            logger.exception("Policy rate refresh failed; sending reminders anyway")
+
     sent = _record(job_runs, JOB_REMINDERS, reminder_service.run_daily_reminders)
     return {
         "status": "ok",
         "sent": sent,
+        "rate_changes_added": rate_changes,
         "cpi_caught_up": caught_up,
         "leases_generated": leases_generated,
     }

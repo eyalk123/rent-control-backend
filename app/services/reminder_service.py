@@ -36,6 +36,7 @@ from app.services.notification_messages import (
     render_cpi_digest,
     render_cpi_rent_change,
     render_lease_expiring,
+    render_mortgage_rate_change,
     render_overdue,
 )
 from app.models.notification import NotificationTypeEnum
@@ -213,7 +214,12 @@ class ReminderService:
         Returns a summary."""
         cutoff = utc_now_naive() - timedelta(days=PUSH_FRESHNESS_DAYS)
         summary = {"created": 0, "pushed": 0}
-        for owner_id in self.renter_repository.list_distinct_owner_ids():
+        # Owners with a prime-track mortgage too: the rate alert needs no renter.
+        owner_ids = sorted(
+            set(self.renter_repository.list_distinct_owner_ids())
+            | set(self.engine.prime_mortgage_owner_ids())
+        )
+        for owner_id in owner_ids:
             summary["created"] += len(self.generate_for_owner(owner_id, today).created)
             self.notification_repository.suppress_stale_unpushed(owner_id, before=cutoff)
             rows = self.notification_repository.list_unpushed_for_owner(
@@ -246,6 +252,12 @@ class ReminderService:
 
         messages: list[dict] = []
         pushed_ids: list[int] = []
+        # About the owner, not a renter, so it has no renter to look up below.
+        rate_rows = [r for r in other_rows if r.type == NotificationTypeEnum.MORTGAGE_RATE_CHANGE]
+        other_rows = [r for r in other_rows if r.type != NotificationTypeEnum.MORTGAGE_RATE_CHANGE]
+        for row in rate_rows:
+            messages.extend(self._rate_messages(row, tokens_by_locale))
+            pushed_ids.append(row.id)
         for row in other_rows + (cpi_rows if len(cpi_rows) == 1 else []):
             renter = self.renter_repository.get_by_id(row.entity_id)
             if renter is None:  # renter deleted — skip the dangling notification
@@ -271,6 +283,20 @@ class ReminderService:
         self.push_service.send_messages(messages)
         self.notification_repository.mark_pushed(pushed_ids)
         return len(pushed_ids)
+
+    @staticmethod
+    def _rate_messages(row: Notification, tokens_by_locale: dict[str, list[str]]) -> list[dict]:
+        """The rate-change push. Opens the property when only one has a prime mortgage —
+        its Mortgage section's "+" records the new amount — otherwise the property list."""
+        data = json.loads(row.data) if row.data else {}
+        property_ids = data.get("property_ids") or []
+        route = f"/properties/{property_ids[0]}" if len(property_ids) == 1 else "/properties"
+        payload = {"type": row.type.value, "route": route}
+        out: list[dict] = []
+        for locale, tokens in tokens_by_locale.items():
+            title, body = render_mortgage_rate_change(locale, data=data)
+            out.extend({"to": t, "title": title, "body": body, "data": payload} for t in tokens)
+        return out
 
     @staticmethod
     def _cpi_digest(

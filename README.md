@@ -219,6 +219,7 @@ live in `.claude/docs/architectural_patterns.md`.
 | `CPI_INDEX_ID` | No | **Override** for Israel's configured series id, not the source of truth — the series each country is linked to lives in `app/countries/config.py` (`IndexSeries`). Unset leaves it at Israel's `120010` (general CPI) |
 | `BOI_API_BASE_URL` | No | Fallback CPI source (Bank of Israel SDMX). Default `https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2`. Keyless |
 | `BOI_CPI_SERIES_CODE` | No | Default `CP` — the same series as `CPI_INDEX_ID` 120010 |
+| `BOI_RATE_SERIES_CODE` | No | Default `MNT_RIB_BOI_D` — the Bank of Israel interest rate, for the mortgage rate-change alert (fetched by `run-reminders`) |
 | `CPI_MAX_STALE_MONTHS` | No | Default `2`. How far behind the newest published month the cache may fall before `run-cpi-indexing` returns 503 |
 | `PORT` | No | Set by Railway automatically; defaults to 8000 |
 | `RESEND_API_KEY` | No | Resend API key for in-app support messages. Empty ⇒ `POST /support-messages` answers 502 (the row is still written). See [Support messages](#support-messages) |

@@ -12,6 +12,7 @@ from app.models.notification_rule import NotificationRule
 from app.models.notification_settings import NotificationSettings
 from app.models.owner import Owner
 from app.models.owner_client_day import OwnerClientDay
+from app.models.policy_rate import PolicyRate
 from app.models.property import Property, PropertyTypeEnum
 from app.models.property_mortgage import MortgagePayment, PropertyMortgage
 from app.models.property_owner import PropertyOwner
@@ -48,6 +49,7 @@ __all__ = [
     "NotificationSettings",
     "Owner",
     "OwnerClientDay",
+    "PolicyRate",
     "Property",
     "PropertyTypeEnum",
     "PropertyMortgage",

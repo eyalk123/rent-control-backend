@@ -153,6 +153,9 @@ class Settings(BaseSettings):
     # code "CP" is "מדד המחירים לצרכן - כללי", the same series as CPI_INDEX_ID 120010.
     BOI_API_BASE_URL: str = "https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2"
     BOI_CPI_SERIES_CODE: str = "CP"
+    # The Bank of Israel interest rate, daily, from the same service. Read for the mortgage
+    # rate-change alert (prime = this + 1.5). See `app/services/policy_rate_service.py`.
+    BOI_RATE_SERIES_CODE: str = "MNT_RIB_BOI_D"
     # How far behind the newest *published* month the cache may fall before the job
     # reports failure (503). Absorbs a late publication; catches a dead feed.
     CPI_MAX_STALE_MONTHS: int = 2

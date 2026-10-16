@@ -13,6 +13,8 @@ from datetime import date
 
 from app.models.notification import NotificationTypeEnum
 from app.repositories.cpi_index_repository import CpiIndexRepository
+from app.repositories.policy_rate_repository import PolicyRateRepository
+from app.repositories.property_mortgage_repository import PropertyMortgageRepository
 from app.repositories.notification_rule_repository import NotificationRuleRepository
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
@@ -22,7 +24,8 @@ from app.models.notification_settings import (
     DEFAULT_CPI_MIN_CHANGE_PERCENT,
 )
 from app.repositories.renter_repository import RenterRepository
-from app.services import cpi_rent_change as cpi
+from app.services import country_service, cpi_rent_change as cpi
+from app.services import policy_rate_service as rates
 from app.services.cpi_indexing_service import (
     compute_chained_cpi_amount,
     compute_cpi_amount,
@@ -40,21 +43,34 @@ DEFAULT_RULES: dict[NotificationTypeEnum, list[int]] = {
     NotificationTypeEnum.LEASE_EXPIRING: [90, 30],  # 90 and 30 days before lease end
     # Not user-editable (see RULE_EXEMPT_EVENTS) — this is the only offset it ever has.
     NotificationTypeEnum.CPI_RENT_CHANGE: [cpi.UPCOMING_OFFSET],
+    # Not user-editable either: it fires when the Bank of Israel moves the rate.
+    NotificationTypeEnum.MORTGAGE_RATE_CHANGE: [0],
 }
 
 EVENT_TYPES = (
     NotificationTypeEnum.OVERDUE,
     NotificationTypeEnum.LEASE_EXPIRING,
     NotificationTypeEnum.CPI_RENT_CHANGE,
+    NotificationTypeEnum.MORTGAGE_RATE_CHANGE,
 )
 
 # Events the rule editor does not cover. "Days before an anchor date" is the only thing
 # a rule can express, and a CPI change has no such anchor — it fires when the index
 # moves. It is configured by mute + materiality threshold instead.
-RULE_EXEMPT_EVENTS = frozenset({NotificationTypeEnum.CPI_RENT_CHANGE})
+RULE_EXEMPT_EVENTS = frozenset(
+    {NotificationTypeEnum.CPI_RENT_CHANGE, NotificationTypeEnum.MORTGAGE_RATE_CHANGE}
+)
 
 # Types the feed must not resolve-on-read. See ReminderService._dismiss_resolved.
-NON_RESOLVING_EVENTS = frozenset({NotificationTypeEnum.CPI_RENT_CHANGE})
+# A rate change, like a CPI change, is a fact about a moment; both age out instead.
+NON_RESOLVING_EVENTS = frozenset(
+    {NotificationTypeEnum.CPI_RENT_CHANGE, NotificationTypeEnum.MORTGAGE_RATE_CHANGE}
+)
+
+# How long after the Bank of Israel rate changes an owner can still be told. Long enough
+# for a missed daily run or a late publication; short enough that the first refresh after
+# deploy — which backfills years of history — alerts about nothing.
+RATE_ALERT_WINDOW_DAYS = 7
 
 
 @dataclass
@@ -118,6 +134,8 @@ class NotificationEngine:
         renter_service: RenterService,
         renter_repository: RenterRepository,
         cpi_index_repository: CpiIndexRepository | None = None,
+        mortgage_repository: PropertyMortgageRepository | None = None,
+        policy_rate_repository: PolicyRateRepository | None = None,
     ):
         self.rule_repository = rule_repository
         self.settings_repository = settings_repository
@@ -126,6 +144,9 @@ class NotificationEngine:
         # Optional: without it the CPI heads-up simply produces nothing, which is the
         # right degradation — an estimate with no index behind it is worse than silence.
         self.cpi_index_repository = cpi_index_repository
+        # Optional for the same reason: without them there is no rate-change alert.
+        self.mortgage_repository = mortgage_repository
+        self.policy_rate_repository = policy_rate_repository
 
     def evaluate_owner(self, owner_id: str, today: date | None = None) -> list[Candidate]:
         """Resolve effective rules per event and return de-duplicated candidates.
@@ -192,6 +213,8 @@ class NotificationEngine:
             return []
 
         out: list[Candidate] = []
+        if event == NotificationTypeEnum.MORTGAGE_RATE_CHANGE:
+            return self._rate_candidates(owner_id, today)
         if event == NotificationTypeEnum.CPI_RENT_CHANGE:
             return self._cpi_candidates(owner_id, spec, today, settings)
         if event == NotificationTypeEnum.OVERDUE:
@@ -247,6 +270,60 @@ class NotificationEngine:
                             },
                         ))
         return out
+
+    # ── Mortgage rate change ───────────────────────────────────────────────
+
+    def prime_mortgage_owner_ids(self) -> list[str]:
+        """Owners the daily job must evaluate for the rate alert even with no renters."""
+        if self.mortgage_repository is None:
+            return []
+        return self.mortgage_repository.owner_ids_with_prime()
+
+    def _rate_candidates(self, owner_id: str, today: date) -> list[Candidate]:
+        """One alert per owner when the Bank of Israel rate has just changed and at least
+        one of their mortgages has a prime track — never one per mortgage.
+
+        Owner-level, so `renter_id` is 0. The mortgage must predate the change: one added
+        after it was entered with the amount the owner already pays."""
+        if self.mortgage_repository is None or self.policy_rate_repository is None:
+            return []
+        latest = self.policy_rate_repository.latest(rates.COUNTRY)
+        if latest is None or not 0 <= (today - latest.effective_date).days <= RATE_ALERT_WINDOW_DAYS:
+            return []
+        previous = self.policy_rate_repository.before(rates.COUNTRY, latest.effective_date)
+        if previous is None or previous.rate == latest.rate:
+            return []
+        mortgages = [
+            m
+            for m in self.mortgage_repository.prime_for_owner(owner_id)
+            if (m.end_date is None or m.end_date >= today)
+            and m.created_at.date() < latest.effective_date
+            and m.property is not None
+            and country_service.capabilities_for(m.property.country).mortgage
+        ]
+        if not mortgages:
+            return []
+        properties = {m.property_id: m.property.address for m in mortgages}
+        only = next(iter(properties.values())) if len(properties) == 1 else None
+        return [
+            Candidate(
+                type=NotificationTypeEnum.MORTGAGE_RATE_CHANGE,
+                renter_id=0,
+                period_key=latest.effective_date.isoformat(),
+                offset=0,
+                first_name="",
+                last_name="",
+                property_address=only,
+                data={
+                    "old_rate": previous.rate,
+                    "new_rate": latest.rate,
+                    "old_prime": rates.prime_of(previous.rate),
+                    "new_prime": rates.prime_of(latest.rate),
+                    "effective_date": latest.effective_date.isoformat(),
+                    "property_ids": sorted(properties),
+                },
+            )
+        ]
 
     # ── CPI rent change: the heads-up half ────────────────────────────────
     #
