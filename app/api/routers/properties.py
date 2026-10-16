@@ -4,15 +4,27 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user, get_property_file_repository, get_property_service
+from app.api.dependencies import (
+    get_current_user,
+    get_mortgage_service,
+    get_property_file_repository,
+    get_property_service,
+)
 from app.api.routers.reports import _owner_formats
 from app.database import get_db
 from app.repositories.property_file_repository import PropertyFileRepository
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
 from app.schemas.property_file import PropertyFileCreate, PropertyFileRead
+from app.schemas.property_mortgage import (
+    MortgageCreate,
+    MortgagePaymentCreate,
+    MortgageRead,
+    MortgageUpdate,
+)
 from app.schemas.property_valuation import PropertyValuationCreate, PropertyValuationRead
 from app.schemas.renter import PropertyRenterSummary
 from app.services.firebase_storage import release_file_urls
+from app.services.mortgage_service import MortgageService
 from app.services.property_service import PropertyService
 from app.services.property_sheet_service import SheetFormats, generate_property_sheet_pdf
 from app.repositories.owner_repository import owner_today
@@ -207,3 +219,99 @@ def delete_property_valuation(
     ):
         raise HTTPException(status_code=404, detail="Valuation not found")
     return None
+
+
+# ── Mortgages (capability-gated: 422 where the property's country has none) ──
+
+
+@router.get("/{property_id}/mortgages", response_model=list[MortgageRead])
+def list_property_mortgages(
+    property_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    mortgages = mortgage_service.list(property_id, owner_id=current_user["user_id"])
+    if mortgages is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return mortgages
+
+
+@router.post("/{property_id}/mortgages", response_model=MortgageRead, status_code=201)
+def create_property_mortgage(
+    property_id: int,
+    data: MortgageCreate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    mortgage = mortgage_service.create(property_id, data, owner_id=current_user["user_id"])
+    if mortgage is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return mortgage
+
+
+@router.patch("/{property_id}/mortgages/{mortgage_id}", response_model=MortgageRead)
+def update_property_mortgage(
+    property_id: int,
+    mortgage_id: int,
+    data: MortgageUpdate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    mortgage = mortgage_service.update(
+        property_id, mortgage_id, data, owner_id=current_user["user_id"]
+    )
+    if mortgage is None:
+        raise HTTPException(status_code=404, detail="Mortgage not found")
+    return mortgage
+
+
+@router.delete("/{property_id}/mortgages/{mortgage_id}", status_code=204)
+def delete_property_mortgage(
+    property_id: int,
+    mortgage_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    if not mortgage_service.delete(property_id, mortgage_id, owner_id=current_user["user_id"]):
+        raise HTTPException(status_code=404, detail="Mortgage not found")
+    return None
+
+
+@router.post(
+    "/{property_id}/mortgages/{mortgage_id}/payments",
+    response_model=MortgageRead,
+    status_code=201,
+)
+def create_mortgage_payment(
+    property_id: int,
+    mortgage_id: int,
+    data: MortgagePaymentCreate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    """A new monthly amount from a date on. Answers with the whole mortgage."""
+    mortgage = mortgage_service.add_payment(
+        property_id, mortgage_id, data, owner_id=current_user["user_id"]
+    )
+    if mortgage is None:
+        raise HTTPException(status_code=404, detail="Mortgage not found")
+    return mortgage
+
+
+@router.delete(
+    "/{property_id}/mortgages/{mortgage_id}/payments/{payment_id}", response_model=MortgageRead
+)
+def delete_mortgage_payment(
+    property_id: int,
+    mortgage_id: int,
+    payment_id: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    """Answers with the mortgage as it now stands. The last amount cannot be removed (400)."""
+    mortgage = mortgage_service.delete_payment(
+        property_id, mortgage_id, payment_id, owner_id=current_user["user_id"]
+    )
+    if mortgage is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return mortgage

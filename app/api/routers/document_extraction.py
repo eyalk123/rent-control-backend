@@ -23,6 +23,7 @@ from app.repositories.document_extraction_log_repository import (
     DocumentExtractionLogRepository,
 )
 from app.services.entitlement_gate import EntitlementGate
+from app.services.expense_category_service import pickable_categories
 from app.schemas.document_extraction import (
     ExtractionLogUpdate,
     LeaseExtractionResponse,
@@ -182,7 +183,7 @@ async def extract_receipt(
     catalog = ReceiptCatalog(
         categories=tuple(
             CategoryOption(id=c.id, label=c.key or c.name or "")
-            for c in category_repository.get_all_active_ordered(owner_id)
+            for c in pickable_categories(category_repository, owner_id)
         ),
         suppliers=tuple(
             SupplierOption(

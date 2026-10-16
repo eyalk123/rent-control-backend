@@ -14,6 +14,7 @@ class CapabilitiesRead(BaseModel):
     israeli_property_types: bool
     bit_payments: bool
     structured_bank_details: bool
+    mortgage: bool
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -96,6 +96,17 @@ class Property(Base):
         order_by="(PropertyValuation.valued_on.desc(), PropertyValuation.id.desc())",
     )
 
+    # Selectin with their payments: the list and the detail both compute the cash flow
+    # after the mortgage, and most properties have none.
+    mortgages = relationship(
+        "PropertyMortgage",
+        back_populates="property",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="PropertyMortgage.id",
+    )
+
     @property
     def current_value(self) -> float | None:
         return self.valuations[0].value if self.valuations else None

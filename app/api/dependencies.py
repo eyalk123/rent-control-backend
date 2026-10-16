@@ -51,6 +51,7 @@ from app.services.index_source import IndexSource
 from app.services.notification_engine import NotificationEngine
 from app.services.notification_preferences_service import NotificationPreferencesService
 from app.services.entitlement_gate import EntitlementGate
+from app.services.mortgage_service import MortgageService
 from app.services.property_service import PropertyService
 from app.services.push_service import PushService
 from app.services.reminder_service import ReminderService
@@ -221,6 +222,13 @@ def get_property_service(
         owner_repository,
         entitlement_gate,
     )
+
+
+def get_mortgage_service(
+    property_repository: Annotated[PropertyRepository, Depends(get_property_repository)],
+    entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
+) -> MortgageService:
+    return MortgageService(property_repository, entitlement_gate)
 
 
 def get_renter_service(

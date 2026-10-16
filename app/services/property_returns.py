@@ -14,6 +14,10 @@ The rules it reuses rather than restates:
   closed — the apps' "monthly rent" tile;
 - a transaction belongs to its ``EFFECTIVE_DATE`` — the month rent is *for*, the day an
   expense was paid — the rule every total in the apps uses.
+
+It also computes the **cash flow after the mortgage** — what is left of the rent each month
+once the bank and the running costs are paid — for a property with a mortgage, where the
+country has the capability. Shown beside the yearly net, never instead of it.
 """
 import json
 from dataclasses import dataclass, field
@@ -25,6 +29,7 @@ from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
 
 from app.repositories.transaction_repository import TransactionRepository
+from app.services import country_service
 from app.services.lease_periods import is_tenancy_ended, rent_for_month
 
 # Why a figure could not be computed. Stable codes: the assistant reads them, and a client
@@ -36,6 +41,7 @@ NO_RECENT_RENT = "no_recent_rent"
 NO_PURCHASE_PRICE = "no_purchase_price"
 NO_PURCHASE_DATE = "no_purchase_date"
 HELD_UNDER_A_YEAR = "held_under_a_year"
+NO_ACTIVE_MORTGAGE = "no_active_mortgage"
 
 _DAYS_PER_YEAR = 365.25
 
@@ -58,6 +64,15 @@ class PropertyReturns:
     # The trailing twelve months the net yield covers: after window_start, up to window_end.
     window_start: Optional[date] = None
     window_end: Optional[date] = None
+    # Cash flow after the mortgage, monthly. Only for a property with a mortgage.
+    # The mortgage payments in force today (0 once every one has ended).
+    monthly_mortgage: Optional[float] = None
+    # Expenses over the trailing twelve months ÷ 12: running costs vary month to month.
+    monthly_expenses: Optional[float] = None
+    # Current monthly rent − monthly_mortgage − monthly_expenses.
+    monthly_left: Optional[float] = None
+    # Current monthly rent ÷ monthly_mortgage. Under 1.0 the rent does not cover the bank.
+    mortgage_coverage: Optional[float] = None
     # figure name → reason code, for every figure above that is None.
     unavailable: dict[str, str] = field(default_factory=dict)
 
@@ -89,16 +104,51 @@ def twelve_month_window(today: date) -> tuple[date, date]:
     return today - relativedelta(years=1), today
 
 
+def _cash_flow(
+    r: PropertyReturns,
+    property,
+    monthly_rent: Optional[float],
+    expenses_12m: Decimal,
+    today: date,
+    mortgage_enabled: bool,
+) -> None:
+    """Fill the cash-flow-after-mortgage figures on `r`.
+
+    Nothing at all — not even an ``unavailable`` entry — for a property without a mortgage
+    or where the country has none: most properties have no mortgage, and that is not a gap
+    in what the owner entered. Its screen shows the invitation to add one instead, and the
+    yearly net it always had. A vacant property has no rent to leave anything of, so "left"
+    and coverage are withheld rather than shown negative.
+    """
+    mortgages = getattr(property, "mortgages", None) or []
+    if not mortgage_enabled or not mortgages:
+        return
+    r.monthly_mortgage = sum(m.payment_on(today) or 0 for m in mortgages)
+    r.monthly_expenses = float(expenses_12m) / 12
+    if monthly_rent is None or monthly_rent <= 0:
+        reason = VACANT if monthly_rent is None else NO_RENT_AMOUNT
+        r.unavailable["monthly_left"] = reason
+        r.unavailable["mortgage_coverage"] = reason
+        return
+    r.monthly_left = monthly_rent - r.monthly_mortgage - r.monthly_expenses
+    if r.monthly_mortgage <= 0:
+        r.unavailable["mortgage_coverage"] = NO_ACTIVE_MORTGAGE
+    else:
+        r.mortgage_coverage = monthly_rent / r.monthly_mortgage
+
+
 def compute_returns(
     property,
     monthly_rent: Optional[float],
     revenue_12m: Decimal,
     expenses_12m: Decimal,
     today: date,
+    mortgage_enabled: bool = False,
 ) -> PropertyReturns:
     """The figures for one property. Pure: everything it needs is passed in."""
     start, end = twelve_month_window(today)
     r = PropertyReturns(window_start=start, window_end=end)
+    _cash_flow(r, property, monthly_rent, expenses_12m, today, mortgage_enabled)
     value = property.current_value if property.current_value and property.current_value > 0 else None
     price = property.purchase_price if property.purchase_price and property.purchase_price > 0 else None
 
@@ -161,6 +211,7 @@ def returns_for_properties(
             current_monthly_rent(p.renters or [], today),
             *totals.get(p.id, zero),
             today=today,
+            mortgage_enabled=country_service.capabilities_for(p.country).mortgage,
         )
         for p in properties
     }

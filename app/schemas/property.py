@@ -175,6 +175,12 @@ class PropertyReturnsRead(BaseModel):
     net_income_12m: Optional[float] = None
     window_start: Optional[date] = None
     window_end: Optional[date] = None
+    # Cash flow after the mortgage, per month — see `property_returns._cash_flow`.
+    # All null for a property without a mortgage, with no `unavailable` entry for them.
+    monthly_mortgage: Optional[float] = None
+    monthly_expenses: Optional[float] = None
+    monthly_left: Optional[float] = None
+    mortgage_coverage: Optional[float] = None
     unavailable: dict[str, str] = {}
 
     model_config = ConfigDict(from_attributes=True)

@@ -58,6 +58,10 @@ class Capabilities:
     israeli_property_types: bool = False
     bit_payments: bool = False
     structured_bank_details: bool = False
+    # Mortgage payments per property, and the cash flow after them. Israel-only to start,
+    # and where it is on the "Mortgage interest" expense category is hidden: the monthly
+    # payment replaces it, and offering both would subtract the mortgage twice.
+    mortgage: bool = False
 
 
 @dataclass(frozen=True)
@@ -591,6 +595,7 @@ def _build() -> dict[str, CountryConfig]:
             israeli_property_types=True,
             bit_payments=True,
             structured_bank_details=True,
+            mortgage=True,
         ),
     )
     return out

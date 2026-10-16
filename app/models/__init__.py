@@ -13,6 +13,7 @@ from app.models.notification_settings import NotificationSettings
 from app.models.owner import Owner
 from app.models.owner_client_day import OwnerClientDay
 from app.models.property import Property, PropertyTypeEnum
+from app.models.property_mortgage import MortgagePayment, PropertyMortgage
 from app.models.property_owner import PropertyOwner
 from app.models.property_valuation import PropertyValuation
 from app.models.renter import Renter
@@ -38,6 +39,7 @@ __all__ = [
     "DocumentExtractionLog",
     "ExpenseCategory",
     "JobRun",
+    "MortgagePayment",
     "LegalAcceptance",
     "LegalDocumentEnum",
     "Notification",
@@ -48,6 +50,7 @@ __all__ = [
     "OwnerClientDay",
     "Property",
     "PropertyTypeEnum",
+    "PropertyMortgage",
     "PropertyOwner",
     "PropertyValuation",
     "Renter",

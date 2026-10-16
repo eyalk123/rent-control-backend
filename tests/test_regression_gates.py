@@ -242,6 +242,7 @@ class TestDeliberateIsraeliChanges:
         assert caps.israeli_property_types
         assert caps.bit_payments
         assert caps.structured_bank_details
+        assert caps.mortgage
 
     def test_israeli_report_currency_is_untouched(self):
         """The artifact users hand to an accountant. ILS keeps its language-dependent label

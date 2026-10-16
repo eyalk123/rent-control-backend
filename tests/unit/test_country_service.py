@@ -39,6 +39,7 @@ class TestCountryTable:
                     caps.israeli_property_types,
                     caps.bit_payments,
                     caps.structured_bank_details,
+                    caps.mortgage,
                 ]
             )
             assert enabled == (code == "IL"), f"{code} has unexpected capabilities"
