@@ -185,10 +185,14 @@ class NotificationRepository:
         type: NotificationTypeEnum,
         entity_id: int,
         period_key: str,
+        offset: int | None = None,
     ) -> int:
         """Dismiss every non-dismissed row for one (type, renter, period). The
         in-app feed collapses these offsets into a single item, so dismissing it
-        (or marking the rent paid) should clear them all at once."""
+        (or marking the rent paid) should clear them all at once.
+
+        ``offset`` narrows it to one stage of the group — a CPI heads-up withdrawn
+        without touching a confirmation beside it."""
         stmt = (
             update(Notification)
             .where(
@@ -200,6 +204,8 @@ class NotificationRepository:
             )
             .values(dismissed_at=utc_now_naive())
         )
+        if offset is not None:
+            stmt = stmt.where(Notification.offset == offset)
         result = self.session.execute(stmt)
         self.session.commit()
         return result.rowcount or 0

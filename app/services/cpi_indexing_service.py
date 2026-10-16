@@ -96,6 +96,18 @@ def is_frozen(year: dict, anniversary: date, today: date) -> bool:
     """
     if anniversary > today:
         return False
+    return has_final_reading(year, anniversary)
+
+
+def has_final_reading(year: dict, anniversary: date) -> bool:
+    """Whether a year's amount was computed from its own known-index month — the
+    reading that settles it — rather than an older month standing in.
+
+    That month publishes *before* the anniversary (by definition of the known index),
+    so a year can be final while it is still in the future. That is the moment the
+    owner should hear the confirmed amount; :func:`is_frozen` additionally waits for
+    the year to start before it stops recomputing.
+    """
     reading = year.get("cpi_reading")
     if not isinstance(reading, dict):
         return False
@@ -293,10 +305,9 @@ class CpiIndexingService:
     """The daily job: refresh the cached index, then recompute every CPI-linked renter's
     stored ``lease_years`` so newly-published readings take effect.
 
-    It also raises the **confirmation** half of the ``cpi_rent_change`` notification. That
-    has to happen here and nowhere else: the rules engine derives its candidates from
-    current state, and one statement after the write the old amount is gone — this is the
-    only point where both the old and the new figure exist.
+    It also raises the **confirmation** half of the ``cpi_rent_change`` notification, since
+    this is where a year gets priced against its final reading. See
+    :meth:`_notify_rent_change`.
 
     Not silent towards *operators* either. The fetch is best-effort by design, so a run
     that reached no source still succeeds structurally; what makes a real outage visible is
@@ -424,32 +435,89 @@ class CpiIndexingService:
         today: date,
         index_id: int,
     ) -> int:
-        """Raise the confirmation notification when *the year currently in effect* was
-        repriced. Returns 1 if a row was written.
+        """Raise the confirmation notification for a lease year whose new rent is now
+        known. Returns the number of rows written.
 
-        Deliberately only the current year. Every monthly publication nudges the
-        projections for years that haven't started, and reporting those would bury the
-        one change that actually alters what the tenant owes this month.
+        Called on every run, not only when something changed: the year's final reading
+        publishes *before* its anniversary, so by the day the year starts its amount was
+        already settled and nothing changes that day. Waiting for "the current year was
+        repriced" therefore never fired outside a late or revised reading.
+
+        Two years qualify:
+
+        - **the next year**, once it is priced against its own known-index month. Earlier
+          monthly publications only nudge its projection, and reporting those would bury
+          the one change that matters;
+        - **the current year**, when this run repriced it (a late or revised reading), or
+          as a catch-up within ``AUTO_DISMISS_DAYS`` of its start — the window a
+          confirmation would still be on screen anyway, so a missed one is recovered
+          without announcing changes from months ago.
+
+        The figure reported is the move from the previous year's rent — what the tenant
+        paid until now — to the new one. ``uq_notification_dedup`` (checked below) keeps
+        each anniversary to one confirmation however many runs see it.
         """
         if self.notification_repository is None or not renter.owner_id:
             return 0
 
-        index = cpi.lease_year_index(renter.lease_start, new_years, today)
-        if index is None:
+        current = cpi.lease_year_index(renter.lease_start, new_years, today)
+        if current is None:
             return 0
-        old_amount = old_years[index].get("amount") if index < len(old_years) else None
-        new_amount = new_years[index].get("amount")
+        written = 0
+        for index in (current, current + 1):
+            if not 1 <= index < len(new_years):
+                continue
+            anniversary = cpi.anniversary_of(renter.lease_start, new_years, index)
+            final = has_final_reading(new_years[index], anniversary)
+            if index == current:
+                repriced = index < len(old_years) and (
+                    old_years[index].get("amount") != new_years[index].get("amount")
+                )
+                recent = (today - anniversary).days <= cpi.AUTO_DISMISS_DAYS
+                if not (repriced or (final and recent)):
+                    continue
+            elif not final:
+                continue
+            written += self._confirm(
+                renter, new_years, index, anniversary, base_index, index_id, final
+            )
+        return written
+
+    def _confirm(
+        self,
+        renter,
+        years: list[dict],
+        index: int,
+        anniversary: date,
+        base_index: Optional[float],
+        index_id: int,
+        final: bool,
+    ) -> int:
+        """Write the confirmation for one lease year. Returns 1 if a row was written."""
+        old_amount = years[index - 1].get("amount")
+        new_amount = years[index].get("amount")
         if old_amount is None or new_amount is None:
             return 0
 
         min_amount, min_percent = self._thresholds(renter.owner_id)
         if not cpi.is_material(old_amount, new_amount, min_amount, min_percent):
+            if final:
+                # The heads-up quoted an estimate that cleared the floor; the final
+                # figure doesn't, so no confirmation will replace it. Withdraw it rather
+                # than leave a change in the feed that isn't going to happen. Only the
+                # heads-up: a confirmation already sent was right when it was sent.
+                self.notification_repository.dismiss_group(
+                    renter.owner_id,
+                    NotificationTypeEnum.CPI_RENT_CHANGE,
+                    renter.id,
+                    anniversary.isoformat(),
+                    offset=cpi.UPCOMING_OFFSET,
+                )
             return 0
         if self._notifications_muted(renter.owner_id):
             return 0
 
-        anniversary = cpi.anniversary_of(renter.lease_start, new_years, index)
-        reading = new_years[index].get("cpi_reading") or {}
+        reading = years[index].get("cpi_reading") or {}
         source = self.cpi_index_repository.reading_on_or_before(index_id, anniversary)
         if self.notification_repository.was_generated(
             renter.owner_id,
@@ -658,12 +726,13 @@ class CpiIndexingService:
                     force_recompute=reconcile_bases,
                 )
 
+            # On every run, not only when something changed: the run that settles a year
+            # usually changes nothing on the day it starts. Before the write, while
+            # `current` still holds the amounts the owner last knew about.
+            summary["notified"] += self._notify_rent_change(
+                renter, current, new_years, base_index, today, series.series_id
+            )
             if new_years != current or renter.cpi_base_index != base_index:
-                # Raise the notification *before* the write, while `current` still holds
-                # the amount the owner last knew about.
-                summary["notified"] += self._notify_rent_change(
-                    renter, current, new_years, base_index, today, series.series_id
-                )
                 self.renter_repository.update(
                     renter,
                     {"lease_years": json.dumps(new_years), "cpi_base_index": base_index},

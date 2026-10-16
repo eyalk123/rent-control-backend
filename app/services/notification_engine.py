@@ -26,6 +26,7 @@ from app.services import cpi_rent_change as cpi
 from app.services.cpi_indexing_service import (
     compute_chained_cpi_amount,
     compute_cpi_amount,
+    has_final_reading,
 )
 from app.services.renter_service import RenterService
 from app.repositories.owner_repository import owner_today
@@ -292,6 +293,10 @@ class NotificationEngine:
             anniversary = cpi.anniversary_of(r.lease_start, years, nxt)
             days_until = (anniversary - today).days
             if not 0 <= days_until <= cpi.UPCOMING_OFFSET:
+                continue
+            # Already priced against its final reading: the indexing job confirms it,
+            # and an estimate raised alongside would be a second push for one change.
+            if has_final_reading(years[nxt], anniversary):
                 continue
 
             old_amount = years[current].get("amount")

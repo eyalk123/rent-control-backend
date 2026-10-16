@@ -6,8 +6,9 @@ what keeps them speaking the same language:
 - the **heads-up** (``STAGE_UPCOMING``, offset :data:`UPCOMING_OFFSET`) comes from the
   rules engine, because "an anniversary is approaching" is derivable from current state;
 - the **confirmation** (``STAGE_CHANGED``, offset :data:`CHANGED_OFFSET`) is emitted by
-  the indexing job at the moment it overwrites ``lease_years``, because one line later
-  the old amount no longer exists anywhere.
+  the indexing job once the coming year is priced against its final reading — usually
+  before the anniversary, since that reading publishes first. From then the heads-up
+  is no longer raised.
 
 Both share a ``period_key`` — the ISO anniversary of the lease year being repriced — so
 the feed's existing dedup, collapse and group-dismiss all work unchanged.

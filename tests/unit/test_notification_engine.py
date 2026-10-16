@@ -291,6 +291,38 @@ def test_cpi_heads_up_is_muteable(db_session):
 
 
 @freeze_time("2026-06-15")
+def test_cpi_heads_up_silent_once_the_next_year_has_its_final_reading(db_session):
+    """The known index for an anniversary publishes before it, and from then the
+    indexing job confirms the amount. An estimate on top would be a second push."""
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    anniversary = TODAY + timedelta(days=16)
+    year, month = reference_period(anniversary)
+    lease_start = anniversary - relativedelta(years=1)
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        rent_escalation_mode="cpi",
+        lease_start=lease_start,
+        lease_end=lease_start + relativedelta(years=3),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        payment_day_of_month=28,
+        lease_years=[
+            {"amount": 5000.0, "type": "contract"},
+            {
+                "amount": 5500.0,
+                "type": "contract",
+                "cpi_reading": {"year": year, "month": month, "value": 110.0},
+            },
+            {"amount": 5500.0, "type": "contract"},
+        ],
+    )
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
 def test_cpi_heads_up_silent_on_the_final_lease_year(db_session):
     """Nothing left to reprice — the lease ends before another anniversary."""
     prop = make_property(db_session)

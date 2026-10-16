@@ -296,6 +296,169 @@ def test_run_cpi_indexing_is_silent_about_future_years(client, db_session, monke
     assert _cpi_notifications(db_session) == []
 
 
+def _seed_readings(db_session, readings: dict[tuple[int, int], float]):
+    """Readings keyed by month, so two dates sharing a known-index month collapse to
+    one row instead of upserting the same month twice in one statement."""
+    CpiIndexRepository(db_session).upsert_many(
+        INDEX_ID, [(y, m, v) for (y, m), v in readings.items()], source="cbs"
+    )
+
+
+def test_run_cpi_indexing_confirms_the_next_year_once_its_final_reading_is_in(
+    client, db_session, monkeypatch
+):
+    """The production case: the anniversary's known index publishes ~two weeks before
+    the anniversary. That run settles the coming year — the year in effect does not
+    move — and it is the run that has to confirm it."""
+    today = date.today()
+    anniversary = today + relativedelta(days=10)
+    lease_start = anniversary - relativedelta(years=1)
+    _seed_readings(
+        db_session,
+        {
+            reference_period(lease_start): 100.0,
+            reference_period(today): 110.0,
+            reference_period(anniversary): 110.0,
+        },
+    )
+    renter = make_renter(
+        db_session,
+        rent_escalation_mode="cpi",
+        lease_start=lease_start,
+        lease_end=lease_start + relativedelta(years=3),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        lease_years=[{"amount": 5000.0, "type": "contract"} for _ in range(3)],
+    )
+    monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
+
+    first = _post(client, [FakeSource("cbs"), FakeSource("boi")])
+    second = _post(client, [FakeSource("cbs"), FakeSource("boi")])
+
+    assert first.json()["notified"] == 1
+    assert second.json()["notified"] == 0
+    rows = _cpi_notifications(db_session)
+    assert len(rows) == 1
+    assert rows[0].entity_id == renter.id
+    assert rows[0].offset == 0
+    assert rows[0].period_key == anniversary.isoformat()
+    data = json.loads(rows[0].data)
+    assert data["stage"] == "changed"
+    # From what the tenant pays now to what they will pay — not projection to final.
+    assert data["old_amount"] == 5000.0
+    assert data["new_amount"] == 5500
+
+
+def test_run_cpi_indexing_withdraws_a_heads_up_the_final_reading_undercuts(
+    client, db_session, monkeypatch
+):
+    """The estimate cleared the materiality floor, the final reading doesn't. No
+    confirmation is coming to replace the heads-up, so it must not stay in the feed
+    quoting a change that isn't going to happen."""
+    today = date.today()
+    anniversary = today + relativedelta(days=10)
+    lease_start = anniversary - relativedelta(years=1)
+    _seed_readings(
+        db_session,
+        {
+            reference_period(lease_start): 100.0,
+            reference_period(today): 100.3,
+            reference_period(anniversary): 100.3,  # +₪15, under the ₪25 floor
+        },
+    )
+    renter = make_renter(
+        db_session,
+        rent_escalation_mode="cpi",
+        lease_start=lease_start,
+        lease_end=lease_start + relativedelta(years=3),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        lease_years=[{"amount": 5000.0, "type": "contract"} for _ in range(3)],
+    )
+    heads_up = NotificationRepository(db_session).create(
+        owner_id=OWNER_A,
+        type=NotificationTypeEnum.CPI_RENT_CHANGE,
+        entity_id=renter.id,
+        period_key=anniversary.isoformat(),
+        offset=30,
+        data={"stage": "upcoming", "old_amount": 5000.0, "new_amount": 5500},
+    )
+    monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
+
+    resp = _post(client, [FakeSource("cbs"), FakeSource("boi")])
+
+    assert resp.json()["notified"] == 0
+    db_session.refresh(heads_up)
+    assert heads_up.dismissed_at is not None
+    assert _cpi_notifications(db_session) == []  # nothing left in the feed
+
+
+def _seed_settled_renter(db_session, anniversary: date):
+    """A lease whose year 2 was already settled against its final reading before it
+    started — the state the old code left behind without ever confirming it. Every
+    year is stored exactly as the job would compute it, so a run changes nothing."""
+    today = date.today()
+    lease_start = anniversary - relativedelta(years=1)
+    _seed_readings(
+        db_session,
+        {
+            reference_period(lease_start): 100.0,
+            reference_period(anniversary): 110.0,
+            reference_period(today): 110.0,
+        },
+    )
+
+    def reading(d):
+        year, month = reference_period(d)
+        value = 100.0 if (year, month) == reference_period(lease_start) else 110.0
+        return {"year": year, "month": month, "value": value}
+
+    return make_renter(
+        db_session,
+        rent_escalation_mode="cpi",
+        lease_start=lease_start,
+        lease_end=lease_start + relativedelta(years=3),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        lease_years=[
+            {"amount": 5000.0, "type": "contract", "cpi_reading": reading(lease_start)},
+            {"amount": 5500.0, "type": "contract", "cpi_reading": reading(anniversary)},
+            {"amount": 5500.0, "type": "contract", "cpi_reading": reading(today)},
+        ],
+    )
+
+
+def test_run_cpi_indexing_catches_up_a_year_that_started_unconfirmed(
+    client, db_session, monkeypatch
+):
+    anniversary = date.today() - relativedelta(days=5)
+    _seed_settled_renter(db_session, anniversary)
+    monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
+
+    resp = _post(client, [FakeSource("cbs"), FakeSource("boi")])
+
+    assert resp.json()["renters_updated"] == 0  # nothing moved today...
+    assert resp.json()["notified"] == 1         # ...and it is confirmed anyway
+    rows = _cpi_notifications(db_session)
+    assert [r.period_key for r in rows] == [anniversary.isoformat()]
+    data = json.loads(rows[0].data)
+    assert (data["old_amount"], data["new_amount"]) == (5000.0, 5500.0)
+
+
+def test_run_cpi_indexing_does_not_announce_an_old_anniversary(
+    client, db_session, monkeypatch
+):
+    """The catch-up is bounded, so the first run after this fix does not send every
+    owner a confirmation for rent changes from months ago."""
+    _seed_settled_renter(db_session, date.today() - relativedelta(days=60))
+    monkeypatch.setattr(settings, "REMINDER_CRON_SECRET", CRON_SECRET)
+
+    resp = _post(client, [FakeSource("cbs"), FakeSource("boi")])
+
+    assert resp.json()["notified"] == 0
+    assert _cpi_notifications(db_session) == []
+
+
 def test_run_cpi_indexing_endpoint_503s_when_the_cache_is_stale(
     client, db_session, monkeypatch
 ):
