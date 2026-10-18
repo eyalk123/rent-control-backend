@@ -1,10 +1,18 @@
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.dependencies import get_current_user, get_renter_service
+from app.api.dependencies import (
+    get_current_user,
+    get_notification_repository,
+    get_renter_service,
+)
+from app.models.notification import NotificationTypeEnum
+from app.repositories.notification_repository import NotificationRepository
 from app.schemas.renter import (
     ExpiringRenterRead,
+    LeaseYearAmountSet,
     OverdueRenterRead,
     RenterCreate,
     RenterListRead,
@@ -12,6 +20,7 @@ from app.schemas.renter import (
     RenterTerminate,
     RenterUpdate,
 )
+from app.services.lease_periods import period_start
 from app.services.renter_service import RenterService
 
 router = APIRouter()
@@ -88,6 +97,33 @@ def update_renter(
     renter = renter_service.update_renter(renter_id, data, owner_id=current_user["user_id"])
     if renter is None:
         raise HTTPException(status_code=404, detail="Renter not found")
+    return renter
+
+
+@router.put("/{renter_id}/lease-years/{year_index}/amount", response_model=RenterRead)
+def set_lease_year_amount(
+    renter_id: int,
+    year_index: int,
+    data: LeaseYearAmountSet,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    renter_service: Annotated[RenterService, Depends(get_renter_service)],
+    notification_repository: Annotated[
+        NotificationRepository, Depends(get_notification_repository)
+    ],
+):
+    """Sets one CPI year's rent to the amount the owner agreed (zero-based `year_index`),
+    from a confirmed rent-change alert. Later CPI years re-derive from it. The alert for
+    that year is dismissed: the owner has acted on it."""
+    owner_id = current_user["user_id"]
+    renter = renter_service.set_lease_year_amount(
+        renter_id, year_index, data.amount, owner_id=owner_id
+    )
+    if renter is None:
+        raise HTTPException(status_code=404, detail="Renter not found")
+    anniversary = period_start(renter.lease_start, json.loads(renter.lease_years), year_index)
+    notification_repository.dismiss_group(
+        owner_id, NotificationTypeEnum.CPI_RENT_CHANGE, renter.id, anniversary.isoformat()
+    )
     return renter
 
 

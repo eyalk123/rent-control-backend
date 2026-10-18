@@ -22,11 +22,14 @@ from app.services.entitlement_gate import EntitlementGate
 from app.services.activity_diff import changed_fields
 from app.services.cpi_indexing_service import (
     IndexReading,
+    has_final_reading,
+    is_set_by_owner,
     materialize_cpi_amounts,
     materialize_ruled_lease_years,
 )
 from app.services.lease_periods import (
     contract_end,
+    period_start,
     rent_for_month,
     schedule_end,
 )
@@ -59,10 +62,13 @@ def _lease_years_to_dicts(lease_years) -> list[dict]:
     # can be read back (see `LeaseYear.generated`), which also makes it writable — and a
     # period is generated because the nightly job appended it, never because a client said
     # so. `_carry_forward_server_fields` puts the stored value back.
+    #
+    # `set_by_owner` likewise: only the set-amount endpoint writes it.
     out = []
     for ly in lease_years:
         year = ly.model_dump()
         year.pop("generated", None)
+        year.pop("set_by_owner", None)
         out.append(year)
     return out
 
@@ -80,7 +86,7 @@ def _carry_forward_server_fields(
 ) -> list[dict]:
     """Re-attach the per-year fields the server owns and the client never sends.
 
-    Two of them, for the same underlying reason: ``LeaseYear`` deliberately has no field
+    Several of them, for the same underlying reason: ``LeaseYear`` deliberately has no field
     for either, so a client can neither read one nor forge one — which also means an
     incoming payload always arrives without them, and writing it straight through would
     erase what the background jobs wrote.
@@ -101,7 +107,9 @@ def _carry_forward_server_fields(
       generated period into a negotiated one, and losing the flag is what makes the
       timeline badge it as Contract.
 
-    Both are carried across by year index, so a schedule the client reshaped can misalign
+    - ``set_by_owner`` — a CPI year whose rent the owner set by hand; see below.
+
+    All three are carried across by year index, so a schedule the client reshaped can misalign
     them. That is the accepted trade — the alternative is an id per period.
     """
     if not stored_raw:
@@ -121,6 +129,15 @@ def _carry_forward_server_fields(
                 year["amount"] = stored[i]["amount"]
         if stored[i].get("generated"):
             year["generated"] = True
+        # An owner-set rent outlives every other edit, a moved lease start included — it
+        # is what was agreed with the tenant, not a figure derived from the schedule. It
+        # goes only when the year stops being CPI-linked (the owner gave it another rule,
+        # or left index linkage), and with the year itself when the lease is shortened.
+        if stored[i].get("set_by_owner") and (
+            mode == "cpi" or (mode == "custom" and _rule_mode(year) == "cpi")
+        ):
+            year["set_by_owner"] = True
+            year["amount"] = stored[i]["amount"]
     return incoming
 
 
@@ -636,6 +653,65 @@ class RenterService:
 
         return self.renter_repository.update(
             renter, {"terminated_on": None, "termination_reason": None}
+        )
+
+    def set_lease_year_amount(
+        self, renter_id: int, year_index: int, amount: float, owner_id: str
+    ):
+        """Set one CPI year's rent to the amount the owner agreed with the tenant —
+        usually the confirmed index figure, rounded. Confirming the figure as it stands
+        comes through here too, with the calculated amount.
+
+        The year is marked ``set_by_owner``: it is never repriced again, and every year
+        after it is re-derived from it (see ``materialize_cpi_amounts``). Only once the
+        year's own index is in (the confirmed stage of the alert); an estimate is not a
+        figure to agree on yet. An owner-set year can be set again, to correct it.
+        """
+        renter = self.renter_repository.get_by_id(renter_id)
+        if renter is None:
+            return None
+        self._check_renter_access(renter, owner_id)
+
+        years = json.loads(renter.lease_years) if renter.lease_years else []
+        # Year one is the base rent, edited in the lease form, never through here.
+        if not 1 <= year_index < len(years):
+            raise HTTPException(status_code=422, detail="No such lease year")
+        mode = renter.rent_escalation_mode
+        year = years[year_index]
+        if not renter.lease_start or not (
+            mode == "cpi" or (mode == "custom" and _rule_mode(year) == "cpi")
+        ):
+            raise HTTPException(status_code=409, detail="This lease year is not CPI-linked")
+        anniversary = period_start(renter.lease_start, years, year_index)
+        if not is_set_by_owner(year) and not has_final_reading(year, anniversary):
+            raise HTTPException(
+                status_code=409, detail="This year's index is not published yet"
+            )
+
+        years[year_index] = {**year, "amount": amount, "set_by_owner": True}
+        resolved, cpi_base_index = self._resolve_lease_year_amounts(
+            mode,
+            years,
+            renter.lease_start,
+            renter.base_rent,
+            existing_base_index=renter.cpi_base_index,
+            recompute_base_index=False,
+            series=self.index_series_for_lease(renter.property_id, owner_id),
+        )
+
+        if self.activity_log_repository is not None:
+            self.activity_log_repository.record_action(
+                owner_id=owner_id,
+                action="update",
+                entity_type="renter",
+                entity_id=renter.id,
+                label=f"{renter.first_name} {renter.last_name}".strip(),
+                details={"fields": ["lease_years"]},
+            )
+
+        return self.renter_repository.update(
+            renter,
+            {"lease_years": json.dumps(resolved), "cpi_base_index": cpi_base_index},
         )
 
     def get_overdue_this_month(

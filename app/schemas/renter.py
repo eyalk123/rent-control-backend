@@ -3,7 +3,14 @@ from datetime import date
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from app.schemas.property import PropertyBriefRead
 from app.schemas.stored_file import StoredFile
@@ -63,6 +70,11 @@ class LeaseYear(BaseModel):
     # stored value forward instead — but it has to be declared here or the serializer
     # below would never emit it and the flag would never leave the database.
     generated: Optional[bool] = None
+    # The owner set this CPI year's rent by hand from a confirmed rent-change alert —
+    # usually the index figure rounded. Never repriced, and later CPI years derive from
+    # it. **Server-owned** like `generated`: only `PUT /renters/{id}/lease-years/{n}/amount`
+    # sets it, and `renter_service` carries the stored value across lease edits.
+    set_by_owner: Optional[bool] = None
 
     @field_validator("months")
     @classmethod
@@ -73,8 +85,8 @@ class LeaseYear(BaseModel):
 
     @model_serializer
     def serialize(self) -> dict:
-        """Drop `rule`, `months` and `generated` entirely when there isn't one, rather than
-        emitting nulls. Keeps both the stored JSON blob and the API response byte-identical
+        """Drop `rule`, `months`, `generated` and `set_by_owner` entirely when there isn't
+        one, rather than emitting nulls. Keeps both the stored JSON blob and the API response byte-identical
         to their earlier shape for every lease that uses none of them."""
         data: dict = {"amount": self.amount, "type": self.type.value}
         if self.rule is not None:
@@ -83,6 +95,8 @@ class LeaseYear(BaseModel):
             data["months"] = self.months
         if self.generated:
             data["generated"] = True
+        if self.set_by_owner:
+            data["set_by_owner"] = True
         return data
 
 
@@ -217,6 +231,13 @@ class RenterTerminate(BaseModel):
     reason: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class LeaseYearAmountSet(BaseModel):
+    """Body for PUT /renters/{id}/lease-years/{year_index}/amount — the rent the owner
+    agreed for one CPI year, from a confirmed rent-change alert. Stored as typed."""
+
+    amount: float = Field(gt=0)
 
 
 class RenterRead(BaseModel):

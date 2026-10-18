@@ -30,6 +30,8 @@ from app.services.cpi_indexing_service import (
     compute_chained_cpi_amount,
     compute_cpi_amount,
     has_final_reading,
+    is_set_by_owner,
+    owner_anchor,
 )
 from app.services.renter_service import RenterService
 from app.repositories.owner_repository import owner_today
@@ -422,7 +424,20 @@ class NotificationEngine:
         Uses the same two linkage models the job does, so the estimate and the eventual
         confirmation are computed the same way and differ only by which reading was
         available."""
+        # The owner already set this year's rent by hand: there is no estimate to give.
+        if is_set_by_owner(years[nxt]):
+            return None
         if renter.rent_escalation_mode == "cpi":
+            # An owner-set year earlier in the lease replaces the signing-time base.
+            anchor = owner_anchor(years, nxt)
+            if anchor is not None:
+                return compute_cpi_amount(
+                    years[anchor]["amount"],
+                    self.cpi_index_repository.latest_on_or_before(
+                        index_id, cpi.anniversary_of(renter.lease_start, years, anchor)
+                    ),
+                    proxy,
+                )
             base_rent = renter.base_rent or years[0].get("amount")
             if base_rent is None:
                 return None

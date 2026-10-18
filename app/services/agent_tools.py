@@ -49,7 +49,12 @@ from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
 from app.services import report_service
 from app.services import country_service
-from app.services.cpi_indexing_service import compute_chained_cpi_amount, compute_cpi_amount
+from app.services.cpi_indexing_service import (
+    compute_chained_cpi_amount,
+    compute_cpi_amount,
+    is_set_by_owner,
+    owner_anchor,
+)
 from app.services.entitlement_gate import EntitlementGate
 from app.services.property_service import PropertyService
 from app.services.renter_service import RenterService
@@ -1093,6 +1098,18 @@ class AgentTools:
             )
             return result
 
+        if is_set_by_owner(year_row):
+            result["cpi_linked"] = True
+            result["set_by_owner"] = True
+            result["amount"] = _num(year_row.get("amount"))
+            result["amount_display"] = format_money(year_row.get("amount"), style)
+            result["message"] = (
+                f"The owner set year {idx + 1}'s rent by hand (usually the index figure "
+                "rounded). It is not recomputed from the index, and later CPI years are "
+                "calculated from it."
+            )
+            return result
+
         if index_id is None:
             return {"error": "this lease's country has no index behind it"}
         known_dict, known_period = self._index_reading(anniversary, index_id)
@@ -1113,9 +1130,24 @@ class AgentTools:
         )
 
         if mode == "cpi":
-            # Whole-lease linkage: every year measured against the base index frozen at signing.
+            # Whole-lease linkage: every year measured against the base index frozen at
+            # signing — or, after a year the owner set by hand, against that year.
             base_index = r.cpi_base_index
             base_year, base_month = reference_period(r.lease_start)
+            anchor = owner_anchor(years, idx)
+            if anchor is not None:
+                anchor_start = period_start(r.lease_start, years, anchor)
+                anchor_dict, _ = self._index_reading(anchor_start, index_id)
+                base_rent = years[anchor]["amount"]
+                base_index = anchor_dict["value"] if anchor_dict else None
+                base_year, base_month = reference_period(anchor_start)
+                result.update(
+                    {
+                        "base_rent": _num(base_rent),
+                        "base_rent_display": format_money(base_rent, style),
+                        "anchored_on_owner_set_year": anchor + 1,
+                    }
+                )
             amount = compute_cpi_amount(base_rent, base_index, known_index)
             ratio = (known_index / base_index) if (base_index and known_index) else None
             floor_applied = bool(base_index and known_index and known_index < base_index)

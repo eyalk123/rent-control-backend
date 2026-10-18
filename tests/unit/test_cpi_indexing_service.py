@@ -17,6 +17,7 @@ from app.services.cpi_indexing_service import (
     is_frozen,
     materialize_cpi_amounts,
     materialize_ruled_lease_years,
+    owner_anchor,
 )
 from tests.factories import make_renter
 
@@ -357,6 +358,115 @@ def test_frozen_cpi_year_still_feeds_the_forward_walk():
 
     # The CPI year holds at its frozen amount, and the percent year still steps off it.
     assert [y["amount"] for y in out] == [5000, 5500, 5775]
+
+
+# --- owner-set years ----------------------------------------------------------
+
+
+def _owner_year(amount, rule=None):
+    year = {"amount": amount, "type": "contract", "set_by_owner": True}
+    if rule is not None:
+        year["rule"] = rule
+    return year
+
+
+def test_owner_set_year_keeps_its_amount_and_anchors_the_years_after_it():
+    lease_start = date(2020, 1, 1)
+    index_by_year = {0: 100.0, 1: 110.0, 2: 121.0, 3: 132.0}
+    years = [
+        {"amount": 5000, "type": "contract"},
+        _owner_year(5450),  # the index said 5500; the owner agreed 5450
+        {"amount": 0, "type": "contract"},
+        {"amount": 0, "type": "contract"},
+    ]
+
+    out = materialize_cpi_amounts(
+        years, lease_start, 5000, base_index=100.0,
+        index_lookup=_reading_lookup(index_by_year, offset=2020),
+    )
+
+    # Later years move by the index *since the owner's year*, from the owner's amount:
+    # 5450 x 121/110 and 5450 x 132/110 — not 5000 x 121/100.
+    assert [y["amount"] for y in out] == [5000, 5450, 5995, 6540]
+    assert out[1]["set_by_owner"] is True
+    assert "set_by_owner" not in out[2]
+
+
+def test_owner_set_year_is_the_floor_for_the_years_after_it():
+    lease_start = date(2020, 1, 1)
+    index_by_year = {0: 100.0, 1: 110.0, 2: 105.0}  # the index falls after it
+    years = [
+        {"amount": 5000, "type": "contract"},
+        _owner_year(5600),
+        {"amount": 0, "type": "contract"},
+    ]
+
+    out = materialize_cpi_amounts(
+        years, lease_start, 5000, base_index=100.0,
+        index_lookup=_reading_lookup(index_by_year, offset=2020),
+    )
+
+    assert [y["amount"] for y in out] == [5000, 5600, 5600]
+
+
+def test_owner_set_year_survives_a_forced_recompute():
+    """A superseded reading forces every year to re-derive — except the owner's figure,
+    which re-anchors against the new reading so the years after it still move."""
+    lease_start = date(2020, 1, 1)
+    years = [
+        {"amount": 5000, "type": "contract"},
+        _owner_year(5450),
+        {"amount": 0, "type": "contract"},
+    ]
+    lookup = _reading_lookup({0: 100.0, 1: 100.0, 2: 110.0}, offset=2020)
+
+    out = materialize_cpi_amounts(
+        years, lease_start, 5000, base_index=100.0, index_lookup=lookup,
+        force_recompute=True,
+    )
+
+    assert [y["amount"] for y in out] == [5000, 5450, 5995]
+    assert out[1]["cpi_reading"]["value"] == 100.0
+
+
+def test_owner_set_amount_is_stored_as_typed():
+    lease_start = date(2020, 1, 1)
+    years = [{"amount": 5000, "type": "contract"}, _owner_year(5449.5)]
+
+    out = materialize_cpi_amounts(
+        years, lease_start, 5000, base_index=100.0,
+        index_lookup=_reading_lookup({0: 100.0, 1: 110.0}, offset=2020),
+    )
+
+    assert out[1]["amount"] == 5449.5
+
+
+def test_chained_cpi_year_after_an_owner_set_year_steps_off_the_owner_amount():
+    lease_start = date(2026, 1, 1)
+    index_by_year = {2026: 100.0, 2027: 110.0, 2028: 121.0}
+    years = [_year(5000), _owner_year(5450, {"mode": "cpi"}), _year(0, {"mode": "cpi"})]
+
+    out = materialize_ruled_lease_years(years, lease_start, 5000, _reading_lookup(index_by_year))
+
+    # 5450 x 121/110, chained off the owner's figure rather than the computed 5500.
+    assert [y["amount"] for y in out] == [5000, 5450, 5995]
+    assert out[1]["set_by_owner"] is True
+
+
+def test_owner_anchor_finds_the_last_owner_set_year_before_the_given_one():
+    years = [
+        {"amount": 5000, "type": "contract"},
+        _owner_year(5400),
+        {"amount": 5600, "type": "contract"},
+        _owner_year(5800),
+        {"amount": 6000, "type": "contract"},
+    ]
+
+    assert owner_anchor(years, 1) is None
+    assert owner_anchor(years, 2) == 1
+    assert owner_anchor(years, 3) == 1
+    assert owner_anchor(years, 4) == 3
+    assert owner_anchor(years, 99) == 3
 
 
 # --- known-index lookup (publication convention) -----------------------------

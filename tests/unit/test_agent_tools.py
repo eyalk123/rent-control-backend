@@ -4,6 +4,7 @@ These assert two things at once: the tools return correct, service-backed number
 and they are strictly owner-scoped — a tool run as OWNER_A can never surface OWNER_B's
 data, even when handed OWNER_B's ids.
 """
+import json
 from datetime import date, timedelta
 
 from app.services.agent_tools import AgentTools, format_money
@@ -448,6 +449,27 @@ def test_explain_cpi_floor_applies_on_deflation(db_session):
     y2 = AgentTools(db_session).dispatch("explain_cpi", OWNER_A, {"renter_id": renter.id, "year": 2})
     assert y2["floor_applied"] is True
     assert y2["amount"] == 5000.0  # never below base rent (לא יפחת)
+
+
+def test_explain_cpi_after_an_owner_set_year_anchors_on_it(db_session):
+    """Year 2's rent was set by hand to 5200 (the index said 5250). Year 3 is measured
+    from that figure and that year's index, not from signing — the same as the engine."""
+    renter = _seed_cpi_lease(db_session)
+    years = json.loads(renter.lease_years)
+    years[1] = {"amount": 5200.0, "type": "contract", "set_by_owner": True}
+    renter.lease_years = json.dumps(years)
+    db_session.commit()
+    tools = AgentTools(db_session)
+
+    y2 = tools.dispatch("explain_cpi", OWNER_A, {"renter_id": renter.id, "year": 2})
+    assert y2["set_by_owner"] is True
+    assert y2["amount"] == 5200.0
+
+    y3 = tools.dispatch("explain_cpi", OWNER_A, {"renter_id": renter.id, "year": 3})
+    assert y3["anchored_on_owner_set_year"] == 2
+    assert y3["base_rent"] == 5200.0
+    assert y3["base_index"] == {"value": 105.0, "month": "2024-11"}
+    assert y3["amount"] == round(5200 * 110 / 105)
 
 
 def test_explain_cpi_on_non_cpi_lease_says_so(db_session):

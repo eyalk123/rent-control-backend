@@ -248,6 +248,54 @@ def test_cpi_heads_up_fires_inside_the_lead_window(db_session):
 
 
 @freeze_time("2026-06-15")
+def test_cpi_heads_up_after_an_owner_set_year_estimates_off_the_owner_amount(db_session):
+    prop = make_property(db_session)
+    # Year 2 started at index 100 and the owner set its rent to 5300 by hand; year 3
+    # reprices in 16 days, and the newest reading is 110.
+    lease_start = TODAY + timedelta(days=16) - relativedelta(years=2)
+    owner_year_start = lease_start + relativedelta(years=1)
+    CpiIndexRepository(db_session).upsert_many(
+        settings.CPI_INDEX_ID,
+        [(*reference_period(owner_year_start), 100.0), (*reference_period(TODAY), 110.0)],
+        source="cbs",
+    )
+    make_renter(
+        db_session,
+        property_id=prop.id,
+        rent_escalation_mode="cpi",
+        lease_start=lease_start,
+        lease_end=lease_start + relativedelta(years=3),
+        base_rent=5000.0,
+        cpi_base_index=100.0,
+        payment_day_of_month=28,
+        lease_years=[
+            {"amount": 5000.0, "type": "contract"},
+            {"amount": 5300.0, "type": "contract", "set_by_owner": True},
+            {"amount": 5300.0, "type": "contract"},
+        ],
+    )
+
+    cands = _cpi_candidates(db_session)
+
+    assert len(cands) == 1
+    assert cands[0].data["old_amount"] == 5300.0
+    assert cands[0].data["new_amount"] == 5830  # 5300 x 110/100, not 5000 x 110/100
+
+
+@freeze_time("2026-06-15")
+def test_cpi_heads_up_silent_for_a_year_the_owner_already_set(db_session):
+    prop = make_property(db_session)
+    _seed_index(db_session, 110.0)
+    renter = _make_cpi_renter(db_session, prop.id, anniversary_in_days=16)
+    years = json.loads(renter.lease_years)
+    years[1] = {"amount": 5450.0, "type": "contract", "set_by_owner": True}
+    renter.lease_years = json.dumps(years)
+    db_session.commit()
+
+    assert _cpi_candidates(db_session) == []
+
+
+@freeze_time("2026-06-15")
 def test_cpi_heads_up_silent_outside_the_lead_window(db_session):
     prop = make_property(db_session)
     _seed_index(db_session, 110.0)

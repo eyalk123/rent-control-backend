@@ -99,6 +99,25 @@ def is_frozen(year: dict, anniversary: date, today: date) -> bool:
     return has_final_reading(year, anniversary)
 
 
+def is_set_by_owner(year: dict) -> bool:
+    """Whether the owner set this year's rent by hand — the amount agreed with the tenant,
+    typically the index figure rounded. Such a year is never repriced again, and the years
+    after it derive from it (see :func:`owner_anchor`)."""
+    return bool(year.get("set_by_owner"))
+
+
+def owner_anchor(lease_years: list[dict], before: int) -> Optional[int]:
+    """The index of the last owner-set year before ``before``, or ``None``.
+
+    Under whole-lease linkage that year replaces the signing-time base: later years are
+    its amount × max(index at their anniversary ÷ index at its anniversary, 1). Year one
+    is the base rent itself and can never be owner-set."""
+    for i in range(min(before, len(lease_years)) - 1, 0, -1):
+        if is_set_by_owner(lease_years[i]):
+            return i
+    return None
+
+
 def has_final_reading(year: dict, anniversary: date) -> bool:
     """Whether a year's amount was computed from its own known-index month — the
     reading that settles it — rather than an older month standing in.
@@ -148,9 +167,15 @@ def materialize_cpi_amounts(
 
     ``force_recompute`` overrides that for one run. It is set when an authoritative
     source has superseded a reading a provisional value was derived from: the freeze
-    exists to stop *correct* numbers drifting, not to make a *wrong* one permanent."""
+    exists to stop *correct* numbers drifting, not to make a *wrong* one permanent.
+
+    An owner-set year (:func:`is_set_by_owner`) is never recomputed, ``force_recompute``
+    included — it is what the owner and tenant agreed, not a derivation. It becomes the
+    anchor for every year after it, in place of ``base_rent`` / ``base_index``. Its index
+    is looked up afresh each run, so a superseded reading still moves the later years."""
     today = today or date.today()
     result: list[dict] = []
+    anchor_amount, anchor_index = base_rent, base_index
     for i, year in enumerate(lease_years):
         # The boundary is where this period actually begins, which is only the i-th
         # anniversary when every period before it ran a full twelve months.
@@ -161,8 +186,25 @@ def materialize_cpi_amounts(
         # `run-lease-generation` and repriced here, and dropping the flag would relabel
         # every appended period as a term somebody agreed to.
         carried = {
-            k: year[k] for k in ("months", "generated") if year.get(k) is not None
+            k: year[k]
+            for k in ("months", "generated", "set_by_owner")
+            if year.get(k) is not None
         }
+        if i > 0 and is_set_by_owner(year):
+            reading = index_lookup(anniversary)
+            out = {"amount": year["amount"], "type": year["type"], **carried}
+            if reading is not None:
+                out["cpi_reading"] = reading.as_dict()
+            elif isinstance(year.get("cpi_reading"), dict):
+                out["cpi_reading"] = year["cpi_reading"]
+            result.append(out)
+            anchor_amount = year["amount"]
+            anchor_index = (
+                _value_of(reading)
+                if reading is not None
+                else (out.get("cpi_reading") or {}).get("value")
+            )
+            continue
         if not force_recompute and is_frozen(year, anniversary, today):
             result.append(
                 {
@@ -175,7 +217,7 @@ def materialize_cpi_amounts(
             continue
         reading = index_lookup(anniversary)
         out = {
-            "amount": compute_cpi_amount(base_rent, base_index, _value_of(reading)),
+            "amount": compute_cpi_amount(anchor_amount, anchor_index, _value_of(reading)),
             "type": year["type"],
             **carried,
         }
@@ -272,6 +314,13 @@ def materialize_ruled_lease_years(
         anniversary = period_start(lease_start, lease_years, i) if lease_start else None
         if i == 0:
             out["amount"] = round(prev_amount)
+        elif is_set_by_owner(year):
+            # The owner's figure, kept as typed and never repriced. The walk hands it on
+            # like any other amount, which is what makes the next CPI year chain off it.
+            out["amount"] = year["amount"]
+            reading = index_lookup(anniversary) if anniversary is not None else None
+            if reading is not None:
+                out["cpi_reading"] = reading.as_dict()
         elif (
             not force_recompute
             and anniversary is not None
