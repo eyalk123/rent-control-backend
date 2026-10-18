@@ -690,14 +690,18 @@ def test_cbs_parse_extracts_and_skips_incomplete():
         "month": [
             {
                 "date": [
-                    {"year": 2026, "month": 5, "currBase": {"value": 104.8}},
+                    {"year": 2026, "month": 5, "currBase": {"value": 104.8, "baseDesc": "2024 ממוצע"}},
                     {"year": 2026, "month": 4, "currBase": {"value": 105.1}},
                     {"year": 2026, "month": 3, "currBase": None},  # skipped
                 ]
             }
         ]
     }
-    assert CbsIndexService._parse(data) == [(2026, 5, 104.8), (2026, 4, 105.1)]
+    # The base each month was published in rides along; a reading without one says None.
+    assert CbsIndexService._parse(data) == [
+        (2026, 5, 104.8, "2024 ממוצע"),
+        (2026, 4, 105.1, None),
+    ]
 
 
 def test_cbs_fetch_all_follows_pagination(monkeypatch):
@@ -732,7 +736,7 @@ def test_cbs_fetch_all_follows_pagination(monkeypatch):
     # The HTTP call is shared by every source, so it lives in index_source.
     monkeypatch.setattr(index_source.requests, "get", fake_get)
     rows = mod.CbsIndexService("http://x", 120010).fetch_all()
-    assert rows == [(2026, 5, 104.8), (2026, 4, 105.1)]
+    assert rows == [(2026, 5, 104.8, None), (2026, 4, 105.1, None)]
 
 
 def test_fetch_json_returns_none_on_failure(monkeypatch):
@@ -767,7 +771,7 @@ def _sdmx(periods, observations):
 def test_boi_parse_maps_positions_to_periods():
     # Observation keys are positions into TIME_PERIOD, and values arrive as strings.
     data = _sdmx(["2026-05", "2026-06"], {"0": ["104.8"], "1": ["104.8"]})
-    assert BoiIndexService._parse(data) == [(2026, 5, 104.8), (2026, 6, 104.8)]
+    assert BoiIndexService._parse(data) == [(2026, 5, 104.8, None), (2026, 6, 104.8, None)]
 
 
 def test_boi_parse_skips_unusable_observations():
@@ -781,7 +785,7 @@ def test_boi_parse_skips_unusable_observations():
             "9": ["1.0"],    # position past the end of TIME_PERIOD
         },
     )
-    assert BoiIndexService._parse(data) == [(2026, 5, 104.8)]
+    assert BoiIndexService._parse(data) == [(2026, 5, 104.8, None)]
 
 
 def test_boi_parse_tolerates_an_empty_response():
@@ -979,7 +983,7 @@ def test_cbs_fetch_all_stops_paging_past_the_floor(monkeypatch):
     monkeypatch.setattr(index_source.requests, "get", fake_get)
     rows = mod.CbsIndexService("http://x", 120010).fetch_all()
 
-    assert rows == [(2026, 5, 104.8)]
+    assert rows == [(2026, 5, 104.8, None)]
     assert requested == [None, "http://x/page2"]  # page3 never fetched
 
 

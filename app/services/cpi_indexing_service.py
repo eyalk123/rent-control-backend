@@ -48,6 +48,7 @@ from app.services.index_source import IndexSource
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from app.services.cpi_scale import CpiScale
     from app.services.entitlement_gate import EntitlementGate
 
 
@@ -374,8 +375,13 @@ class CpiIndexingService:
         notification_repository: NotificationRepository | None = None,
         settings_repository: NotificationSettingsRepository | None = None,
         entitlement_gate: "EntitlementGate | None" = None,
+        scale: "CpiScale | None" = None,
     ):
         self.renter_repository = renter_repository
+        # Puts readings published on different index bases onto the series' one scale
+        # before they are cached. Optional so tests that feed bare (year, month, value)
+        # rows need no CBS stand-in; without it rows are stored as given.
+        self.scale = scale
         # Optional: without it no property is locked, which is every account's behaviour
         # before billing. With it, renters on a locked property are skipped — see
         # `run_cpi_indexing`.
@@ -450,6 +456,19 @@ class CpiIndexingService:
             rows = source.fetch_all() if full_backfill else source.fetch_latest()
             if not rows:
                 continue
+            rows, unscaled = self._on_scale(series, rows)
+            if unscaled:
+                # Stored on the wrong base they would misprice every lease across the
+                # change, so they wait for a run that can convert them. The staleness check
+                # escalates if that takes too long.
+                summary["degraded"] = True
+                logger.warning(
+                    "CPI: %d reading(s) of series %s left out, no base conversion yet",
+                    unscaled,
+                    index_id,
+                )
+            if not rows:
+                continue
             fetched, superseded = self.cpi_index_repository.upsert_many(
                 index_id, rows, source=source.name
             )
@@ -474,6 +493,11 @@ class CpiIndexingService:
                 served_by,
             )
         return superseded
+
+    def _on_scale(self, series, rows: list[tuple]) -> tuple[list[tuple], int]:
+        if self.scale is None:
+            return [tuple(r[:3]) for r in rows], 0
+        return self.scale.normalize(series, rows)
 
     def _notify_rent_change(
         self,

@@ -515,6 +515,14 @@ clauses actually reference, so it is always tried first and its readings superse
 `cpi_index.source` records which feed each cached reading came from. A run served by the fallback
 still returns 200 with `degraded: true` — the readings are correct, so nothing is broken.
 
+**Every cached reading is on one index base** (`IndexSeries.scale_base`, the 2024 average for
+Israel). CBS restarts the index near 100 at each base change and its API returns each month on the
+base it was published in, so readings on another base are converted before they are stored, with
+the CBS chaining coefficient read from its calculator API (`/index/data/calculator`) and kept in
+`cpi_base_factors` — see `app/services/cpi_scale.py`. A reading whose coefficient can't be fetched is
+left out of that run (`degraded: true`) rather than stored on the wrong scale. Never change
+`scale_base` on a series that has data.
+
 **It returns 503 when the cache falls more than `CPI_MAX_STALE_MONTHS` behind the newest published
 month.** That is the alarm worth wiring up: the fetch itself is best-effort and never raises, so
 without this check a completely dead feed keeps returning 200 while every CPI-linked rent silently

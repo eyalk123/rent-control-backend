@@ -11,8 +11,12 @@ see ``app/services/index_source.py`` and ``boi_index_service.py``.
 
 Response shape (id=120010):
     {"month": [{"code", "name", "date": [
-        {"year": 2026, "month": 5, "currBase": {"value": 104.8, ...}, ...}, ...
+        {"year": 2026, "month": 5, "currBase": {"value": 104.8, "baseDesc": "2024 ממוצע"},
+         ...}, ...
     ]}], ...}
+
+``currBase`` is the base the month was *published* in, not today's: the history is not on
+one scale. Readings carry it as a fourth element; see ``app/services/cpi_scale.py``.
 """
 import logging
 
@@ -38,7 +42,7 @@ class CbsIndexService:
         self.index_id = index_id
         self.history_floor = history_floor
 
-    def fetch_all(self) -> list[tuple[int, int, float]]:
+    def fetch_all(self) -> list[tuple]:
         """History back to :data:`HISTORY_FLOOR` — used to backfill an empty cache. Follows
         the API's ``next_url`` pagination (100 readings/page).
 
@@ -47,7 +51,7 @@ class CbsIndexService:
         floor — one request instead of nine. If that ordering ever changes we simply page to
         the end as before and filter, so this is an optimization, not a correctness
         assumption."""
-        rows: list[tuple[int, int, float]] = []
+        rows: list[tuple] = []
         url: str | None = f"{self.base_url}/index/data/price"
         params: dict | None = {
             "id": self.index_id,
@@ -70,7 +74,7 @@ class CbsIndexService:
             params = None  # next_url already carries the query string
         return rows
 
-    def fetch_latest(self, n: int = 6) -> list[tuple[int, int, float]]:
+    def fetch_latest(self, n: int = 6) -> list[tuple]:
         """The most recent ``n`` readings — used for the monthly refresh."""
         data = self._get(
             f"{self.base_url}/index/data/price",
@@ -82,14 +86,17 @@ class CbsIndexService:
         return fetch_json(url, params, logger, f"CBS (id={self.index_id})")
 
     @staticmethod
-    def _parse(data: dict) -> list[tuple[int, int, float]]:
-        rows: list[tuple[int, int, float]] = []
+    def _parse(data: dict) -> list[tuple]:
+        rows: list[tuple] = []
         for series in data.get("month") or []:
             for reading in series.get("date") or []:
                 year = reading.get("year")
                 month = reading.get("month")
-                value = (reading.get("currBase") or {}).get("value")
+                current = reading.get("currBase") or {}
+                value = current.get("value")
                 if year is None or month is None or value is None:
                     continue
-                rows.append((int(year), int(month), float(value)))
+                # Each month comes on the base it was published in ("2022 ממוצע" until
+                # December 2024, "2024 ממוצע" from January 2025); CpiScale evens them out.
+                rows.append((int(year), int(month), float(value), current.get("baseDesc")))
         return rows

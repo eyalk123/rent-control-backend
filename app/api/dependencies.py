@@ -27,6 +27,7 @@ from app.repositories.notification_rule_repository import NotificationRuleReposi
 from app.repositories.notification_settings_repository import (
     NotificationSettingsRepository,
 )
+from app.repositories.cpi_base_factor_repository import CpiBaseFactorRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.policy_rate_repository import PolicyRateRepository
 from app.repositories.property_mortgage_repository import PropertyMortgageRepository
@@ -45,6 +46,7 @@ from app.services.agent_service import AgentService
 from app.services.boi_index_service import BoiIndexService
 from app.services.cbs_index_service import CbsIndexService
 from app.services.cpi_indexing_service import CpiIndexingService
+from app.services.cpi_scale import CpiScale
 from app.services.policy_rate_service import PolicyRateService
 from app.services.lease_generation_service import LeaseGenerationService
 from app.services.device_token_service import DeviceTokenService
@@ -425,6 +427,7 @@ def get_cpi_indexing_service(
         NotificationSettingsRepository, Depends(get_notification_settings_repository)
     ],
     entitlement_gate: Annotated[EntitlementGate, Depends(get_entitlement_gate)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> CpiIndexingService:
     # Defined here rather than beside the other CPI factories because it needs the
     # notification repositories: the indexing job raises the confirmation half of the
@@ -436,6 +439,7 @@ def get_cpi_indexing_service(
         notification_repository=notification_repository,
         settings_repository=notification_settings_repository,
         entitlement_gate=entitlement_gate,
+        scale=CpiScale(CpiBaseFactorRepository(db), settings.CBS_API_BASE_URL),
     )
 
 

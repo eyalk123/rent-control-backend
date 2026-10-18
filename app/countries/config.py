@@ -95,6 +95,16 @@ class IndexSeries:
     label_key: str
     #: i18n key for the one-line explainer under it.
     note_key: str
+    #: The base every cached reading is expressed in, as :func:`cpi_scale.base_key` spells
+    #: it ("2024" for CBS's "2024 ממוצע"). A publisher that rebases restarts its index near
+    #: 100, so readings on two bases cannot be divided; anything arriving on another base
+    #: is converted to this one before it is stored (``CpiScale``). **Never change it** on a
+    #: series that has data: stored readings, frozen base indexes and lease-year readings
+    #: are all on this scale. ``None`` stores readings as the source gives them.
+    scale_base: str | None = None
+    #: A month the publisher issued in ``scale_base`` — the reference point the conversion
+    #: factors are asked for against.
+    scale_month: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -588,6 +598,11 @@ def _build() -> dict[str, CountryConfig]:
             history_floor=(2019, 11),
             label_key="renter.rentChangeCpi",
             note_key="renter.rentChangeCpiNote",
+            # Everything cached in production is on CBS's "2024 average" base: the
+            # 2019-2024 months came from the Bank of Israel, already rescaled to it, and
+            # CBS itself has published on it since January 2025.
+            scale_base="2024",
+            scale_month=(2025, 1),
         ),
         capabilities=Capabilities(
             cpi_linkage=True,

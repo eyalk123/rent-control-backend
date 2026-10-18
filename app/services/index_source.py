@@ -1,7 +1,12 @@
 """Common contract for the CPI index feeds.
 
 An index source normalizes whatever its upstream returns into ``(year, month, value)``
-tuples. Sources are tried in order by :class:`~app.services.cpi_indexing_service.CpiIndexingService`
+tuples, optionally followed by the index base the value is on (``"2024 ממוצע"``, ``"I24_L"``).
+A publisher that rebases restarts near 100, so that fourth element is what lets
+:class:`~app.services.cpi_scale.CpiScale` put every reading on one scale before it is cached;
+a source that omits it is taken to be on that scale already.
+
+Sources are tried in order by :class:`~app.services.cpi_indexing_service.CpiIndexingService`
 and the first one returning rows wins, so they must be interchangeable: same tuple shape,
 same best-effort failure mode (log and return an empty list, never raise). A source that
 raised would take down the whole job on one upstream hiccup.
@@ -41,8 +46,8 @@ HISTORY_FLOOR = (2019, 11)
 
 
 def at_or_after_floor(
-    rows: list[tuple[int, int, float]], floor: tuple[int, int] = HISTORY_FLOOR
-) -> list[tuple[int, int, float]]:
+    rows: list[tuple], floor: tuple[int, int] = HISTORY_FLOOR
+) -> list[tuple]:
     """Drop readings older than ``floor``."""
     cutoff = floor[0] * 12 + floor[1]
     return [r for r in rows if r[0] * 12 + r[1] >= cutoff]
@@ -53,11 +58,11 @@ class IndexSource(Protocol):
 
     name: str
 
-    def fetch_all(self) -> list[tuple[int, int, float]]:
+    def fetch_all(self) -> list[tuple]:
         """Full historical series — used to backfill an empty cache."""
         ...
 
-    def fetch_latest(self, n: int = 6) -> list[tuple[int, int, float]]:
+    def fetch_latest(self, n: int = 6) -> list[tuple]:
         """The most recent ``n`` months — used for the routine refresh."""
         ...
 
