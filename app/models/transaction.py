@@ -1,7 +1,7 @@
 import enum
 from datetime import date
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Table, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Table, Text, text
 from sqlalchemy.orm import relationship
 
 from app.clock import utc_now_naive
@@ -72,6 +72,9 @@ class Transaction(Base):
     )
     notes = Column(Text, nullable=True)
     receipt_image_url = Column(String, nullable=True)
+    # Expenses only. A renovation is not a deductible repair in the tax tracks report. The
+    # web asks only on a Repairs or Maintenance expense, where the two get confused.
+    is_renovation = Column(Boolean, nullable=False, server_default=text("false"), default=False)
     owner_id = Column(String, nullable=False)
     property_address = Column(Text, nullable=True)
     renter_name = Column(Text, nullable=True)

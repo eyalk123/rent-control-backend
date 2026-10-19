@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from app.models.property_owner import PropertyOwner
+from app.repositories.owner_repository import owner_today
 from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.schemas.property_owner import (
     PropertyOwnerCreate,
@@ -40,6 +41,9 @@ class PropertyOwnerService:
             return None
         return self._read(owner, self.repository.property_counts(owner_id))
 
+    def _today(self, owner_id: str):
+        return owner_today(self.repository.session, owner_id)
+
     def _require_free_name(self, name: str, owner_id: str, current_id: int | None = None) -> None:
         existing = self.repository.get_by_name(name, owner_id)
         if existing is not None and existing.id != current_id:
@@ -58,6 +62,10 @@ class PropertyOwnerService:
                 email=data.email,
                 notes=data.notes,
                 bank_account=data.bank_account,
+                is_company=data.is_company,
+                birth_date=data.birth_date,
+                over_60=data.over_60,
+                over_60_marked_on=self._today(owner_id) if data.over_60 else None,
             )
         )
         return self._read(created, {})
@@ -73,8 +81,16 @@ class PropertyOwnerService:
         fields = data.model_dump(exclude_unset=True)
         if "name" in fields and not fields["name"]:
             fields.pop("name")
-        if "is_active" in fields and fields["is_active"] is None:
-            fields.pop("is_active")
+        for flag in ("is_active", "is_company", "over_60"):
+            if flag in fields and fields[flag] is None:
+                fields.pop(flag)
+        # The tick counts from the year it was set. Every save of the form sends it, so only
+        # a change from off to on records a day; an owner already ticked keeps theirs.
+        if "over_60" in fields:
+            if not fields["over_60"]:
+                fields["over_60_marked_on"] = None
+            elif not owner.over_60:
+                fields["over_60_marked_on"] = self._today(owner_id)
         if "name" in fields and fields["name"] != owner.name:
             self._require_free_name(fields["name"], owner_id, current_id=owner.id)
             self.repository.rename_in_notification_scopes(owner_id, owner.name, fields["name"])

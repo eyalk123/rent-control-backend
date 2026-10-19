@@ -59,7 +59,18 @@ class PropertyOwnerRepository:
             self.session.flush()
         return property_owner
 
-    _UPDATABLE_FIELDS = ("name", "phone", "email", "notes", "bank_account", "is_active")
+    _UPDATABLE_FIELDS = (
+        "name",
+        "phone",
+        "email",
+        "notes",
+        "bank_account",
+        "is_active",
+        "is_company",
+        "birth_date",
+        "over_60",
+        "over_60_marked_on",
+    )
 
     def update(self, property_owner: PropertyOwner, fields: dict) -> PropertyOwner:
         for key in self._UPDATABLE_FIELDS:

@@ -28,6 +28,22 @@ def test_create_renter_without_property(client):
     assert body["lease_years"] == [{"amount": 18000, "type": "contract"}]
 
 
+def test_company_renter_is_off_unless_set_and_survives_other_edits(client):
+    assert client.post("/renters", json=_renter_payload()).json()["is_company"] is False
+
+    body = client.post("/renters", json=_renter_payload(is_company=True)).json()
+    assert body["is_company"] is True
+    assert client.patch(f"/renters/{body['id']}", json={"phone": "0509999999"}).json()[
+        "is_company"
+    ] is True
+    assert client.patch(f"/renters/{body['id']}", json={"is_company": None}).json()[
+        "is_company"
+    ] is True
+    assert client.patch(f"/renters/{body['id']}", json={"is_company": False}).json()[
+        "is_company"
+    ] is False
+
+
 def test_create_renter_without_email(client):
     payload = _renter_payload()
     payload.pop("email")

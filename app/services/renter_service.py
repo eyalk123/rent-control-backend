@@ -427,6 +427,7 @@ class RenterService:
             # date the generator moves every year, so it can never mean anything here.
             suppress_expiry_alerts=bool(data.suppress_expiry_alerts) or bool(data.open_ended),
             open_ended=bool(data.open_ended),
+            is_company=bool(data.is_company),
             insurance_type=data.insurance_type,
             insurance_amount=data.insurance_amount,
             contact_id=data.contact_id,
@@ -445,6 +446,8 @@ class RenterService:
         if self.entitlement_gate is not None:
             self.entitlement_gate.require_property_unlocked(owner_id, renter.property_id)
         update_dict = data.model_dump(exclude_unset=True)
+        if update_dict.get("is_company", False) is None:
+            update_dict.pop("is_company")
         sent = set(update_dict)
         if "property_id" in update_dict and update_dict["property_id"] is not None:
             property = self.property_repository.get_by_id(

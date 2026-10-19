@@ -1,5 +1,8 @@
 """Full-stack tests for /property-owners and the owner link on /properties."""
 import json
+from datetime import date, timedelta
+
+from freezegun import freeze_time
 
 from app.models.notification import NotificationTypeEnum
 from app.models.notification_rule import NotificationRule
@@ -22,6 +25,62 @@ def test_create_and_read_owner_with_contact_details(client):
     assert body["is_active"] is True
     assert body["property_count"] == 0
     assert client.get(f"/property-owners/{body['id']}").json()["phone"] == "050-1234567"
+
+
+def test_tax_fields_start_empty(client):
+    body = client.post("/property-owners", json={"name": "Dad"}).json()
+    assert body["is_company"] is False
+    assert body["birth_date"] is None
+    assert body["over_60"] is False
+    assert body["over_60_marked_on"] is None
+
+
+def test_company_and_birth_date_are_stored_as_sent(client):
+    body = client.post(
+        "/property-owners",
+        json={"name": "Levi Holdings", "is_company": True, "birth_date": "1961-03-04"},
+    ).json()
+    assert body["is_company"] is True
+    assert body["birth_date"] == "1961-03-04"
+    cleared = client.patch(
+        f"/property-owners/{body['id']}", json={"birth_date": None, "is_company": False}
+    ).json()
+    assert cleared["birth_date"] is None
+    assert cleared["is_company"] is False
+
+
+def test_a_birth_date_in_the_future_is_refused(client):
+    tomorrow = (date.today() + timedelta(days=2)).isoformat()
+    assert client.post(
+        "/property-owners", json={"name": "Dad", "birth_date": tomorrow}
+    ).status_code == 422
+    assert client.post(
+        "/property-owners", json={"name": "Dad", "birth_date": "1899-12-31"}
+    ).status_code == 422
+
+
+def test_over_60_records_the_day_it_was_ticked_and_keeps_it(client):
+    with freeze_time("2026-03-01 09:00"):
+        owner = client.post("/property-owners", json={"name": "Dad"}).json()
+        ticked = client.patch(f"/property-owners/{owner['id']}", json={"over_60": True}).json()
+    assert ticked["over_60"] is True
+    assert ticked["over_60_marked_on"] == "2026-03-01"
+
+    # Every save of the form sends the tick again; that is not a new day.
+    with freeze_time("2027-02-01 09:00"):
+        again = client.patch(
+            f"/property-owners/{owner['id']}", json={"over_60": True, "phone": "050"}
+        ).json()
+    assert again["over_60_marked_on"] == "2026-03-01"
+
+    unticked = client.patch(f"/property-owners/{owner['id']}", json={"over_60": False}).json()
+    assert unticked["over_60_marked_on"] is None
+
+
+def test_over_60_ticked_on_create_counts_from_that_day(client):
+    with freeze_time("2026-05-10 09:00"):
+        body = client.post("/property-owners", json={"name": "Mom", "over_60": True}).json()
+    assert body["over_60_marked_on"] == "2026-05-10"
 
 
 def test_blank_name_rejected(client):

@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Date, DateTime, Integer, String, Text, UniqueConstraint, text
 
 from app.clock import utc_now_naive
 from app.models.base import Base
@@ -26,5 +26,15 @@ class PropertyOwner(Base):
     email = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     bank_account = Column(String(50), nullable=True)
+    # The tax tracks report (PLATFORM.md §12). A company is outside the individual tracks,
+    # so its properties are left out of the comparison.
+    is_company = Column(Boolean, nullable=False, server_default=text("false"), default=False)
+    # The 60+ brackets apply from the tax year the owner turns 60. A birth date answers that
+    # for every year; `over_60` is for an owner who would rather not give one. That tick
+    # counts from the year it was set — earlier years stay unanswered — so the server keeps
+    # the day it was ticked in `over_60_marked_on`. With a birth date the tick is unused.
+    birth_date = Column(Date, nullable=True)
+    over_60 = Column(Boolean, nullable=False, server_default=text("false"), default=False)
+    over_60_marked_on = Column(Date, nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)

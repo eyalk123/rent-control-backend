@@ -157,6 +157,7 @@ class RenterCreate(BaseModel):
     payment_day_of_month: Optional[int] = None
     suppress_expiry_alerts: Optional[bool] = None
     open_ended: Optional[bool] = None
+    is_company: Optional[bool] = None
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
@@ -197,6 +198,7 @@ class RenterUpdate(BaseModel):
     payment_day_of_month: Optional[int] = None
     suppress_expiry_alerts: Optional[bool] = None
     open_ended: Optional[bool] = None
+    is_company: Optional[bool] = None
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None
@@ -269,6 +271,7 @@ class RenterRead(BaseModel):
     payment_day_of_month: Optional[int] = None
     suppress_expiry_alerts: Optional[bool] = None
     open_ended: Optional[bool] = None
+    is_company: Optional[bool] = None
     insurance_type: Optional[str] = None
     insurance_amount: Optional[float] = None
     contact_id: Optional[str] = None

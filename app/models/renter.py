@@ -75,6 +75,11 @@ class Renter(Base):
     open_ended = Column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )
+    # A company renter (a firm housing an employee) rules out the rent exemption in the tax
+    # tracks report; the 10% track still applies.
+    is_company = Column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     terminated_on = Column(Date, nullable=True)
     termination_reason = Column(String, nullable=True)
     number_of_payments = Column(Integer, nullable=True)

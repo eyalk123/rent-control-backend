@@ -54,6 +54,7 @@ class TransactionCreateExpense(BaseModel):
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: StoredFile = None
+    is_renovation: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -83,6 +84,7 @@ class TransactionRead(BaseModel):
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: Optional[str] = None
+    is_renovation: bool = False
     created_at: UtcDatetime
     updated_at: UtcDatetime
     property_name: Optional[str] = None
@@ -122,6 +124,7 @@ class TransactionUpdateExpense(BaseModel):
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
     receipt_image_url: StoredFile = None
+    is_renovation: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
 

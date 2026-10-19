@@ -92,6 +92,30 @@ def test_create_expense(client, db_session):
     assert body["category_name"] == "Plumbing"
 
 
+def test_renovation_mark_is_stored_and_changed_on_an_expense(client, db_session):
+    prop = make_property(db_session)
+    cat = make_expense_category(db_session, name="Repairs")
+    payload = {
+        "property_id": prop.id,
+        "amount": 9000,
+        "date_of_payment": "2026-04-10",
+        "payment_method": "cash",
+        "category_ids": [cat.id],
+    }
+    plain = client.post("/transactions/expense", json=payload).json()
+    assert plain["is_renovation"] is False
+
+    marked = client.post("/transactions/expense", json={**payload, "is_renovation": True}).json()
+    assert marked["is_renovation"] is True
+    # An edit that does not mention it leaves it alone.
+    edited = client.patch(f"/transactions/expense/{marked['id']}", json={"amount": 9500}).json()
+    assert edited["is_renovation"] is True
+    cleared = client.patch(
+        f"/transactions/expense/{marked['id']}", json={"is_renovation": False}
+    ).json()
+    assert cleared["is_renovation"] is False
+
+
 def test_create_expense_requires_category(client, db_session):
     prop = make_property(db_session)
     payload = {

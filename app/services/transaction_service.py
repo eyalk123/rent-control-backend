@@ -108,6 +108,7 @@ class TransactionService:
             supplier_id=t.supplier_id,
             notes=t.notes,
             receipt_image_url=t.receipt_image_url,
+            is_renovation=bool(t.is_renovation),
             created_at=t.created_at,
             updated_at=t.updated_at,
             property_name=property_name,
@@ -386,6 +387,8 @@ class TransactionService:
             fields["notes"] = data.notes
         if "receipt_image_url" in data.model_fields_set:
             fields["receipt_image_url"] = data.receipt_image_url
+        if data.is_renovation is not None:
+            fields["is_renovation"] = data.is_renovation
         # `category_id` is just `category_ids[0]`, and the set itself lives on a
         # relationship rather than in `fields` — so the column diff would miss an edit
         # that only touched the secondary categories. Report the one name the client
@@ -521,6 +524,7 @@ class TransactionService:
             supplier_id=data.supplier_id,
             notes=data.notes,
             receipt_image_url=data.receipt_image_url,
+            is_renovation=data.is_renovation,
             property_address=property_address,
             renter_name=renter_name_snap,
         )
