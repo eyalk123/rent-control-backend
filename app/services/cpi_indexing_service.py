@@ -476,6 +476,9 @@ class CpiIndexingService:
             summary["source"] = served_by = source.name
             break
 
+        if not full_backfill:
+            self._extend_history(series, sources, summary)
+
         if served_by is None:
             logger.warning(
                 "CPI: no index source returned data for series %s (tried %s)",
@@ -493,6 +496,40 @@ class CpiIndexingService:
                 served_by,
             )
         return superseded
+
+    def _extend_history(self, series, sources: list[IndexSource], summary: dict) -> None:
+        """Reach back to ``history_floor`` when the cache starts after it — the floor was
+        lowered after the cache was filled.
+
+        Adds only months older than anything cached, so nothing already stored changes:
+        no reading is superseded and no lease is re-derived from a new value. Asks the
+        first source only. History is not urgent, and a fallback answering here would leave
+        those months on a lower-ranked source for good, since nothing re-reads them. A run
+        that cannot extend leaves it to the next one."""
+        index_id = series.series_id
+        earliest = self.cpi_index_repository.earliest_period(index_id)
+        if earliest is None or earliest <= tuple(series.history_floor) or not sources:
+            return
+        source = sources[0]
+        older = [r for r in source.fetch_all() if (r[0], r[1]) < earliest]
+        rows, unscaled = self._on_scale(series, older)
+        if unscaled:
+            summary["degraded"] = True
+            logger.warning(
+                "CPI: %d older reading(s) of series %s left out, no base conversion yet",
+                unscaled,
+                index_id,
+            )
+        if not rows:
+            return
+        added, _ = self.cpi_index_repository.upsert_many(index_id, rows, source=source.name)
+        summary["fetched"] += added
+        logger.info(
+            "CPI: series %s history extended by %d month(s), now from %s",
+            index_id,
+            added,
+            _period_str(self.cpi_index_repository.earliest_period(index_id)),
+        )
 
     def _on_scale(self, series, rows: list[tuple]) -> tuple[list[tuple], int]:
         if self.scale is None:
@@ -706,7 +743,8 @@ class CpiIndexingService:
             series_by_id.setdefault(series.series_id, series)
 
         # 1. Refresh each series from the first of its sources that answers: full backfill
-        #    when empty, else the latest few months.
+        #    when empty, else the latest few months (and any history the floor was lowered
+        #    to since).
         reconciled_ids: set[int] = set()
         for index_id, series in series_by_id.items():
             if self._refresh_cache(series, summary):

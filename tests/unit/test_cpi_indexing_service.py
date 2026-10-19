@@ -1028,3 +1028,49 @@ def test_lease_at_the_floor_resolves_normally(db_session):
     assert summary["renters_before_index_start"] == 0
     db_session.refresh(renter)
     assert renter.cpi_base_index == 100.0
+
+
+# --- extending the history after the floor is lowered ------------------------------
+
+def test_a_lowered_floor_adds_the_older_months_and_changes_nothing_stored(db_session):
+    """Israel's floor moved from 2019-11 to 1986-01 for the tax report's depreciation. A
+    cache filled before that gets the older months on the next run, and the months it
+    already had stay exactly as they were — even where the source now says otherwise."""
+    repo = CpiIndexRepository(db_session)
+    repo.upsert_many(INDEX_ID, [(2019, 11, 88.4), _fresh_row()], source="boi")
+    cbs = FakeCbs(
+        all_rows=[(1986, 1, 12.3), (1999, 6, 55.0), (2019, 11, 88.3), _fresh_row(111.0)],
+        latest_rows=[_fresh_row()],
+    )
+
+    summary = _run(db_session, [cbs, FakeBoi()])
+
+    assert repo.earliest_period(INDEX_ID) == (1986, 1)
+    assert repo.latest_on_or_before(INDEX_ID, date(1999, 9, 1)) == 55.0
+    stored = repo.reading_on_or_before(INDEX_ID, date(2020, 1, 1))
+    assert (stored.value, stored.source) == (88.4, "boi")
+    assert summary["fetched"] >= 2
+
+
+def test_history_is_extended_from_the_first_source_only(db_session):
+    """A fallback answering would leave those months on a lower-ranked source for good,
+    since nothing reads them again; the next run asks the authority again instead."""
+    repo = CpiIndexRepository(db_session)
+    repo.upsert_many(INDEX_ID, [(2019, 11, 88.4), _fresh_row()], source="cbs")
+    cbs = FakeCbs(all_rows=[], latest_rows=[_fresh_row()])
+    boi = FakeBoi(all_rows=[(1986, 1, 12.3)])
+
+    _run(db_session, [cbs, boi])
+
+    assert boi.calls == 0
+    assert repo.earliest_period(INDEX_ID) == (2019, 11)
+
+
+def test_a_cache_already_at_the_floor_is_not_refetched(db_session):
+    repo = CpiIndexRepository(db_session)
+    repo.upsert_many(INDEX_ID, [(1986, 1, 12.3), _fresh_row()], source="cbs")
+    cbs = FakeCbs(all_rows=[(1985, 12, 12.0)], latest_rows=[_fresh_row()])
+
+    _run(db_session, [cbs])
+
+    assert cbs.calls == 1  # the routine refresh, no history request

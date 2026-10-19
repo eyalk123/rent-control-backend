@@ -8,7 +8,7 @@ corrupted ledger.
 """
 import pytest
 
-from app.countries.config import COUNTRIES
+from app.countries.config import COUNTRIES, TaxData
 from app.services import country_service as cs
 
 
@@ -161,7 +161,7 @@ class TestIndexSeries:
         assert series is not None
         assert series.series_id == 120010
         assert series.sources == ("cbs", "boi")
-        assert series.history_floor == (2019, 11)
+        assert series.history_floor == (1986, 1)
 
     def test_the_labels_are_i18n_keys(self):
         """Not finished strings: the country picks the concept, the language says it. A
@@ -197,3 +197,15 @@ class TestIndexSeries:
                 continue
             assert set(cfg.index_series.sources) <= wired, code
 
+
+class TestTaxData:
+    def test_the_flag_and_the_source_never_disagree(self):
+        """The tax refresh is scoped by both; a flag with no source would offer a report
+        with no figures behind it."""
+        for code, cfg in COUNTRIES.items():
+            assert cfg.capabilities.tax_tracks == (cfg.tax_data is not None), code
+
+    def test_israel_reads_the_tax_authority_booklet_from_2022(self):
+        assert cs.tax_data_by_country() == {
+            "IL": TaxData(source="il_booklet", first_year=2022)
+        }

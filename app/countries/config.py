@@ -108,6 +108,20 @@ class IndexSeries:
 
 
 @dataclass(frozen=True)
+class TaxData:
+    """Where a country's government tax figures come from, for the tax tracks report.
+
+    The figures themselves are never written here: they are read from the publisher and
+    stored per tax year in ``tax_values`` (``TaxDataService``). This only names the reader.
+    """
+
+    #: ``TaxSource.name`` — the reader for this country's publications.
+    source: str
+    #: The oldest tax year the report offers, and the first one loaded.
+    first_year: int
+
+
+@dataclass(frozen=True)
 class CountryConfig:
     country_code: str
     name: str
@@ -145,6 +159,10 @@ class CountryConfig:
     # behind it is a live endpoint with no data source, which is the failure mode the
     # capability system exists to prevent. `test_regression_gates` asserts the pairing.
     index_series: IndexSeries | None = None
+
+    # Where the tax tracks report's government figures come from. Set for exactly the
+    # countries whose `capabilities.tax_tracks` is on, for the same reason as `index_series`.
+    tax_data: TaxData | None = None
 
     capabilities: Capabilities = field(default_factory=Capabilities)
 
@@ -590,12 +608,14 @@ def _build() -> dict[str, CountryConfig]:
         # The general Consumer Price Index, published by the Central Bureau of Statistics and
         # republished by the Bank of Israel — the two feeds `get_index_sources` already wires
         # up, in that order, because CBS is the publisher escalation clauses reference. The
-        # floor is November 2019 rather than January for the reason `index_source` gives: the
-        # known-index rule reaches two months back, so a January 2020 lease needs it.
+        # floor is January 1986, far below any lease, because the tax tracks report's
+        # depreciation is linked to the index from the year a property was bought. 1986 is
+        # where the CBS series stops being usable: earlier months are on bases from the
+        # hyperinflation years, published before the new shekel, and do not chain cleanly.
         index_series=IndexSeries(
             series_id=120010,
             sources=("cbs", "boi"),
-            history_floor=(2019, 11),
+            history_floor=(1986, 1),
             label_key="renter.rentChangeCpi",
             note_key="renter.rentChangeCpiNote",
             # Everything cached in production is on CBS's "2024 average" base: the
@@ -604,6 +624,9 @@ def _build() -> dict[str, CountryConfig]:
             scale_base="2024",
             scale_month=(2025, 1),
         ),
+        # The Tax Authority's yearly withholding booklet, plus the rates written in the law.
+        # 2022 is the oldest year the report offers.
+        tax_data=TaxData(source="il_booklet", first_year=2022),
         capabilities=Capabilities(
             cpi_linkage=True,
             tax_tracks=True,

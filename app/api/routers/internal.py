@@ -15,6 +15,7 @@ from app.api.dependencies import (
     get_policy_rate_service,
     get_reminder_service,
     get_retention_service,
+    get_tax_data_service,
 )
 from app.config import settings
 from app.repositories.job_run_repository import JobRunRepository
@@ -23,6 +24,7 @@ from app.services.policy_rate_service import PolicyRateService
 from app.services.lease_generation_service import LeaseGenerationService
 from app.services.reminder_service import ReminderService
 from app.services.retention_service import RetentionService
+from app.services.tax_data_service import TaxDataService
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +142,7 @@ def run_reminders(
     ],
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
     policy_rate_service: Annotated[PolicyRateService, Depends(get_policy_rate_service)],
+    tax_data_service: Annotated[TaxDataService, Depends(get_tax_data_service)],
 ):
     """Send overdue-rent and expiring-lease pushes. Intended to be called once a
     day by an external scheduler with the X-Cron-Secret header.
@@ -195,11 +198,20 @@ def run_reminders(
         except Exception:
             logger.exception("Policy rate refresh failed; sending reminders anyway")
 
+    # The tax tracks report's government figures. Same best-effort shape: a new year's
+    # booklet is looked for daily, and this year's is re-checked weekly for a republication.
+    tax_years_updated: list[str] = []
+    try:
+        tax_years_updated = tax_data_service.refresh()["updated"]
+    except Exception:
+        logger.exception("Tax data refresh failed; sending reminders anyway")
+
     sent = _record(job_runs, JOB_REMINDERS, reminder_service.run_daily_reminders)
     return {
         "status": "ok",
         "sent": sent,
         "rate_changes_added": rate_changes,
+        "tax_years_updated": tax_years_updated,
         "cpi_caught_up": caught_up,
         "leases_generated": leases_generated,
     }

@@ -396,6 +396,16 @@ check-in as errored. Keep the cron entry and `ROLLUP_MONITOR_CONFIG` in
 `app/api/routers/internal.py` in sync — Sentry upserts the monitor from the config sent with each
 check-in. If the rollup itself never runs, Sentry reports it as a missed check-in.
 
+**`run-reminders` also refreshes the tax tracks report's government figures**
+(`app/services/tax_data_service.py`), best-effort like the policy rate. For every country with
+`tax_tracks` on, it writes the rates in the law for each year from `TaxData.first_year`
+(`il_tax_source.LAW_VALUES`, each with its section), and downloads the Tax Authority's yearly
+booklet: a year with none stored is tried every run, this year's is re-checked weekly (last year's
+too in January), and a file with a new fingerprint is read again and replaces that year's figures.
+Results land in `tax_documents` and `tax_values`. A booklet that downloads but does not read sends a
+Sentry error and keeps the year's old figures — its layout changed, so `il_tax_source` needs a
+look. PDFium builds disagree on the order of right-to-left text, so the reader accepts both.
+
 **Schedule `run-cpi-indexing` before `run-reminders`** — though it is no longer load-bearing. The
 indexing job writes the `cpi_rent_change` confirmation as it reprices a lease; the reminders job is
 what pushes un-pushed rows. `run-reminders` now checks `job_runs` for a successful indexing run
@@ -522,6 +532,13 @@ the CBS chaining coefficient read from its calculator API (`/index/data/calculat
 `cpi_base_factors` — see `app/services/cpi_scale.py`. A reading whose coefficient can't be fetched is
 left out of that run (`degraded: true`) rather than stored on the wrong scale. Never change
 `scale_base` on a series that has data.
+
+**The history reaches back to `IndexSeries.history_floor`** — January 1986 for Israel, because the
+tax tracks report links depreciation to the index from the purchase year. Lowering the floor needs
+nothing else: when the cache starts after it, the next run asks CBS for the full series and adds
+only the months older than anything cached. Stored months are never touched, so no lease is
+repriced by it, but a CPI lease that started before the old floor gets its base index for the
+first time and is priced from then on.
 
 **It returns 503 when the cache falls more than `CPI_MAX_STALE_MONTHS` behind the newest published
 month.** That is the alarm worth wiring up: the fetch itself is best-effort and never raises, so

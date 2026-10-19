@@ -137,3 +137,13 @@ def _no_firebase_auth_deletion(monkeypatch):
     from app.services import user_service
 
     monkeypatch.setattr(user_service, "delete_auth_user", lambda uid: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_tax_booklet_downloads(monkeypatch):
+    """`run-reminders` refreshes the tax figures, which downloads the Tax Authority's booklets
+    (a few MB each). Every test sees them as not published yet; the tax data tests patch
+    the fetch themselves."""
+    from app.services import tax_data_service
+
+    monkeypatch.setattr(tax_data_service, "fetch_document", lambda url: ("missing", None))

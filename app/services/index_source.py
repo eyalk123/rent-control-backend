@@ -38,10 +38,10 @@ FETCH_TIMEOUT_SECONDS = 8
 # pass unnoticed. If real users start entering older leases, lower this and let the next
 # run re-backfill.
 #
-# It is the *default*, not the rule: "how far back does a lease in this market plausibly
-# start" is a per-series question, so each source is constructed with its series' own floor
-# (``IndexSeries.history_floor``). This value is what Israel's is set to, and what a source
-# built without one falls back to.
+# It is the *default*, not the rule: how far back a market needs is a per-series question,
+# so each source is constructed with its series' own floor (``IndexSeries.history_floor``).
+# Israel's reaches 1986, for the tax tracks report's depreciation. This value is what a
+# source built without one falls back to.
 HISTORY_FLOOR = (2019, 11)
 
 

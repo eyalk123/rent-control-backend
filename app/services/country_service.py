@@ -24,6 +24,7 @@ from app.countries.config import (
     Capabilities,
     CountryConfig,
     IndexSeries,
+    TaxData,
 )
 
 # What an unrecognised code resolves to. Deliberately *not* Israel: an unknown country
@@ -176,6 +177,17 @@ def index_series_by_country() -> dict[str, IndexSeries]:
         code: _with_overrides(cfg.index_series, code)
         for code, cfg in COUNTRIES.items()
         if cfg.capabilities.cpi_linkage and cfg.index_series is not None
+    }
+
+
+def tax_data_by_country() -> dict[str, TaxData]:
+    """Every country the tax tracks report is on for, with where its figures come from —
+    what the tax data refresh iterates. Reads the flag and the config together, like
+    :func:`index_series_by_country`."""
+    return {
+        code: cfg.tax_data
+        for code, cfg in COUNTRIES.items()
+        if cfg.capabilities.tax_tracks and cfg.tax_data is not None
     }
 
 
