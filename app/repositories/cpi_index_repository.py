@@ -62,6 +62,13 @@ class CpiIndexRepository:
         row = self.reading_on_or_before(index_id, d)
         return row.value if row else None
 
+    def value_for(self, index_id: int, year: int, month: int) -> float | None:
+        """The reading for exactly this month, or ``None`` when it is not cached."""
+        stmt = select(CpiIndex.value).where(
+            CpiIndex.index_id == index_id, CpiIndex.year == year, CpiIndex.month == month
+        )
+        return self.session.scalar(stmt)
+
     def latest_period(self, index_id: int) -> tuple[int, int] | None:
         """The newest ``(year, month)`` cached for the series, or ``None`` when empty.
         Compare against :func:`reference_period` to tell how stale the cache is."""

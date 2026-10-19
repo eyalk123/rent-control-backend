@@ -28,6 +28,7 @@ from app.api.routers import (
     property_owners,
     suppliers,
     support_messages,
+    tax_tracks,
     transactions,
     users,
 )
@@ -104,6 +105,7 @@ app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"], de
 app.include_router(property_owners.router, prefix="/property-owners", tags=["property-owners"], dependencies=_owner_refresh)
 app.include_router(users.router, prefix="/users", tags=["users"], dependencies=_owner_refresh)
 app.include_router(reports.router, prefix="/reports", tags=["reports"], dependencies=_owner_refresh)
+app.include_router(tax_tracks.router, prefix="/tax-tracks", tags=["tax-tracks"], dependencies=_owner_refresh)
 app.include_router(device_tokens.router, prefix="/device-tokens", tags=["device-tokens"], dependencies=_owner_refresh)
 app.include_router(notifications.router, prefix="/notifications", tags=["notifications"], dependencies=_owner_refresh)
 app.include_router(support_messages.router, prefix="/support-messages", tags=["support-messages"], dependencies=_owner_refresh)

@@ -22,7 +22,9 @@ from app.models.subscription import Subscription
 from app.models.subscription_event import SubscriptionEvent
 from app.models.supplier import Supplier
 from app.models.support_message import SupportMessage, SupportMessageTypeEnum
+from app.models.tax_group import TaxGroup
 from app.models.tax_value import TaxDocument, TaxValue
+from app.models.tax_year_input import TaxYearInput
 from app.models.transaction import (
     PaymentMethodEnum,
     Transaction,
@@ -63,7 +65,9 @@ __all__ = [
     "SupportMessage",
     "SupportMessageTypeEnum",
     "TaxDocument",
+    "TaxGroup",
     "TaxValue",
+    "TaxYearInput",
     "PaymentMethodEnum",
     "Transaction",
     "TransactionTypeEnum",

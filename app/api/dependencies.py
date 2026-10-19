@@ -30,7 +30,9 @@ from app.repositories.notification_settings_repository import (
 from app.repositories.cpi_base_factor_repository import CpiBaseFactorRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.policy_rate_repository import PolicyRateRepository
+from app.repositories.tax_group_repository import TaxGroupRepository
 from app.repositories.tax_value_repository import TaxValueRepository
+from app.repositories.tax_year_input_repository import TaxYearInputRepository
 from app.repositories.property_mortgage_repository import PropertyMortgageRepository
 from app.repositories.job_run_repository import JobRunRepository
 from app.repositories.legal_acceptance_repository import LegalAcceptanceRepository
@@ -50,6 +52,7 @@ from app.services.cpi_indexing_service import CpiIndexingService
 from app.services.cpi_scale import CpiScale
 from app.services.policy_rate_service import PolicyRateService
 from app.services.tax_data_service import TaxDataService
+from app.services.tax_tracks_service import TaxTracksService
 from app.services.lease_generation_service import LeaseGenerationService
 from app.services.device_token_service import DeviceTokenService
 from app.services.document_extraction_service import DocumentExtractionService
@@ -485,6 +488,19 @@ def get_policy_rate_service(db: Annotated[Session, Depends(get_db)]) -> PolicyRa
 
 def get_tax_data_service(db: Annotated[Session, Depends(get_db)]) -> TaxDataService:
     return TaxDataService(TaxValueRepository(db))
+
+
+def get_tax_tracks_service(db: Annotated[Session, Depends(get_db)]) -> TaxTracksService:
+    return TaxTracksService(
+        PropertyRepository(db),
+        PropertyOwnerRepository(db),
+        RenterRepository(db),
+        TransactionRepository(db),
+        TaxGroupRepository(db),
+        TaxValueRepository(db),
+        TaxYearInputRepository(db),
+        CpiIndexRepository(db),
+    )
 
 
 def get_notification_preferences_service(

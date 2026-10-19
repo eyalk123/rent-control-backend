@@ -21,7 +21,7 @@ from tests.factories import (
     make_transaction,
 )
 
-SHEETS = ["Properties", "Property owners", "Renters", "Transactions", "Suppliers", "Categories"]
+SHEETS = ["Properties", "Property owners", "Renters", "Transactions", "Suppliers", "Categories", "Tax groups", "Tax year inputs"]
 
 
 def _sheets(workbook_bytes: bytes):

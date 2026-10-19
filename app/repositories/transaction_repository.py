@@ -210,6 +210,38 @@ class TransactionRepository:
         self.session.refresh(transaction)
         return transaction
 
+    def revenue_between(
+        self, owner_id: str, property_ids: "list[int]", start: date, end: date
+    ) -> "list[Transaction]":
+        """Rent on these properties whose month (``month_for``, else the paid day) falls in
+        ``[start, end]``."""
+        if not property_ids:
+            return []
+        stmt = select(Transaction).where(
+            Transaction.owner_id == owner_id,
+            Transaction.type == TransactionTypeEnum.REVENUE,
+            Transaction.property_id.in_(property_ids),
+            EFFECTIVE_DATE >= start,
+            EFFECTIVE_DATE <= end,
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def expenses_between(
+        self, owner_id: str, property_ids: "list[int]", start: date, end: date
+    ) -> "list[Transaction]":
+        """Expenses on these properties whose month (``month_for``, else the paid day) falls
+        in ``[start, end]``."""
+        if not property_ids:
+            return []
+        stmt = select(Transaction).where(
+            Transaction.owner_id == owner_id,
+            Transaction.type == TransactionTypeEnum.EXPENSE,
+            Transaction.property_id.in_(property_ids),
+            EFFECTIVE_DATE >= start,
+            EFFECTIVE_DATE <= end,
+        )
+        return list(self.session.scalars(stmt).all())
+
     def delete(self, transaction_id: int, owner_id: str) -> bool:
         transaction = self.get_by_id(transaction_id, owner_id)
         if transaction is None:
