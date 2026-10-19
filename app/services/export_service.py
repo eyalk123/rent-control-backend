@@ -226,6 +226,38 @@ _TAX_YEAR_INPUT_COLUMNS: list[tuple[str, Callable]] = [
     ("updated_at", lambda i: i.updated_at),
 ]
 
+# A mortgage, its payment history and the bank's yearly figures, one sheet each. Every row
+# carries the property it belongs to, so the three read on their own.
+_MORTGAGE_COLUMNS: list[tuple[str, Callable]] = [
+    ("id", lambda m: m.id),
+    ("property_id", lambda m: m.property_id),
+    ("property_address", lambda m: m.property.address),
+    ("charge_day", lambda m: m.charge_day),
+    ("end_date", lambda m: m.end_date),
+    ("has_prime_track", lambda m: m.has_prime_track),
+    ("created_at", lambda m: m.created_at),
+    ("updated_at", lambda m: m.updated_at),
+]
+
+_MORTGAGE_PAYMENT_COLUMNS: list[tuple[str, Callable]] = [
+    ("mortgage_id", lambda p: p.mortgage_id),
+    ("property_address", lambda p: p.mortgage.property.address),
+    ("amount", lambda p: p.amount),
+    ("effective_from", lambda p: p.effective_from),
+    ("created_at", lambda p: p.created_at),
+]
+
+_MORTGAGE_YEAR_COLUMNS: list[tuple[str, Callable]] = [
+    ("mortgage_id", lambda y: y.mortgage_id),
+    ("property_address", lambda y: y.mortgage.property.address),
+    ("year", lambda y: y.year),
+    ("interest", lambda y: y.interest),
+    ("linkage", lambda y: y.linkage),
+    ("balance", lambda y: y.balance),
+    ("document", lambda y: _archive_file(y.document.url) if y.document else None),
+    ("updated_at", lambda y: y.updated_at),
+]
+
 _CATEGORY_COLUMNS: list[tuple[str, Callable]] = [
     ("id", lambda c: c.id),
     ("key", lambda c: c.key),
@@ -287,12 +319,8 @@ def build_workbook(db: Session, owner_id: str) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)  # drop the default sheet openpyxl creates
 
-    _write_sheet(
-        wb,
-        "Properties",
-        _property_columns(db, owner_id),
-        PropertyRepository(db).get_all_by_owner(owner_id),
-    )
+    properties = PropertyRepository(db).get_all_by_owner(owner_id)
+    _write_sheet(wb, "Properties", _property_columns(db, owner_id), properties)
     _write_sheet(
         wb,
         "Property owners",
@@ -316,6 +344,17 @@ def build_workbook(db: Session, owner_id: str) -> bytes:
     _write_sheet(wb, "Tax groups", _TAX_GROUP_COLUMNS, TaxGroupRepository(db).get_all(owner_id))
     _write_sheet(
         wb, "Tax year inputs", _TAX_YEAR_INPUT_COLUMNS, TaxYearInputRepository(db).get_all(owner_id)
+    )
+    mortgages = [m for p in properties for m in p.mortgages]
+    _write_sheet(wb, "Mortgages", _MORTGAGE_COLUMNS, mortgages)
+    _write_sheet(
+        wb,
+        "Mortgage payments",
+        _MORTGAGE_PAYMENT_COLUMNS,
+        [pay for m in mortgages for pay in reversed(m.payments)],
+    )
+    _write_sheet(
+        wb, "Mortgage years", _MORTGAGE_YEAR_COLUMNS, [y for m in mortgages for y in reversed(m.years)]
     )
 
     buffer = io.BytesIO()

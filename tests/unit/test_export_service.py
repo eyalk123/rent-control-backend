@@ -4,6 +4,7 @@ The load-bearing test here is owner isolation: an export handed to the wrong per
 whole portfolio at once.
 """
 import io
+from datetime import date
 import json
 import zipfile
 
@@ -21,7 +22,8 @@ from tests.factories import (
     make_transaction,
 )
 
-SHEETS = ["Properties", "Property owners", "Renters", "Transactions", "Suppliers", "Categories", "Tax groups", "Tax year inputs"]
+SHEETS = ["Properties", "Property owners", "Renters", "Transactions", "Suppliers", "Categories", "Tax groups", "Tax year inputs",
+          "Mortgages", "Mortgage payments", "Mortgage years"]
 
 
 def _sheets(workbook_bytes: bytes):
@@ -218,6 +220,33 @@ class TestFloorAreaHeaderNamesItsUnit:
     def test_no_owner_row_still_produces_a_workbook(self, db_session):
         """The owners row is written best-effort, so it can be missing for a valid request."""
         assert "floor_area_m2" in self._headers(db_session, "nobody")
+
+def test_mortgages_are_exported_with_their_history_and_years(db_session):
+    from app.models.property_file import PropertyFile
+    from app.models.property_mortgage import MortgagePayment, MortgageYear, PropertyMortgage
+
+    prop = make_property(db_session, address="Herzl 12")
+    other = make_property(db_session, owner_id=OWNER_B, address="Secret 9")
+    for p in (prop, other):
+        m = PropertyMortgage(property_id=p.id, charge_day=10)
+        m.payments.append(MortgagePayment(amount=5358, effective_from=date(2024, 1, 1)))
+        m.payments.append(MortgagePayment(amount=5100, effective_from=date(2025, 6, 1)))
+        statement = PropertyFile(property_id=p.id, url=f"properties/{p.owner_id}/u9/leumi.pdf", label="x")
+        m.years.append(MortgageYear(year=2025, interest=41049, linkage=8235, balance=984720, document=statement))
+        db_session.add(m)
+    db_session.commit()
+
+    wb = _sheets(build_workbook(db_session, OWNER_A))
+    [mortgage] = _rows(wb["Mortgages"])
+    assert mortgage["property_address"] == "Herzl 12" and mortgage["charge_day"] == 10
+    assert [(r["amount"], r["effective_from"].date()) for r in _rows(wb["Mortgage payments"])] == [
+        (5358, date(2024, 1, 1)), (5100, date(2025, 6, 1))
+    ]
+    [year] = _rows(wb["Mortgage years"])
+    assert (year["interest"], year["linkage"], year["balance"]) == (41049, 8235, 984720)
+    # The statement is named by its copy inside the archive.
+    assert year["document"] == "files/properties/u9/leumi.pdf"
+
 
 class TestFileColumnsNameTheArchiveCopy:
     """The workbook names each file's copy inside the archive, not its storage path."""
