@@ -7,7 +7,7 @@ from freezegun import freeze_time
 from app.models.cpi_index import CpiIndex
 from app.models.owner import Owner
 from app.models.property import PropertyTypeEnum
-from app.models.property_mortgage import MortgagePayment, PropertyMortgage
+from app.models.property_mortgage import MortgagePayment, MortgageYear, PropertyMortgage
 from app.models.tax_year_input import TaxYearInput
 from app.models.transaction import TransactionTypeEnum
 from app.repositories.tax_value_repository import TaxValueRepository
@@ -448,3 +448,44 @@ def test_inputs_are_kept_per_group_and_go_with_a_deleted_group(client, db_sessio
     client.delete(f"/tax-tracks/groups/{group['id']}")
     assert db_session.query(TaxYearInput).count() == 0
 
+
+def _mortgaged(db_session, prop, years=()):
+    mortgage = PropertyMortgage(property_id=prop.id, charge_day=10)
+    mortgage.payments.append(MortgagePayment(amount=4000, effective_from=date(2020, 1, 1)))
+    for year, interest, linkage in years:
+        mortgage.years.append(MortgageYear(year=year, interest=interest, linkage=linkage))
+    db_session.add(mortgage)
+    db_session.commit()
+    return mortgage
+
+
+def test_mortgage_interest_and_linkage_are_deducted(client, db_session):
+    _figures(db_session)
+    _cpi(db_session, {(2019, 12): 100.0, (2024, 12): 100.0, (2025, 12): 100.0})
+    prop = _bought_flat(db_session)
+    _pay(db_session, _lease(db_session, prop, 5000), 5000, 2025, range(1, 13))
+    mortgage = _mortgaged(db_session, prop)
+    _other_income(client, _report(client)["groups"][0]["key"], 200_000)
+
+    [missing] = _report(client)["groups"][0]["marginal"]["missing"]
+    assert missing["code"] == "interest" and missing["mortgage_id"] == mortgage.id
+
+    mortgage.years.append(MortgageYear(year=2025, interest=9000, linkage=1000))
+    db_session.commit()
+    marginal = _report(client)["groups"][0]["marginal"]
+    assert marginal["interest_total"] == 10000
+    assert marginal["interest"][0]["estimated"] is False
+    # 60,000 rent − 20,000 depreciation − 10,000 interest and linkage.
+    assert marginal["income"] == 30000
+
+
+def test_the_current_year_estimates_with_last_years_interest(client, db_session):
+    _figures(db_session, year=2026)
+    prop = make_property(db_session, property_owner="Dad", purchase_date=date(2019, 6, 1))
+    _pay(db_session, _lease(db_session, prop, 5000), 5000, 2026, range(1, 11))
+    _mortgaged(db_session, prop, years=[(2025, 9000, 0)])
+
+    marginal = _report(client, 2026)["groups"][0]["marginal"]
+    [interest] = marginal["interest"]
+    assert interest["estimated"] is True and interest["year"] == 2025
+    assert not any(m["code"] == "interest" for m in marginal["missing"])

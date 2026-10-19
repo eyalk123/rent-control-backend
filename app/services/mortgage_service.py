@@ -6,12 +6,19 @@ end — every route here refuses, not just the screens that would offer it.
 """
 from fastapi import HTTPException
 
-from app.models.property_mortgage import MortgagePayment, PropertyMortgage
+from app.models.property_file import PropertyFile
+from app.models.property_mortgage import MortgagePayment, MortgageYear, PropertyMortgage
 from app.repositories.owner_repository import owner_today
 from app.repositories.property_mortgage_repository import PropertyMortgageRepository
 from app.repositories.property_repository import PropertyRepository
-from app.schemas.property_mortgage import MortgageCreate, MortgagePaymentCreate, MortgageUpdate
+from app.schemas.property_mortgage import (
+    MortgageCreate,
+    MortgagePaymentCreate,
+    MortgageUpdate,
+    MortgageYearWrite,
+)
 from app.services import country_service
+from app.services.firebase_storage import release_file_urls
 from app.services.entitlement_gate import EntitlementGate
 
 
@@ -129,3 +136,58 @@ class MortgageService:
             )
         mortgage.payments.remove(payment)
         return self._with_current([self.repository.save(mortgage)], owner_id)[0]
+
+    # ── The bank's yearly summary (layer 2) ──────────────────────────────────
+
+    def save_year(
+        self, property_id: int, mortgage_id: int, year: int, data: MortgageYearWrite, owner_id: str
+    ) -> PropertyMortgage | None:
+        """Create or replace one year's figures. Only a year that is over: the statement is
+        the bank's account of a finished year."""
+        mortgage = self._mortgage(property_id, mortgage_id, owner_id)
+        if mortgage is None:
+            return None
+        today = owner_today(self.property_repository.session, owner_id)
+        if not 2000 <= year < today.year:
+            raise HTTPException(status_code=422, detail="Only a year that is over")
+        entry = mortgage.year(year)
+        if entry is None:
+            entry = MortgageYear(year=year)
+            mortgage.years.append(entry)
+        entry.interest = data.interest
+        entry.linkage = data.linkage
+        entry.balance = data.balance
+        released = []
+        if "document_url" in data.model_fields_set:
+            if entry.document is not None:
+                released.append(entry.document.url)
+                self.repository.session.delete(entry.document)
+                entry.document = None
+            if data.document_url is not None:
+                entry.document = PropertyFile(
+                    property_id=property_id,
+                    url=data.document_url,
+                    label=(data.document_label or "").strip() or f"Mortgage {year}",
+                )
+        saved = self.repository.save(mortgage)
+        release_file_urls(self.repository.session, owner_id, released)
+        return self._with_current([saved], owner_id)[0]
+
+    def delete_year(
+        self, property_id: int, mortgage_id: int, year: int, owner_id: str
+    ) -> PropertyMortgage | None:
+        """Remove one year's figures, and its statement with them."""
+        mortgage = self._mortgage(property_id, mortgage_id, owner_id)
+        if mortgage is None:
+            return None
+        entry = mortgage.year(year)
+        if entry is None:
+            return None
+        released = []
+        if entry.document is not None:
+            released.append(entry.document.url)
+            self.repository.session.delete(entry.document)
+        mortgage.years.remove(entry)
+        saved = self.repository.save(mortgage)
+        release_file_urls(self.repository.session, owner_id, released)
+        return self._with_current([saved], owner_id)[0]

@@ -1,4 +1,14 @@
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, true
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    UniqueConstraint,
+    true,
+)
 from sqlalchemy.orm import relationship
 
 from app.clock import utc_now_naive
@@ -48,6 +58,18 @@ class PropertyMortgage(Base):
         lazy="selectin",
         order_by="(MortgagePayment.effective_from.desc(), MortgagePayment.id.desc())",
     )
+    # Newest year first.
+    years = relationship(
+        "MortgageYear",
+        back_populates="mortgage",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="MortgageYear.year.desc()",
+    )
+
+    def year(self, year: int) -> "MortgageYear | None":
+        return next((y for y in self.years if y.year == year), None)
 
     def entry_on(self, day) -> "MortgagePayment | None":
         """The payment entry in force on `day`: the latest that had started by then, ignoring
@@ -88,3 +110,41 @@ class MortgagePayment(Base):
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
 
     mortgage = relationship("PropertyMortgage", back_populates="payments")
+
+
+class MortgageYear(Base):
+    """The bank's yearly summary of a mortgage, for one calendar year that is over.
+
+    Layer 2 of the mortgage plan. Layer 1 (the monthly payment) says how much leaves each
+    month; this says what it was made of: the interest, the linkage differences (how much the
+    debt rose with the index; 0 without a linked track) and the balance on December 31. The
+    owner types them from the bank's yearly statement (Leumi calls it "פירוט תשלומים מצטבר").
+
+    The tax report deducts interest and linkage differences together on the marginal track —
+    section 17 allows "interest and linkage differences"; nothing found says otherwise for rent.
+
+    ``document`` is the statement itself, kept as one of the property's files so it sits with
+    the rest of its paperwork for the accountant.
+    """
+
+    __tablename__ = "mortgage_years"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mortgage_id = Column(
+        Integer, ForeignKey("property_mortgages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    year = Column(Integer, nullable=False)
+    # As typed, in the property's currency — never converted.
+    interest = Column(Float, nullable=False)
+    linkage = Column(Float, nullable=False, default=0)
+    balance = Column(Float, nullable=True)
+    property_file_id = Column(
+        Integer, ForeignKey("property_files.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    mortgage = relationship("PropertyMortgage", back_populates="years")
+    document = relationship("PropertyFile", lazy="joined")
+
+    __table_args__ = (UniqueConstraint("mortgage_id", "year", name="uq_mortgage_years_year"),)

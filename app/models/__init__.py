@@ -14,7 +14,7 @@ from app.models.owner import Owner
 from app.models.owner_client_day import OwnerClientDay
 from app.models.policy_rate import PolicyRate
 from app.models.property import Property, PropertyTypeEnum
-from app.models.property_mortgage import MortgagePayment, PropertyMortgage
+from app.models.property_mortgage import MortgagePayment, MortgageYear, PropertyMortgage
 from app.models.property_owner import PropertyOwner
 from app.models.property_valuation import PropertyValuation
 from app.models.renter import Renter
@@ -44,6 +44,7 @@ __all__ = [
     "ExpenseCategory",
     "JobRun",
     "MortgagePayment",
+    "MortgageYear",
     "LegalAcceptance",
     "LegalDocumentEnum",
     "Notification",

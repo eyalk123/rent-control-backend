@@ -343,3 +343,77 @@ def test_mortgage_interest_category_hidden_in_israel_only(client, db_session):
         "repairs",
         "mortgage_interest",
     ]
+
+
+# --- the bank's yearly summary (layer 2) ----------------------------------------------------
+
+
+def _mortgage_id(client, prop_id):
+    return client.post(_url(prop_id), json={"monthly_payment": 5358, "charge_day": 10}).json()["id"]
+
+
+def test_a_year_is_saved_replaced_and_deleted(client, db_session):
+    prop = make_property(db_session)
+    mid = _mortgage_id(client, prop.id)
+    year = TODAY.year - 1
+    url = f"{_url(prop.id)}/{mid}/years/{year}"
+
+    m = client.put(url, json={"interest": 41049, "linkage": 8235, "balance": 984720}).json()
+    assert m["years"] == [
+        {**m["years"][0], "year": year, "interest": 41049, "linkage": 8235, "balance": 984720,
+         "document": None}
+    ]
+    m = client.put(url, json={"interest": 40000, "linkage": 0}).json()
+    assert [(y["interest"], y["balance"]) for y in m["years"]] == [(40000, None)]
+    # Newest year first.
+    client.put(f"{_url(prop.id)}/{mid}/years/{year - 1}", json={"interest": 1, "linkage": 0})
+    assert [y["year"] for y in client.get(_url(prop.id)).json()[0]["years"]] == [year, year - 1]
+
+    assert client.delete(url).status_code == 200
+    assert client.delete(url).status_code == 404
+
+
+def test_only_a_year_that_is_over(client, db_session):
+    prop = make_property(db_session)
+    mid = _mortgage_id(client, prop.id)
+    body = {"interest": 1, "linkage": 0}
+    assert client.put(f"{_url(prop.id)}/{mid}/years/{TODAY.year}", json=body).status_code == 422
+    assert client.put(f"{_url(prop.id)}/{mid}/years/{TODAY.year - 1}", json={"interest": -1, "linkage": 0}).status_code == 422
+    assert client.put(f"{_url(prop.id)}/{mid}/years/{TODAY.year - 1}", json={"interest": 1}).status_code == 422
+
+
+def test_the_statement_is_kept_as_a_property_file(client, db_session, monkeypatch):
+    released = []
+    monkeypatch.setattr(
+        "app.services.mortgage_service.release_file_urls",
+        lambda db, owner, urls: released.extend(urls),
+    )
+    prop = make_property(db_session)
+    mid = _mortgage_id(client, prop.id)
+    url = f"{_url(prop.id)}/{mid}/years/{TODAY.year - 1}"
+    first = f"properties/{OWNER_A}/u1/leumi.pdf"
+
+    m = client.put(url, json={"interest": 1, "linkage": 0, "document_url": first,
+                               "document_label": "Mortgage statement"}).json()
+    assert m["years"][0]["document"]["url"] == first
+    assert [f["label"] for f in client.get(f"/properties/{prop.id}/files").json()] == ["Mortgage statement"]
+
+    # Saving without the field keeps it; a new one replaces it and releases the old file.
+    client.put(url, json={"interest": 2, "linkage": 0})
+    assert client.get(_url(prop.id)).json()[0]["years"][0]["document"]["url"] == first
+    second = f"properties/{OWNER_A}/u2/leumi.pdf"
+    client.put(url, json={"interest": 2, "linkage": 0, "document_url": second})
+    assert [f["url"] for f in client.get(f"/properties/{prop.id}/files").json()] == [second]
+    assert released == [first]
+
+    client.delete(url)
+    assert client.get(f"/properties/{prop.id}/files").json() == []
+    assert released == [first, second]
+
+
+def test_years_are_owner_scoped(client_factory, db_session):
+    prop = make_property(db_session)
+    mid = _mortgage_id(client_factory(OWNER_A), prop.id)
+    other = client_factory(OWNER_B)
+    resp = other.put(f"{_url(prop.id)}/{mid}/years/{TODAY.year - 1}", json={"interest": 1, "linkage": 0})
+    assert resp.status_code == 404

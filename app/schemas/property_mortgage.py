@@ -3,6 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.stored_file import StoredFilePath
 from app.schemas.utc import UtcDatetime
 
 
@@ -58,6 +59,40 @@ class MortgagePaymentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MortgageYearWrite(BaseModel):
+    """One year's figures from the bank's yearly statement.
+
+    ``document_url`` is the statement just uploaded, kept as a property file labelled
+    ``document_label``. Left out, the year keeps the document it has; null removes it.
+    """
+
+    interest: float = Field(ge=0, le=1_000_000_000)
+    # How much the debt rose with the index. 0 without a linked track.
+    linkage: float = Field(ge=0, le=1_000_000_000)
+    balance: Optional[float] = Field(default=None, ge=0, le=10_000_000_000)
+    document_url: Optional[StoredFilePath] = None
+    document_label: Optional[str] = Field(default=None, max_length=200)
+
+
+class MortgageDocumentRead(BaseModel):
+    id: int
+    url: str
+    label: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MortgageYearRead(BaseModel):
+    year: int
+    interest: float
+    linkage: float
+    balance: Optional[float] = None
+    document: Optional[MortgageDocumentRead] = None
+    updated_at: UtcDatetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MortgageRead(BaseModel):
     id: int
     property_id: int
@@ -69,6 +104,8 @@ class MortgageRead(BaseModel):
     current_payment: Optional[float] = None
     # Newest first.
     payments: list[MortgagePaymentRead] = []
+    # The bank's yearly summaries, newest year first.
+    years: list[MortgageYearRead] = []
     created_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -20,6 +20,7 @@ from app.schemas.property_mortgage import (
     MortgagePaymentCreate,
     MortgageRead,
     MortgageUpdate,
+    MortgageYearWrite,
 )
 from app.schemas.property_valuation import PropertyValuationCreate, PropertyValuationRead
 from app.schemas.renter import PropertyRenterSummary
@@ -295,6 +296,40 @@ def create_mortgage_payment(
     )
     if mortgage is None:
         raise HTTPException(status_code=404, detail="Mortgage not found")
+    return mortgage
+
+
+@router.put("/{property_id}/mortgages/{mortgage_id}/years/{year}", response_model=MortgageRead)
+def save_mortgage_year(
+    property_id: int,
+    mortgage_id: int,
+    year: int,
+    data: MortgageYearWrite,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    """One year's figures from the bank's yearly statement. Answers with the whole mortgage."""
+    mortgage = mortgage_service.save_year(
+        property_id, mortgage_id, year, data, owner_id=current_user["user_id"]
+    )
+    if mortgage is None:
+        raise HTTPException(status_code=404, detail="Mortgage not found")
+    return mortgage
+
+
+@router.delete("/{property_id}/mortgages/{mortgage_id}/years/{year}", response_model=MortgageRead)
+def delete_mortgage_year(
+    property_id: int,
+    mortgage_id: int,
+    year: int,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    mortgage_service: Annotated[MortgageService, Depends(get_mortgage_service)],
+):
+    mortgage = mortgage_service.delete_year(
+        property_id, mortgage_id, year, owner_id=current_user["user_id"]
+    )
+    if mortgage is None:
+        raise HTTPException(status_code=404, detail="Year not found")
     return mortgage
 
 

@@ -16,9 +16,11 @@ What the numbers are built from:
   leases say. Those months are flagged as a forecast.
 
 - **The marginal track** takes the expenses in ``RECOGNISED_EXPENSE_KEYS`` (renovations
-  left out), depreciation under the 1989 regulations, and the household's other income and
-  credit points from ``tax_year_inputs``. Mortgage interest needs the bank's yearly statement,
-  which is not built, so a flat with a mortgage running that year lists it as missing.
+  left out), depreciation under the 1989 regulations, mortgage interest from the bank's yearly
+  statement (``MortgageYear``: interest and linkage differences together), and the
+  household's other income and credit points from ``tax_year_inputs``. A flat whose mortgage
+  ran that year without the year's statement lists it as missing; the current year, whose
+  statement cannot exist yet, uses last year's as an estimate.
 
 Nothing is assumed. A track that needs a figure we do not have says what is missing instead
 of being computed, and the cheapest mix is offered only once every track can be.
@@ -531,9 +533,29 @@ class TaxTracksService:
                 flat.not_counted[(label, key is not None)] += amount
         mortgage = p.mortgage
         if mortgage is not None and _mortgage_runs_in(mortgage, ctx.year):
-            # Interest comes from the bank's yearly statement (the mortgage plan's layer 2),
-            # which is not built. The payment we have is principal and interest together.
-            flat.interest_missing.append({"code": "interest", **_property_brief(p)})
+            # The monthly payment is principal and interest together; what was interest is
+            # in the bank's yearly statement. Linkage differences count with it (section 17,
+            # "interest and linkage differences").
+            entry = mortgage.year(ctx.year)
+            estimated = False
+            if entry is None and ctx.is_forecast:
+                # This year's statement comes next year; last year's stands in, marked.
+                entry = mortgage.year(ctx.year - 1)
+                estimated = entry is not None
+            if entry is None:
+                flat.interest_missing.append(
+                    {"code": "interest", "mortgage_id": mortgage.id, **_property_brief(p)}
+                )
+            else:
+                flat.interest = float(entry.interest) + float(entry.linkage or 0)
+                flat.interest_detail = {
+                    **_property_brief(p),
+                    "year": entry.year,
+                    "interest": float(entry.interest),
+                    "linkage": float(entry.linkage or 0),
+                    "amount": round(flat.interest, 2),
+                    "estimated": estimated,
+                }
         flat.depreciation = self._depreciation(p, ctx)
         return flat
 
@@ -597,6 +619,8 @@ class _Flat:
     counted: dict = field(default_factory=lambda: defaultdict(float))
     not_counted: dict = field(default_factory=lambda: defaultdict(float))
     renovation: float = 0.0
+    interest: float = 0.0
+    interest_detail: dict | None = None
     interest_missing: list = field(default_factory=list)
     depreciation: dict = field(default_factory=dict)
 
@@ -607,6 +631,11 @@ class _Flat:
     @property
     def expenses(self) -> float:
         return sum(self.counted.values())
+
+    @property
+    def deductions(self) -> float:
+        """Everything deductible from the rent but depreciation: expenses and interest."""
+        return self.expenses + self.interest
 
 
 @dataclass
@@ -769,14 +798,14 @@ def _assessment(tracks: dict[int, str], flats: list[_Flat], payer: _Payer) -> di
             every = sum(f.rent_by_month[m] for f in flats)
             exemption_taxable += track - exempt_amount(track, every, ceiling)
     share = exemption_taxable / exemption_rent if exemption_rent else 0.0
-    exemption_deductions = sum(f.expenses for f in by_track["exemption"]) * share
+    exemption_deductions = sum(f.deductions for f in by_track["exemption"]) * share
     exemption_income = max(0.0, exemption_taxable - exemption_deductions)
 
     ten_gross = sum(f.rent for f in by_track["ten_percent"])
     ten_tax = ten_gross * rate / 100 if by_track["ten_percent"] else 0.0
 
     marginal_net = sum(
-        f.rent - f.expenses - (f.depreciation.get("amount") or 0.0) for f in by_track["marginal"]
+        f.rent - f.deductions - (f.depreciation.get("amount") or 0.0) for f in by_track["marginal"]
     )
     marginal_income = max(0.0, marginal_net)
 
@@ -827,6 +856,8 @@ def _marginal(flats: list[_Flat], payer: _Payer, person: _Person, ctx: _Context)
         "missing": _unique(missing),
         "rent": round(sum(f.rent for f in flats), 2),
         "expenses": round(sum(f.expenses for f in flats), 2),
+        "interest": [f.interest_detail for f in flats if f.interest_detail is not None],
+        "interest_total": round(sum(f.interest for f in flats), 2),
         "depreciation": [
             {**_property_brief(f.property), **{k: v for k, v in f.depreciation.items() if k != "missing"}}
             for f in flats

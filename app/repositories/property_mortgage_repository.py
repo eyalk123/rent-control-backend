@@ -56,7 +56,7 @@ class PropertyMortgageRepository:
         self.session.add(mortgage)
         self.session.commit()
         self.session.refresh(mortgage)
-        self.session.expire(mortgage, ["payments"])
+        self.session.expire(mortgage, ["payments", "years"])
         return mortgage
 
     def delete(self, obj: PropertyMortgage | MortgagePayment) -> None:
