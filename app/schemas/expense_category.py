@@ -9,6 +9,7 @@ class ExpenseCategoryRead(BaseModel):
     name: Optional[str] = None
     is_active: bool
     sort_order: int
+    color: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

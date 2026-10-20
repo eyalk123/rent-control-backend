@@ -20,6 +20,15 @@ class ExpenseCategoryRepository:
         )
         return list(self.session.scalars(stmt).all())
 
+    def colors_in_use(self, owner_id: str) -> list[str | None]:
+        """The colors of every category this owner sees, built-in ones included, so a new
+        category is spread against what is actually on their screen."""
+        stmt = select(ExpenseCategory.color).where(
+            (ExpenseCategory.owner_id.is_(None)) | (ExpenseCategory.owner_id == owner_id),
+            ExpenseCategory.is_active == True,
+        )
+        return list(self.session.scalars(stmt).all())
+
     def get_by_id(self, category_id: int) -> ExpenseCategory | None:
         stmt = select(ExpenseCategory).where(ExpenseCategory.id == category_id)
         return self.session.scalar(stmt)

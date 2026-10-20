@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.entity_colors import EntityColor
 from app.schemas.property_mortgage import MortgageCreate, MortgageRead
 from app.schemas.property_valuation import PropertyValuationCreate
 from app.schemas.stored_file import StoredFile
@@ -41,6 +42,7 @@ class PropertyBriefRead(BaseModel):
     floor: Optional[int] = None
     apartment: Optional[str] = None
     image_url: Optional[str] = None
+    color: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -59,6 +61,9 @@ class PropertyCreate(BaseModel):
     # The form's mortgage switch, on. Israel only (422 elsewhere).
     mortgage: Optional[MortgageCreate] = None
     image_url: StoredFile = None
+    # Omitted on create: the least-used of the owner's colors. Omitted or null on update:
+    # unchanged — a color can be swapped but never cleared.
+    color: Optional[EntityColor] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
@@ -110,6 +115,9 @@ class PropertyUpdate(BaseModel):
     # the mortgage and its history are deleted.
     mortgage: Optional[MortgageCreate] = None
     image_url: StoredFile = None
+    # Omitted on create: the least-used of the owner's colors. Omitted or null on update:
+    # unchanged — a color can be swapped but never cleared.
+    color: Optional[EntityColor] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None
@@ -219,6 +227,7 @@ class PropertyRead(BaseModel):
     # and on the write responses.
     returns: Optional[PropertyReturnsRead] = None
     image_url: Optional[str] = None
+    color: Optional[str] = None
     number_of_rooms: Optional[float] = None
     parking_numbers: Optional[list[str]] = None
     electricity_meter_number: Optional[str] = None

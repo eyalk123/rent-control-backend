@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+from app.entity_colors import least_used_color
 from app.models.expense_category import ExpenseCategory
 from app.models.owner import Owner
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
@@ -41,6 +42,7 @@ class ExpenseCategoryService:
             owner_id=owner_id,
             is_active=True,
             sort_order=max_sort + 1,
+            color=least_used_color(self.expense_category_repository.colors_in_use(owner_id)),
         )
         created = self.expense_category_repository.create(category)
         return ExpenseCategoryRead.model_validate(created)

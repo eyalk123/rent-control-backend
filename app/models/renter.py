@@ -91,6 +91,8 @@ class Renter(Base):
     extra_contacts = Column(JSON, nullable=True)
     full_contract_url = Column(String, nullable=True)
     id_image_url = Column(String, nullable=True)
+    # One of app.entity_colors.ENTITY_COLORS. Set on create; NULL only on rows predating it.
+    color = Column(String(16), nullable=True)
     owner_id = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)

@@ -123,6 +123,11 @@ class RenterRepository:
             stmt = stmt.where(Renter.owner_id == owner_id)
         return list(self.session.scalars(stmt).all())
 
+    def colors_in_use(self, owner_id: str) -> list[str | None]:
+        """Every color this owner's renters carry, one entry per renter."""
+        stmt = select(Renter.color).where(Renter.owner_id == owner_id)
+        return list(self.session.scalars(stmt).all())
+
     def get_by_id(self, renter_id: int) -> Renter | None:
         stmt = (
             select(Renter)

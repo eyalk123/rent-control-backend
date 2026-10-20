@@ -4,6 +4,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
 
+from app.entity_colors import least_used_color
 from app.models.renter import Renter
 from app.repositories.activity_log_repository import ActivityLogRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
@@ -434,6 +435,7 @@ class RenterService:
             extra_contacts=[c.model_dump() for c in data.extra_contacts] if data.extra_contacts else None,
             full_contract_url=data.full_contract_url,
             id_image_url=data.id_image_url,
+            color=data.color or least_used_color(self.renter_repository.colors_in_use(owner_id)),
         )
         return self.renter_repository.create(renter)
 

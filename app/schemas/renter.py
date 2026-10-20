@@ -12,6 +12,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.entity_colors import EntityColor
 from app.schemas.property import PropertyBriefRead
 from app.schemas.stored_file import StoredFile
 
@@ -164,6 +165,9 @@ class RenterCreate(BaseModel):
     extra_contacts: Optional[list[ExtraContact]] = None
     full_contract_url: StoredFile = None
     id_image_url: StoredFile = None
+    # Omitted on create: the least-used of the owner's colors. Omitted or null on update:
+    # unchanged — a color can be swapped but never cleared.
+    color: Optional[EntityColor] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -205,6 +209,9 @@ class RenterUpdate(BaseModel):
     extra_contacts: Optional[list[ExtraContact]] = None
     full_contract_url: StoredFile = None
     id_image_url: StoredFile = None
+    # Omitted on create: the least-used of the owner's colors. Omitted or null on update:
+    # unchanged — a color can be swapped but never cleared.
+    color: Optional[EntityColor] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -278,6 +285,7 @@ class RenterRead(BaseModel):
     extra_contacts: Optional[list[ExtraContact]] = None
     full_contract_url: Optional[str] = None
     id_image_url: Optional[str] = None
+    color: Optional[str] = None
     property: Optional[PropertyBriefRead] = None
 
     model_config = ConfigDict(from_attributes=True)

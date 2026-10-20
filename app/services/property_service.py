@@ -2,6 +2,7 @@ import json
 
 from fastapi import HTTPException
 
+from app.entity_colors import least_used_color
 from app.models.property import Property, PropertyTypeEnum
 from app.models.property_mortgage import MortgagePayment, PropertyMortgage
 from app.models.property_valuation import PropertyValuation
@@ -198,6 +199,7 @@ class PropertyService:
             purchase_price=data.purchase_price,
             purchase_date=data.purchase_date,
             image_url=data.image_url,
+            color=data.color or least_used_color(self.property_repository.colors_in_use(owner_id)),
             number_of_rooms=data.number_of_rooms,
             parking_numbers=parking_numbers_str,
             electricity_meter_number=data.electricity_meter_number,

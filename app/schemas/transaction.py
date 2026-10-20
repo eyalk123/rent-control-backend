@@ -88,6 +88,8 @@ class TransactionRead(BaseModel):
     created_at: UtcDatetime
     updated_at: UtcDatetime
     property_name: Optional[str] = None
+    # The property's item color, for the dot beside the address on a transaction row.
+    property_color: Optional[str] = None
     renter_name: Optional[str] = None
     category_name: Optional[str] = None
     supplier_name: Optional[str] = None

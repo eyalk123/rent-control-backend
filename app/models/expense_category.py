@@ -14,6 +14,9 @@ class ExpenseCategory(Base):
     owner_id = Column(String, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     sort_order = Column(Integer, nullable=False, default=0)
+    # One of app.entity_colors.ENTITY_COLORS. Built-ins get a fixed one in the migration;
+    # an owner's own category gets the least-used one on create. There is no picker.
+    color = Column(String(16), nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 

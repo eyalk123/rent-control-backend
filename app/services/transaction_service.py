@@ -112,6 +112,7 @@ class TransactionService:
             created_at=t.created_at,
             updated_at=t.updated_at,
             property_name=property_name,
+            property_color=t.property.color if t.property else None,
             renter_name=renter_name,
             category_name=category_name,
             supplier_name=supplier_name,

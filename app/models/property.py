@@ -51,6 +51,8 @@ class Property(Base):
     purchase_price = Column(Float, nullable=True)
     purchase_date = Column(Date, nullable=True)
     image_url = Column(String, nullable=True)
+    # One of app.entity_colors.ENTITY_COLORS. Set on create; NULL only on rows predating it.
+    color = Column(String(16), nullable=True)
     # The human owner (see PropertyOwner). Their name is read as `property_owner`, below.
     property_owner_id = Column(
         Integer, ForeignKey("property_owners.id", ondelete="SET NULL"), nullable=True, index=True

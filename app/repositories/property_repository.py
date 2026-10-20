@@ -27,6 +27,11 @@ class PropertyRepository:
         stmt = select(Property.id).where(Property.owner_id == owner_id).limit(1)
         return self.session.scalar(stmt) is not None
 
+    def colors_in_use(self, owner_id: str) -> list[str | None]:
+        """Every color this owner's properties carry, one entry per property."""
+        stmt = select(Property.color).where(Property.owner_id == owner_id)
+        return list(self.session.scalars(stmt).all())
+
     def get_by_id(self, property_id: int, owner_id: str) -> Property | None:
         stmt = (
             select(Property)
