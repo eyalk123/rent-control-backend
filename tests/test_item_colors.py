@@ -1,5 +1,6 @@
 """Item colors on properties, renters and expense categories (app/entity_colors.py)."""
 from app.entity_colors import ENTITY_COLORS, least_used_color
+from app.models.transaction import TransactionTypeEnum
 from tests.conftest import OWNER_A, OWNER_B
 from tests.factories import make_expense_category, make_property, make_transaction
 
@@ -87,3 +88,13 @@ def test_transaction_row_carries_the_property_color(client, db_session):
     rows = client.get("/transactions").json()
     rows = rows["items"] if isinstance(rows, dict) else rows
     assert rows[0]["property_color"] == "rose"
+
+
+def test_transaction_row_carries_the_category_color(client, db_session):
+    cat = make_expense_category(db_session, name="Pest control")
+    cat.color = "plum"
+    db_session.commit()
+    make_transaction(db_session, type=TransactionTypeEnum.EXPENSE, categories=[cat])
+    rows = client.get("/transactions").json()
+    rows = rows["items"] if isinstance(rows, dict) else rows
+    assert rows[0]["category_color"] == "plum"

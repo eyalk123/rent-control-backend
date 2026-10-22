@@ -115,6 +115,7 @@ class TransactionService:
             property_color=t.property.color if t.property else None,
             renter_name=renter_name,
             category_name=category_name,
+            category_color=first_cat.color if first_cat else None,
             supplier_name=supplier_name,
         )
 
