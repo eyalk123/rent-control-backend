@@ -355,6 +355,9 @@ def test_the_marginal_track_deducts_expenses_and_linked_depreciation(client, db_
     assert marginal["expenses"] == 3000
     assert marginal["income"] == 60000 - 3000 - 22200
     assert marginal["tax"] == pytest.approx(34800 * 0.31)
+    # Expenses recorded, no mortgage: only the second is pointed out.
+    assert marginal["no_expenses"] == []
+    assert [p["id"] for p in marginal["no_mortgage"]] == [prop.id]
     # Only the recognised kinds count; the rest is shown, and a renovation is not an expense.
     expenses = group["expenses"]
     assert expenses["counted"] == [{"key": "repairs", "amount": 3000}]
@@ -520,6 +523,8 @@ def test_mortgage_interest_and_linkage_are_deducted(client, db_session):
     assert marginal["interest"][0]["estimated"] is False
     # 60,000 rent − 20,000 depreciation − 10,000 interest and linkage.
     assert marginal["income"] == 30000
+    assert marginal["no_mortgage"] == []
+    assert [p["id"] for p in marginal["no_expenses"]] == [prop.id]
 
 
 def test_the_current_year_estimates_with_last_years_interest(client, db_session):

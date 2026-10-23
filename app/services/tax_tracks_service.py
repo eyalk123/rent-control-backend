@@ -852,6 +852,10 @@ def _marginal(flats: list[_Flat], payer: _Payer, person: _Household, ctx: _Conte
             for f in flats
         ],
         "expenses_so_far": ctx.is_forecast,
+        # Not missing — none is a valid answer — but easy to have forgotten, and each makes
+        # the track look dearer than it is. Named so the page can say so.
+        "no_expenses": [_property_brief(f.property) for f in flats if f.expenses == 0],
+        "no_mortgage": [_property_brief(f.property) for f in flats if f.property.mortgage is None],
     }
     if out["missing"] or not flats:
         out["available"] = not out["missing"]
