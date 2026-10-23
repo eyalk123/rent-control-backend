@@ -261,6 +261,7 @@ function renderTab() {
     const on = b.dataset.tab === state.tab;
     b.setAttribute('aria-selected', String(on));
     b.tabIndex = on ? 0 : -1;
+    if (on) keepTabInView(b);
   });
   // The Countries tab compares countries with each other, so the filter does nothing there.
   // Disabled rather than hidden, so the bar does not jump when switching tabs.
@@ -282,6 +283,24 @@ function tabFromHash() {
   state.tab = TABS.includes(h) ? h : 'overview';
 }
 window.addEventListener('hashchange', () => { tabFromHash(); renderTab(); });
+
+/* On a phone the tab row scrolls. Fade whichever side has more (CSS), and scroll the selected
+   tab into sight — a pasted #health link would otherwise open a tab you cannot see. */
+function updateTabFade() {
+  const t = $('#tabs');
+  t.classList.toggle('more-left', t.scrollLeft > 2);
+  t.classList.toggle('more-right', t.scrollLeft + t.clientWidth < t.scrollWidth - 2);
+}
+function keepTabInView(b) {
+  const t = $('#tabs');
+  if (b.offsetLeft < t.scrollLeft) t.scrollLeft = b.offsetLeft - 24;
+  else if (b.offsetLeft + b.offsetWidth > t.scrollLeft + t.clientWidth) {
+    t.scrollLeft = b.offsetLeft + b.offsetWidth - t.clientWidth + 24;
+  }
+  updateTabFade();
+}
+$('#tabs').addEventListener('scroll', updateTabFade, { passive: true });
+window.addEventListener('resize', updateTabFade);
 $('#tabs').addEventListener('click', (e) => {
   const b = e.target.closest('[role=tab]'); if (!b) return;
   location.hash = b.dataset.tab;

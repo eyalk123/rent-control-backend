@@ -23,7 +23,8 @@ from tests.factories import (
 )
 
 CEILING = 5654
-# The 2025 booklet's figures (tests/unit/test_il_tax_source.py reads them from its text).
+# The 2026 booklet's figures (tests/unit/test_il_tax_source.py reads them from its text), stored
+# as 2025's here. The real 2025 booklet has narrower 20% and 31% brackets (193,800 / 269,280).
 BOOKLET = {
     "rent_exemption_ceiling_monthly": CEILING,
     "personal_brackets": [

@@ -96,6 +96,16 @@ header.topbar .meta { color: #9FB3CC; font-size: 12px; margin-left: auto; }
   color: var(--text-secondary); padding: 13px 12px 11px; cursor: pointer;
   border-bottom: 2px solid transparent; white-space: nowrap;
 }
+/* Phones hide scrollbars, so a cut-off tab row reads as the whole row. A fade on the side that
+   has more says otherwise; core.js sets the classes from the scroll position. */
+.tabs.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+                   mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+.tabs.more-left { -webkit-mask-image: linear-gradient(to right, transparent, #000 40px);
+                  mask-image: linear-gradient(to right, transparent, #000 40px); }
+.tabs.more-left.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+}
 .tabs button:hover { color: var(--text-primary); }
 .tabs button[aria-selected="true"] { color: var(--primary); border-bottom-color: var(--primary); }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-block: 8px; }
@@ -159,8 +169,11 @@ section.block > h2 { font-size: 15px; margin-bottom: 10px; }
   width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--outline);
   font-size: 10px; font-weight: 700; font-style: normal; color: var(--muted); cursor: help;
 }
-.info:hover::after, .info:focus::after {
-  content: attr(data-tip);
+/* Hover only where hover is real: on touch a tap leaves :hover stuck, and the bubble with it.
+   Taps go through focus, toggled by the listener in main.js. */
+.info:focus::after { content: attr(data-tip); }
+@media (hover: hover) { .info:hover::after { content: attr(data-tip); } }
+.info::after {
   position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
   width: max-content; max-width: 260px; z-index: 10;
   background: var(--navy); color: #fff; padding: 8px 10px; border-radius: 8px;
@@ -283,5 +296,35 @@ dialog.drill-modal::backdrop { background: rgba(15, 23, 42, 0.45); }
   .funnel-label { text-align: left; }
   .funnel-drop { margin-left: 0; }
   .hbar { grid-template-columns: 90px 1fr 70px; }
+  /* Wrap instead of "…": there is no hover on a phone to read the title attribute. */
+  .hbar-label { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
   .kpi .value { font-size: 34px; }
+
+  /* Header and controls: one row each instead of two. The update time goes; the dimmed
+     sections already say "loading". */
+  header.topbar { padding: 10px 16px; gap: 10px; }
+  header.topbar .h1-sub, header.topbar .meta { display: none; }
+  header.topbar #signout { margin-left: auto; }
+  .controls { flex-wrap: nowrap; width: 100%; }
+  .controls select { flex: 1; min-width: 0; }
+  .segmented button { padding: 6px 9px; }
+
+  /* Tap targets: the range switch and the click-through table cells. */
+  .controls .segmented button, .controls select, .controls .ghost { min-height: 38px; }
+  table.data td, table.data th { padding-block: 10px; }
+
+  /* Switches inside a card wrap into chips rather than scroll half out of sight. */
+  .card-head .scroll-x { overflow-x: visible; }
+  .card-head .segmented { flex-wrap: wrap; gap: 4px; border: 0; overflow: visible; }
+  .card-head .segmented button,
+  .card-head .segmented button + button { border: 1px solid var(--outline); border-radius: var(--radius-sm); }
+
+  /* The note bubble spans its card instead of centring on the icon, which put it off the
+     screen's edge. It starts at the icon's top (align-self), pushed below it by the margin. */
+  .card { position: relative; }
+  .info { position: static; }
+  .info::after {
+    left: 12px; right: 12px; top: auto; transform: none;
+    width: auto; max-width: none; align-self: flex-start; margin-top: 22px;
+  }
 }

@@ -12,6 +12,22 @@ $('#range-seg').addEventListener('click', (e) => {
 });
 $('#country').addEventListener('change', (e) => { state.country = e.target.value; load(); });
 $('#refresh').addEventListener('click', load);
+
+// Note bubbles open on focus. A tap does not reliably focus a span on iOS, and tapping an
+// open one should close it, so taps toggle focus explicitly. mousedown runs before focus
+// moves, which is the only moment "was it already open" can still be read.
+let infoOpenOnPress = null;
+document.addEventListener('mousedown', (e) => {
+  const i = e.target.closest('.info');
+  infoOpenOnPress = i && i === document.activeElement ? i : null;
+  if (infoOpenOnPress) e.preventDefault();
+});
+document.addEventListener('click', (e) => {
+  const i = e.target.closest('.info');
+  // iOS does not blur on a tap on plain content, so a tap anywhere else closes it here.
+  if (!i) { if (document.activeElement && document.activeElement.matches('.info')) document.activeElement.blur(); return; }
+  if (i === infoOpenOnPress) i.blur(); else i.focus();
+});
 tabFromHash();
 renderTab();
 

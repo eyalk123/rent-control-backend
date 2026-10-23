@@ -92,6 +92,16 @@ function drawOverview(d) {
     const opts = baseOptions();
     opts.plugins.valueLabels = { enabled: true, stacked: true };
     opts.scales.x = Object.assign(opts.scales.x, { stacked: true, title: axis('Days since last seen') });
+    // Chart.js's own skipping can drop the last bar's label. Too narrow for all twelve, label
+    // every other single day and always both ranges, "30+" a line lower so it clears "10–29".
+    opts.scales.x.ticks = Object.assign({}, opts.scales.x.ticks, {
+      autoSkip: false,
+      callback(v, i) {
+        if (this.chart.width >= 500) return barLabel(bars[i]);
+        if (i % 2 && i < 10) return '';
+        return bars[i] === 30 ? ['', barLabel(30)] : barLabel(bars[i]);
+      },
+    });
     opts.scales.y = Object.assign(opts.scales.y, { stacked: true, title: axis('Owners') });
     return clickable({
       type: 'bar',
