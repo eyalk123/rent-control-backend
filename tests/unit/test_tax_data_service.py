@@ -8,6 +8,8 @@ from app.models.tax_value import TaxDocument, TaxValue
 from app.repositories.tax_value_repository import TaxValueRepository
 from app.services import il_tax_source, tax_data_service
 from app.services.tax_data_service import TaxDataService
+# The real download: tests/conftest.py stubs it for every test, after this import.
+from app.services.tax_data_service import fetch_document as real_fetch_document
 
 TODAY = date(2026, 10, 19)
 
@@ -25,7 +27,7 @@ class FakeBooklets:
     def booklet_url(self, year):
         return f"http://gov/{year}.pdf"
 
-    def fetch(self, url):
+    def fetch(self, url, fresh=True):
         year = int(url.rsplit("/", 1)[1].split(".")[0])
         self.fetched.append(year)
         content = self.files.get(year)
@@ -186,3 +188,89 @@ def test_law_values_follow_the_code(db_session, booklets, clock, monkeypatch):
 
     assert summary["law_values_changed"] == 1
     assert TaxValueRepository(db_session).values_for("IL", 2026)["surtax_rate_pct"] == 4
+
+
+# ── Through the Internet Archive ──────────────────────────────────────────────
+
+
+class _Response:
+    def __init__(self, status: int, body: bytes = b"", data: dict | None = None):
+        self.status_code, self.body, self.data = status, body, data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise tax_data_service.requests.HTTPError(f"{self.status_code}")
+
+    def iter_content(self, chunk_size):
+        yield self.body
+
+    def json(self):
+        return self.data
+
+
+GOV = "https://www.gov.il/booklet-2025.pdf"
+
+
+def _web(monkeypatch, gov_status: int, snapshot: bool = True):
+    calls = []
+
+    def get(url, **kw):
+        calls.append(url)
+        if url == GOV:
+            return _Response(gov_status, b"%PDF gov" if gov_status == 200 else b"")
+        if url.startswith("https://web.archive.org/save/"):
+            return _Response(200)
+        if url == tax_data_service.ARCHIVE_LOOKUP_URL:
+            closest = {"available": True, "status": "200", "timestamp": "20261023072104"}
+            return _Response(200, data={"archived_snapshots": {"closest": closest} if snapshot else {}})
+        if url == f"https://web.archive.org/web/20261023072104id_/{GOV}":
+            return _Response(200, b"%PDF archived")
+        raise AssertionError(url)
+
+    monkeypatch.setattr(tax_data_service.requests, "get", get)
+    return calls
+
+
+def test_a_refused_download_is_read_through_the_internet_archive(monkeypatch):
+    calls = _web(monkeypatch, 403)
+    assert real_fetch_document(GOV) == ("ok", b"%PDF archived")
+    # A fresh copy is asked for first, so a republished booklet comes through.
+    assert calls[1] == f"https://web.archive.org/save/{GOV}"
+
+
+def test_gov_il_first_and_a_not_found_is_not_sent_to_the_archive(monkeypatch):
+    calls = _web(monkeypatch, 200)
+    assert real_fetch_document(GOV) == ("ok", b"%PDF gov")
+    # A past year's booklet is final: the Archive's newest copy, without asking for a new one.
+    calls = _web(monkeypatch, 403)
+    assert real_fetch_document(GOV, fresh=False) == ("ok", b"%PDF archived")
+    assert not any("/save/" in c for c in calls)
+    calls = _web(monkeypatch, 404)
+    assert real_fetch_document(GOV) == ("missing", None)
+    assert calls == [GOV]
+
+
+def test_no_copy_anywhere_is_an_error(monkeypatch):
+    _web(monkeypatch, 403, snapshot=False)
+    assert real_fetch_document(GOV) == ("error", None)
+
+
+def test_a_year_that_should_have_figures_and_cannot_be_fetched_is_reported(
+    db_session, monkeypatch, clock
+):
+    booklets = FakeBooklets({})
+    booklets.fetch = lambda url, fresh=True: ("error", None)
+    reported = []
+    monkeypatch.setattr(tax_data_service, "fetch_document", booklets.fetch)
+    monkeypatch.setattr(tax_data_service.sentry_sdk, "capture_message", lambda m, **kw: reported.append(m))
+
+    summary = _service(db_session, booklets).refresh(TODAY)
+
+    assert summary["failed"] == [f"IL-{y}" for y in range(2022, 2027)]
+    assert reported[-1] == "Tax booklet could not be fetched: IL 2026"

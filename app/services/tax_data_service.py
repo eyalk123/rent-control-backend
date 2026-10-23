@@ -11,10 +11,20 @@ Tax Authority's yearly booklet plus the rates in the law (``il_tax_source``). On
   for a late republication. An unchanged file (same fingerprint) changes nothing.
 - **A changed file** is read, and its figures replace the year's, with the new fingerprint.
 
+**gov.il refuses the production server** (403 from Railway's europe-west4 region since the
+first run, October 2026; from Israel the same request works). So when the direct download
+fails, the same address is fetched through the Internet Archive: it is asked to save a fresh
+copy of the gov.il file (its crawler gets through), and the copy is downloaded raw (``id_``).
+The copy is the gov.il file byte for byte (checked when this was written: same SHA-256 for
+2025 and 2026), it has to read like any booklet, and the gov.il address is what is stored as
+the source. A not-found from gov.il is never sent to the Archive: that means not published.
+
 Best-effort like the policy rate refresh: an unreachable upstream logs and stores nothing,
-and the next run tries again. A file that downloads but does not read is different — the
-booklet's layout changed, and someone has to look — so it is reported to Sentry, and the
-year keeps the figures it had.
+and the next run tries again — except that a year which should have figures by now (a past
+year, or this one from February) and still cannot be fetched either way is reported to
+Sentry, since the report shows nothing for it. A file that downloads but does not read is
+different — the booklet's layout changed, and someone has to look — so it is reported to
+Sentry too, and the year keeps the figures it had.
 """
 import hashlib
 import logging
@@ -32,6 +42,12 @@ logger = logging.getLogger(__name__)
 RECHECK_EVERY = timedelta(days=7)
 FETCH_TIMEOUT_SECONDS = 30
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+
+# The Internet Archive, for when gov.il refuses the server. Saving a page takes it a while.
+ARCHIVE_SAVE_URL = "https://web.archive.org/save/{url}"
+ARCHIVE_LOOKUP_URL = "https://archive.org/wayback/available"
+ARCHIVE_RAW_URL = "https://web.archive.org/web/{timestamp}id_/{url}"
+ARCHIVE_SAVE_TIMEOUT_SECONDS = 120
 
 #: Every tax source the app can read, by ``TaxData.source``.
 SOURCES = {il_tax_source.name: il_tax_source}
@@ -73,7 +89,8 @@ class TaxDataService:
     ) -> None:
         url = source.booklet_url(year)
         stored = self.repository.document(country, year)
-        status, content = fetch_document(url)
+        # A past year's booklet is final: the copy the Archive already has will do.
+        status, content = fetch_document(url, fresh=not past)
         if status == "missing":
             if past:
                 # A past year's booklet should exist. Logged, not raised: the report says
@@ -81,6 +98,15 @@ class TaxDataService:
                 logger.warning("Tax data: %s booklet for %s not found at %s", country, year, url)
             return
         if content is None:
+            # Neither gov.il nor the Archive. Worth a person's attention only when the report
+            # has nothing for a year that should have figures by now.
+            if stored is None and (past or now.month >= 2):
+                summary["failed"].append(f"{country}-{year}")
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_context("tax_booklet", {"url": url})
+                    sentry_sdk.capture_message(
+                        f"Tax booklet could not be fetched: {country} {year}", level="error"
+                    )
             return
         sha256 = hashlib.sha256(content).hexdigest()
         if stored is not None and stored.sha256 == sha256:
@@ -108,10 +134,50 @@ class TaxDataService:
         )
 
 
-def fetch_document(url: str) -> tuple[str, bytes | None]:
-    """``("ok", bytes)``, ``("missing", None)`` on a 404, or ``("error", None)``."""
+def fetch_document(url: str, fresh: bool = True) -> tuple[str, bytes | None]:
+    """``("ok", bytes)``, ``("missing", None)`` on a 404, or ``("error", None)``.
+
+    Straight from the source, and when that fails for any other reason, through the Internet
+    Archive's copy of the same address — a fresh one when ``fresh`` (it takes the Archive
+    a minute or so), else the newest it has.
+    """
+    status, content = _download(url, FETCH_TIMEOUT_SECONDS)
+    if status != "error":
+        return status, content
+    status, content = _from_archive(url, fresh)
+    if status == "ok":
+        logger.info("Tax data: %s read through the Internet Archive", url)
+    return status, content
+
+
+def _from_archive(url: str, fresh: bool) -> tuple[str, bytes | None]:
+    # Ask for a fresh copy first, so a republished booklet comes through. Best-effort: when
+    # the Archive is busy, the newest copy it already has is read instead.
+    if fresh:
+        try:
+            requests.get(ARCHIVE_SAVE_URL.format(url=url), timeout=ARCHIVE_SAVE_TIMEOUT_SECONDS)
+        except requests.RequestException as exc:
+            logger.warning("Tax data: asking the Internet Archive to save %s failed: %s", url, exc)
     try:
-        with requests.get(url, timeout=FETCH_TIMEOUT_SECONDS, stream=True) as response:
+        response = requests.get(
+            ARCHIVE_LOOKUP_URL, params={"url": url}, timeout=FETCH_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        closest = (response.json().get("archived_snapshots") or {}).get("closest") or {}
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Tax data: looking %s up in the Internet Archive failed: %s", url, exc)
+        return "error", None
+    if not closest.get("available") or closest.get("status") != "200":
+        logger.warning("Tax data: the Internet Archive has no copy of %s", url)
+        return "error", None
+    raw = ARCHIVE_RAW_URL.format(timestamp=closest["timestamp"], url=url)
+    status, content = _download(raw, FETCH_TIMEOUT_SECONDS * 2)
+    return ("ok", content) if status == "ok" else ("error", None)
+
+
+def _download(url: str, timeout: int) -> tuple[str, bytes | None]:
+    try:
+        with requests.get(url, timeout=timeout, stream=True) as response:
             if response.status_code == 404:
                 return "missing", None
             response.raise_for_status()

@@ -146,4 +146,4 @@ def _no_tax_booklet_downloads(monkeypatch):
     the fetch themselves."""
     from app.services import tax_data_service
 
-    monkeypatch.setattr(tax_data_service, "fetch_document", lambda url: ("missing", None))
+    monkeypatch.setattr(tax_data_service, "fetch_document", lambda url, fresh=True: ("missing", None))
