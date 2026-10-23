@@ -22,7 +22,6 @@ from app.repositories.owner_repository import OwnerRepository
 from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.repositories.tax_group_repository import TaxGroupRepository
 from app.repositories.tax_year_input_repository import TaxYearInputRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.transaction_repository import TransactionRepository
@@ -209,17 +208,8 @@ _PROPERTY_OWNER_COLUMNS: list[tuple[str, Callable]] = [
     ("updated_at", lambda o: o.updated_at),
 ]
 
-_TAX_GROUP_COLUMNS: list[tuple[str, Callable]] = [
-    ("id", lambda g: g.id),
-    ("name", lambda g: g.name),
-    ("property_owner_ids", lambda g: g.property_owner_ids),
-    ("property_ids", lambda g: g.property_ids),
-    ("created_at", lambda g: g.created_at),
-    ("updated_at", lambda g: g.updated_at),
-]
-
 _TAX_YEAR_INPUT_COLUMNS: list[tuple[str, Callable]] = [
-    ("group_key", lambda i: i.group_key),
+    ("person_key", lambda i: i.person_key),
     ("year", lambda i: i.year),
     ("other_income", lambda i: i.other_income),
     ("credit_points", lambda i: i.credit_points),
@@ -341,7 +331,6 @@ def build_workbook(db: Session, owner_id: str) -> bytes:
         _CATEGORY_COLUMNS,
         ExpenseCategoryRepository(db).get_all_active_ordered(owner_id),
     )
-    _write_sheet(wb, "Tax groups", _TAX_GROUP_COLUMNS, TaxGroupRepository(db).get_all(owner_id))
     _write_sheet(
         wb, "Tax year inputs", _TAX_YEAR_INPUT_COLUMNS, TaxYearInputRepository(db).get_all(owner_id)
     )

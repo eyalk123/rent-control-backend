@@ -5,16 +5,14 @@ from app.models.base import Base
 
 
 class TaxYearInput(Base):
-    """What the account holder told the tax report about one group's tax year.
+    """What the account holder told the tax report about one person's tax year.
 
-    The marginal track needs the household's income outside renting (to find the bracket its
-    rent lands in, and the surtax) and, when that income is low, how many credit points it
-    has. Neither belongs to a property or an owner, so it is kept here per group and year.
+    The marginal track needs the person's income outside renting (to find the bracket their
+    rent lands in, and the surtax) and, when that income is low, how many credit points they
+    have. Neither is kept on the owner, because both change every year.
 
-    ``group_key`` is the report's key for the group: ``owner:<id>``, ``custom:<id>`` or
-    ``none``. The default groups have no row of their own, so the key is what ties the
-    answer to them. A key whose group no longer exists is left alone (the answer comes back
-    if the group does); a deleted custom group's rows go with it.
+    ``person_key`` is ``owner:<id>`` for a property owner, or ``none`` for the properties
+    that have no owner. A key whose owner no longer exists is left alone.
 
     Affects only the tax report. Never sent to the assistant.
     """
@@ -23,7 +21,7 @@ class TaxYearInput(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_id = Column(String, nullable=False, index=True)
-    group_key = Column(String(40), nullable=False)
+    person_key = Column(String(40), nullable=False)
     year = Column(Integer, nullable=False)
     # Annual, as typed. None until the account holder answers.
     other_income = Column(Float, nullable=True)
@@ -33,5 +31,5 @@ class TaxYearInput(Base):
     updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
     __table_args__ = (
-        UniqueConstraint("owner_id", "group_key", "year", name="uq_tax_year_inputs_group_year"),
+        UniqueConstraint("owner_id", "person_key", "year", name="uq_tax_year_inputs_person_year"),
     )

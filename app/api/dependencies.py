@@ -30,7 +30,6 @@ from app.repositories.notification_settings_repository import (
 from app.repositories.cpi_base_factor_repository import CpiBaseFactorRepository
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.policy_rate_repository import PolicyRateRepository
-from app.repositories.tax_group_repository import TaxGroupRepository
 from app.repositories.tax_value_repository import TaxValueRepository
 from app.repositories.tax_year_input_repository import TaxYearInputRepository
 from app.repositories.property_mortgage_repository import PropertyMortgageRepository
@@ -496,7 +495,6 @@ def get_tax_tracks_service(db: Annotated[Session, Depends(get_db)]) -> TaxTracks
         PropertyOwnerRepository(db),
         RenterRepository(db),
         TransactionRepository(db),
-        TaxGroupRepository(db),
         TaxValueRepository(db),
         TaxYearInputRepository(db),
         CpiIndexRepository(db),

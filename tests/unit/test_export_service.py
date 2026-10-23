@@ -22,7 +22,7 @@ from tests.factories import (
     make_transaction,
 )
 
-SHEETS = ["Properties", "Property owners", "Renters", "Transactions", "Suppliers", "Categories", "Tax groups", "Tax year inputs",
+SHEETS = ["Properties", "Property owners", "Renters", "Transactions", "Suppliers", "Categories", "Tax year inputs",
           "Mortgages", "Mortgage payments", "Mortgage years"]
 
 

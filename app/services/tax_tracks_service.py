@@ -1,8 +1,8 @@
 """The tax tracks report (PLATFORM.md §12; plan in ``docs/תוכנית השוואת מסלולי מס בדוחות.md``).
 
-For one tax year it groups the account's properties into households and, for each, works out
-the three tracks — the exemption, 10% and the marginal rate — and the cheapest choice of one
-track per flat. Every government figure comes from ``tax_values`` for that year, with its
+For one tax year and the flats the account holder picked (one household: a person, or a
+couple), it works out the three tracks — the exemption, 10% and the marginal rate — and the
+cheapest choice of one track per flat. Every government figure comes from ``tax_values`` for that year, with its
 source; none is written in this file or in ``tax_tracks_math``.
 
 What the numbers are built from:
@@ -18,7 +18,8 @@ What the numbers are built from:
 - **The marginal track** takes the expenses in ``RECOGNISED_EXPENSE_KEYS`` (renovations
   left out), depreciation under the 1989 regulations, mortgage interest from the bank's yearly
   statement (``MortgageYear``: interest and linkage differences together), and the
-  household's other income and credit points from ``tax_year_inputs``. A flat whose mortgage
+  other income and credit points of the person the rent is added to, from
+  ``tax_year_inputs`` (one row per person and year). A flat whose mortgage
   ran that year without the year's statement lists it as missing; the current year, whose
   statement cannot exist yet, uses last year's as an estimate.
 
@@ -37,12 +38,10 @@ from fastapi import HTTPException
 
 from app.models.property import Property, PropertyTypeEnum
 from app.models.renter import Renter
-from app.models.tax_group import TaxGroup
 from app.repositories.cpi_index_repository import CpiIndexRepository
 from app.repositories.property_owner_repository import PropertyOwnerRepository
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.renter_repository import RenterRepository
-from app.repositories.tax_group_repository import TaxGroupRepository, member_ids
 from app.repositories.tax_value_repository import TaxValueRepository
 from app.repositories.tax_year_input_repository import TaxYearInputRepository
 from app.repositories.transaction_repository import TransactionRepository
@@ -136,7 +135,6 @@ class TaxTracksService:
         property_owners: PropertyOwnerRepository,
         renters: RenterRepository,
         transactions: TransactionRepository,
-        groups: TaxGroupRepository,
         tax_values: TaxValueRepository,
         inputs: TaxYearInputRepository,
         cpi: CpiIndexRepository,
@@ -145,7 +143,6 @@ class TaxTracksService:
         self.property_owners = property_owners
         self.renters = renters
         self.transactions = transactions
-        self.groups = groups
         self.tax_values = tax_values
         self.inputs = inputs
         self.cpi = cpi
@@ -161,56 +158,12 @@ class TaxTracksService:
             raise HTTPException(status_code=404, detail="The tax report is not available here")
         return code, tax_data.first_year
 
-    # ── Groups ───────────────────────────────────────────────────────────────
-
-    def list_groups(self, owner_id: str) -> list[dict]:
-        return [self._group_read(g) for g in self.groups.get_all(owner_id)]
-
-    def save_group(
-        self,
-        owner_id: str,
-        name: str,
-        property_owner_ids: list[int],
-        property_ids: list[int],
-        group_id: int | None = None,
-    ) -> dict:
-        group = TaxGroup(owner_id=owner_id)
-        if group_id is not None:
-            group = self.groups.get_by_id(group_id, owner_id)
-            if group is None:
-                raise HTTPException(status_code=404, detail="Tax group not found")
-        if not property_owner_ids and not property_ids:
-            raise HTTPException(status_code=422, detail="A group needs an owner or a property")
-        own_owners = {o.id for o in self.property_owners.get_all(owner_id, include_inactive=True)}
-        own_props = {p.id for p in self.properties.get_all_by_owner(owner_id)}
-        if not set(property_owner_ids) <= own_owners or not set(property_ids) <= own_props:
-            raise HTTPException(status_code=400, detail="Owner or property not found")
-        # One group per owner and per property, or the report would count rent twice.
-        for other in self.groups.get_all(owner_id):
-            if other.id == group.id:
-                continue
-            if set(member_ids(other.property_owner_ids)) & set(property_owner_ids) or set(
-                member_ids(other.property_ids)
-            ) & set(property_ids):
-                raise HTTPException(
-                    status_code=409, detail="An owner or property is already in another group"
-                )
-        return self._group_read(self.groups.save(group, name, property_owner_ids, property_ids))
-
-    def delete_group(self, owner_id: str, group_id: int) -> bool:
-        group = self.groups.get_by_id(group_id, owner_id)
-        if group is None:
-            return False
-        self.groups.delete(group)
-        self.inputs.delete_for_group(owner_id, f"custom:{group_id}")
-        return True
-
     # ── Other income and credit points ───────────────────────────────────────
 
     def save_inputs(
         self,
         owner_id: str,
-        group_key: str,
+        person_key: str,
         year: int,
         first_year: int,
         today: date,
@@ -219,33 +172,22 @@ class TaxTracksService:
     ) -> dict:
         if not first_year <= year <= today.year:
             raise HTTPException(status_code=422, detail="No tax report for that year")
-        kind, _, raw_id = group_key.partition(":")
-        if group_key != NO_OWNER:
-            exists = False
-            if raw_id.isdigit() and kind == "owner":
-                exists = any(
-                    o.id == int(raw_id)
-                    for o in self.property_owners.get_all(owner_id, include_inactive=True)
-                )
-            elif raw_id.isdigit() and kind == "custom":
-                exists = self.groups.get_by_id(int(raw_id), owner_id) is not None
-            if not exists:
-                raise HTTPException(status_code=404, detail="Tax group not found")
-        row = self.inputs.save(owner_id, group_key, year, other_income, credit_points)
+        kind, _, raw_id = person_key.partition(":")
+        if person_key != NO_OWNER and not (
+            kind == "owner"
+            and raw_id.isdigit()
+            and any(
+                o.id == int(raw_id)
+                for o in self.property_owners.get_all(owner_id, include_inactive=True)
+            )
+        ):
+            raise HTTPException(status_code=404, detail="Property owner not found")
+        row = self.inputs.save(owner_id, person_key, year, other_income, credit_points)
         return {
-            "group_key": row.group_key,
+            "person_key": row.person_key,
             "year": row.year,
             "other_income": row.other_income,
             "credit_points": row.credit_points,
-        }
-
-    @staticmethod
-    def _group_read(group: TaxGroup) -> dict:
-        return {
-            "id": group.id,
-            "name": group.name,
-            "property_owner_ids": member_ids(group.property_owner_ids),
-            "property_ids": member_ids(group.property_ids),
         }
 
     # ── Report ───────────────────────────────────────────────────────────────
@@ -257,7 +199,14 @@ class TaxTracksService:
         year: int,
         today: date,
         hidden_property_ids: Iterable[int] = (),
+        selected_property_ids: Iterable[int] = (),
     ) -> dict:
+        """The report for the flats picked, and the owners and flats there are to pick from.
+
+        The flats picked are worked out as one household. Ids that are not the account's
+        residential flats in the country (deleted since, commercial, a company's) are
+        skipped, so a selection the browser remembered cannot fail the page.
+        """
         country, first_year = self.country_for(account_country)
         if not first_year <= year <= today.year:
             raise HTTPException(status_code=422, detail="No tax report for that year")
@@ -274,8 +223,6 @@ class TaxTracksService:
             if country_service.config_for(p.country).country_code == country
         ]
         visible = [p for p in in_country if p.id not in hidden]
-        custom = self.groups.get_all(owner_id)
-        key_of = _group_keys(custom, owners)
 
         company_owner_ids = {oid for oid, o in owners.items() if o.is_company}
         residential = [
@@ -283,31 +230,18 @@ class TaxTracksService:
             for p in visible
             if p.type != PropertyTypeEnum.COMMERCIAL and p.property_owner_id not in company_owner_ids
         ]
-        renters = [r for r in self.renters.get_all(owner_id) if r.property_id in {p.id for p in residential}]
-        ledger = self._ledger(owner_id, year, today, residential, renters)
-
-        groups: dict[str, dict] = {}
-        for g in custom:
-            groups[f"custom:{g.id}"] = _empty_group(f"custom:{g.id}", "custom", g.name, g)
-        for p in visible:
-            if p.property_owner_id in company_owner_ids:
-                continue  # listed once, with the company owners, below
-            key = key_of(p)
-            if key not in groups:
-                kind = "none" if key == NO_OWNER else "owner"
-                name = None if key == NO_OWNER else owners[p.property_owner_id].name
-                groups[key] = _empty_group(key, kind, name)
-            if p.type == PropertyTypeEnum.COMMERCIAL:
-                groups[key]["commercial"].append(_property_brief(p))
-            else:
-                groups[key]["_properties"].append(p)
+        wanted = set(selected_property_ids)
+        chosen = [p for p in residential if p.id in wanted]
+        chosen_ids = {p.id for p in chosen}
+        renters = [r for r in self.renters.get_all(owner_id) if r.property_id in chosen_ids]
+        ledger = self._ledger(owner_id, year, today, chosen, renters)
 
         renters_by_property: dict[int, list[Renter]] = defaultdict(list)
         for r in renters:
             renters_by_property[r.property_id].append(r)
         expenses: dict[int, list] = defaultdict(list)
         for tx in self.transactions.expenses_between(
-            owner_id, [p.id for p in residential], date(year, 1, 1), date(year, 12, 31)
+            owner_id, [p.id for p in chosen], date(year, 1, 1), date(year, 12, 31)
         ):
             expenses[tx.property_id].append(tx)
         series = country_service.index_series_for(country)
@@ -328,9 +262,6 @@ class TaxTracksService:
             ),
             is_forecast=year == today.year,
         )
-        out_groups = [
-            self._group_result(g, ctx) for g in sorted(groups.values(), key=_group_order)
-        ]
 
         return {
             "year": year,
@@ -353,10 +284,9 @@ class TaxTracksService:
                 if document is not None
                 else None
             ),
-            "company_owners": sorted(o.name for oid, o in owners.items() if oid in company_owner_ids
-                                     and any(p.property_owner_id == oid for p in visible)),
+            "people": _catalog(visible, owners),
             "locked_properties": len([p for p in in_country if p.id in hidden]),
-            "groups": out_groups,
+            "result": self._household(chosen, ctx) if chosen else None,
         }
 
     def _ledger(
@@ -429,39 +359,37 @@ class TaxTracksService:
                 })
         return out
 
-    # ── One group ────────────────────────────────────────────────────────────
+    # ── The household ────────────────────────────────────────────────────────────
 
-    def _group_result(self, group: dict, ctx: "_Context") -> dict:
-        props: list[Property] = group.pop("_properties")
+    def _household(self, props: list[Property], ctx: "_Context") -> dict:
         ledger, values = ctx.ledger, ctx.values
+        result: dict = {}
         monthly = [round(sum(ledger.rent[p.id][m] for p in props), 2) for m in range(12)]
         forecast = [any(ledger.forecast[p.id][m] for p in props) for m in range(12)]
         gross = round(sum(monthly), 2)
-        group["properties"] = [
+        result["properties"] = [
             {**_property_brief(p), "rent": round(sum(ledger.rent[p.id]), 2)} for p in props
         ]
-        group["rent_by_month"] = monthly
-        group["forecast_months"] = [m + 1 for m in range(12) if forecast[m]]
-        group["total_rent"] = gross
-        group["checks"] = [c for p in props for c in ctx.checks.get(p.id, [])]
+        result["rent_by_month"] = monthly
+        result["forecast_months"] = [m + 1 for m in range(12) if forecast[m]]
+        result["total_rent"] = gross
+        result["checks"] = [c for p in props for c in ctx.checks.get(p.id, [])]
 
         # Only flats that earned rent this year are on a track; an empty one has nothing to tax.
         flats = [self._flat(p, ctx) for p in props if sum(ledger.rent[p.id]) > 0]
-        row = ctx.inputs.get(group["key"])
-        other = row.other_income if row is not None else None
-        person = _Person.of(props, ctx)
-        credits, inputs = _credits(values, other, row.credit_points if row is not None else None)
-        group["inputs"] = inputs
-        group["senior"] = person.senior
-        payer = _Payer(values, other, credits, person.senior)
+        household = _Household.of(props, ctx)
+        result["people"] = household.people
+        result["attributed_key"] = household.attributed["key"] if household.attributed else None
+        result["senior"] = household.senior
+        payer = _Payer(values, household.other_income, household.credits, household.senior, household.waiting)
 
-        group["exemption"] = self._exemption(flats, monthly, gross, payer, person)
-        group["ten_percent"] = _ten_percent(flats, gross, payer)
-        group["marginal"] = _marginal(flats, payer, person, ctx)
-        group["combination"] = _combination(flats, payer, group)
-        group["expenses"] = _expense_summary(flats)
+        result["exemption"] = self._exemption(flats, monthly, gross, payer, household)
+        result["ten_percent"] = _ten_percent(flats, gross, payer)
+        result["marginal"] = _marginal(flats, payer, household, ctx)
+        result["combination"] = _combination(flats, payer, result)
+        result["expenses"] = _expense_summary(flats)
 
-        notes = list(person.notes)
+        notes = list(household.notes)
         count = len(props)
         passive_max = values.get("passive_max_apartments")
         business_min = values.get("business_min_apartments")
@@ -472,11 +400,11 @@ class TaxTracksService:
         cap = values.get("rent_paid_deduction_cap")
         if count == 1 and cap is not None:
             notes.append({"code": "rent_paid_deduction", "cap": cap})
-        group["notes"] = notes
-        return group
+        result["notes"] = notes
+        return result
 
     @staticmethod
-    def _exemption(flats: list["_Flat"], monthly: list[float], gross: float, payer: "_Payer", person) -> dict:
+    def _exemption(flats: list["_Flat"], monthly: list[float], gross: float, payer: "_Payer", person: "_Household") -> dict:
         ceiling = payer.values.get("rent_exemption_ceiling_monthly")
         company = [f for f in flats if f.company]
         exemption: dict = {
@@ -489,7 +417,7 @@ class TaxTracksService:
             exemption["missing"].append({"code": "tax_figures"})
             return exemption
         if company:
-            # A company renter rules the exemption out for its flat. The whole-group figure
+            # A company renter rules the exemption out for its flat. The whole-household figure
             # would be wrong; the per-flat mix below can still use it on the other flats.
             return exemption
         months = []
@@ -675,51 +603,116 @@ class _Context:
     is_forecast: bool
 
 
-@dataclass
-class _Person:
-    """Who the group's rent is taxed as: whether the 60-and-over brackets apply."""
+def _senior(owner, ctx: _Context, notes: list) -> bool:
+    """Whether the owner is taxed on the 60-and-over brackets that year. No birth date and
+    no tick is taken as under 60, and the page says so."""
+    age = ctx.values.get("senior_age")
+    if owner.birth_date is not None:
+        return age is not None and ctx.year - owner.birth_date.year >= age
+    if owner.over_60:
+        marked = owner.over_60_marked_on
+        if marked is not None and marked.year > ctx.year:
+            # Ticked by hand in a later year: we do not know about this one.
+            notes.append({"code": "over_60_ticked_later", "name": owner.name, "year": marked.year})
+            return False
+        return True
+    return False
 
+
+@dataclass
+class _Household:
+    """The people whose flats were picked, and whose income their rent is added to.
+
+    A married couple's rent is added to the spouse whose income from work is higher, and when
+    neither works, to the registered spouse (Income Tax Ordinance section 66; PLATFORM.md
+    §12). The report takes the person with the higher other income the account holder
+    entered. On a tie the two are the same for the brackets unless only one is 60 or over;
+    the report then asks (``mixed_ages``) instead of choosing.
+
+    The rent is never split between them. Section 66(b) lets a spouse who owned a flat a year
+    before the marriage, or inherited it, have its rent added to their own income instead;
+    the report does not offer that, and says so.
+    """
+
+    people: list[dict]
+    attributed: dict | None
     senior: bool | None
+    other_income: float | None
+    credits: float | None
+    # The other income still missing, per person: it blocks the tax on any taxable rent.
+    waiting: list
+    # The age question on a tie, which only the brackets need.
     missing: list
     notes: list
 
     @staticmethod
-    def of(props: list[Property], ctx: _Context) -> "_Person":
-        age = ctx.values.get("senior_age")
-        notes, statuses = [], set()
+    def of(props: list[Property], ctx: _Context) -> "_Household":
+        notes: list = []
+        people: list[dict] = []
         owner_ids = {p.property_owner_id for p in props if p.property_owner_id in ctx.owners}
-        for oid in sorted(owner_ids):
+        for oid in sorted(owner_ids, key=lambda i: (ctx.owners[i].name or "").lower()):
             owner = ctx.owners[oid]
-            if owner.birth_date is not None:
-                statuses.add(age is not None and ctx.year - owner.birth_date.year >= age)
-            elif owner.over_60:
-                marked = owner.over_60_marked_on
-                if marked is not None and marked.year > ctx.year:
-                    # Ticked by hand in a later year: we do not know about this one.
-                    notes.append({"code": "over_60_ticked_later", "name": owner.name,
-                                  "year": marked.year})
-                    statuses.add(False)
-                else:
-                    statuses.add(True)
-            else:
-                statuses.add(False)
-        if not owner_ids:
+            people.append({
+                "key": f"owner:{oid}",
+                "owner_id": oid,
+                "name": owner.name,
+                "senior": _senior(owner, ctx, notes),
+                "age_from": "birth_date" if owner.birth_date else "ticked" if owner.over_60 else None,
+            })
+        if any(p.property_owner_id not in ctx.owners for p in props):
             notes.append({"code": "no_owner_age"})
-        if len(statuses) > 1:
-            # One household, two people on different brackets: the rent is someone's, and
-            # the report does not split it between them.
-            return _Person(None, [{"code": "mixed_ages"}], notes)
-        return _Person(True in statuses, [], notes)
+            people.append({"key": NO_OWNER, "owner_id": None, "name": None, "senior": False,
+                           "age_from": None})
+        for person in people:
+            row = ctx.inputs.get(person["key"])
+            person["other_income"] = row.other_income if row is not None else None
+            person["credit_points"] = row.credit_points if row is not None else None
+            person["attributed"] = False
+
+        waiting = [
+            {"code": "other_income", "key": p["key"], "name": p["name"]}
+            for p in people
+            if p["other_income"] is None
+        ]
+        missing: list = []
+        attributed = None
+        payer = people[0]
+        if not waiting:
+            top = max(p["other_income"] for p in people)
+            tied = [p for p in people if p["other_income"] == top]
+            payer = tied[0]
+            if len({p["senior"] for p in tied}) > 1:
+                missing.append({"code": "mixed_ages"})
+            else:
+                attributed = payer
+                payer["attributed"] = True
+        statuses = {p["senior"] for p in people}
+        if attributed is not None:
+            senior = attributed["senior"]
+        elif len(statuses) == 1:
+            senior = statuses.pop()
+        else:
+            senior = None
+        other = payer["other_income"] if not waiting else None
+        credits, inputs = _credits(ctx.values, other, payer["credit_points"])
+        for person in people:
+            asked = person is payer and inputs["credit_points_asked"]
+            person["credit_points_asked"] = asked
+            person["credit_points_used"] = inputs["credit_points_used"] if person is payer else None
+            person["credit_points_threshold"] = inputs["credit_points_threshold"]
+        return _Household(people, attributed, senior, other, credits, waiting, missing, notes)
 
 
 @dataclass
 class _Payer:
-    """The group's tax position for the year: what the rent is stacked on."""
+    """The household's tax position for the year: what the rent is stacked on."""
 
     values: dict
     other_income: float | None
     credits: float | None
     senior: bool | None = None
+    # The household's other income still missing, per person.
+    waiting: list = field(default_factory=list)
 
     _NEEDED = ("personal_brackets", "other_income_brackets", "surtax_threshold",
                "surtax_rate_pct", "credit_point_monthly", "resident_credit_points", "senior_age")
@@ -728,9 +721,7 @@ class _Payer:
         out = []
         if any(self.values.get(k) is None for k in self._NEEDED):
             out.append({"code": "tax_figures"})
-        if self.other_income is None:
-            out.append({"code": "other_income"})
-        return out
+        return out + self.waiting
 
     def income_tax(self, rent_income: float) -> float:
         rent_table = self.values["personal_brackets" if self.senior else "other_income_brackets"]
@@ -758,8 +749,6 @@ def _credits(values: dict, other: float | None, stored: float | None) -> tuple[f
     basic = values.get("resident_credit_points")
     personal = values.get("personal_brackets")
     inputs = {
-        "other_income": other,
-        "credit_points": stored,
         "credit_points_asked": False,
         "credit_points_used": None,
         "credit_points_threshold": None,
@@ -778,7 +767,7 @@ def _credits(values: dict, other: float | None, stored: float | None) -> tuple[f
 
 
 def _assessment(tracks: dict[int, str], flats: list[_Flat], payer: _Payer) -> dict:
-    """The year's tax on the group's rent with each flat on the track ``tracks`` gives it.
+    """The year's tax on the household's rent with each flat on the track ``tracks`` gives it.
 
     Exemption: the reduced ceiling is tested month by month against the rent of every flat,
     whatever its track; the taxable part keeps its share of the track's expenses. 10%: of
@@ -847,7 +836,7 @@ def _ten_percent(flats: list[_Flat], gross: float, payer: _Payer) -> dict:
     return out
 
 
-def _marginal(flats: list[_Flat], payer: _Payer, person: _Person, ctx: _Context) -> dict:
+def _marginal(flats: list[_Flat], payer: _Payer, person: _Household, ctx: _Context) -> dict:
     missing = payer.missing() + person.missing
     for f in flats:
         missing += f.interest_missing + f.depreciation["missing"]
@@ -883,20 +872,20 @@ def _marginal(flats: list[_Flat], payer: _Payer, person: _Person, ctx: _Context)
     return out
 
 
-def _combination(flats: list[_Flat], payer: _Payer, group: dict) -> dict:
+def _combination(flats: list[_Flat], payer: _Payer, result: dict) -> dict:
     """The cheapest choice of one track per flat, once every track can be computed.
 
-    Every assignment is tried; a group large enough to need more than ``_MAX_MIX_FLATS``
+    Every assignment is tried; a household large enough to need more than ``_MAX_MIX_FLATS``
     flats is past the point where renting is likely a business anyway.
     """
     out: dict = {"available": False, "reason": None}
     if len(flats) < 2:
         out["reason"] = "one_flat"
         return out
-    if not group["marginal"]["available"] or group["exemption"]["ceiling"] is None:
+    if not result["marginal"]["available"] or result["exemption"]["ceiling"] is None:
         out["reason"] = "missing"
         return out
-    if not group["ten_percent"]["available"]:
+    if not result["ten_percent"]["available"]:
         out["reason"] = "missing"
         return out
     if len(flats) > _MAX_MIX_FLATS:
@@ -975,42 +964,33 @@ def _decoded(raw: str):
     return json.loads(raw)
 
 
-def _group_keys(custom: list[TaxGroup], owners: dict):
-    by_property: dict[int, TaxGroup] = {}
-    by_owner: dict[int, TaxGroup] = {}
-    for g in custom:
-        for pid in member_ids(g.property_ids):
-            by_property.setdefault(pid, g)
-        for oid in member_ids(g.property_owner_ids):
-            by_owner.setdefault(oid, g)
+def _catalog(visible: list[Property], owners: dict) -> list[dict]:
+    """The people there are to pick from, each with their flats in the country.
 
-    def key_of(p: Property) -> str:
-        g = by_property.get(p.id) or by_owner.get(p.property_owner_id)
-        if g is not None:
-            return f"custom:{g.id}"
-        if p.property_owner_id in owners:
-            return f"owner:{p.property_owner_id}"
-        return NO_OWNER
-
-    return key_of
-
-
-def _empty_group(key: str, kind: str, name: str | None, custom: TaxGroup | None = None) -> dict:
-    return {
-        "key": key,
-        "kind": kind,
-        "name": name,
-        "group_id": custom.id if custom else None,
-        "property_owner_ids": member_ids(custom.property_owner_ids) if custom else [],
-        "member_property_ids": member_ids(custom.property_ids) if custom else [],
-        "commercial": [],
-        "_properties": [],
-    }
-
-
-def _group_order(group: dict) -> tuple:
-    rank = {"custom": 0, "owner": 1, "none": 2}[group["kind"]]
-    return (rank, (group["name"] or "").lower())
+    A company owner is listed, marked, with nothing to pick: the individual tracks do not
+    apply to a company. A commercial property is listed, marked, and cannot be picked.
+    """
+    people: dict[str, dict] = {}
+    for p in visible:
+        owner = owners.get(p.property_owner_id)
+        key = f"owner:{owner.id}" if owner is not None else NO_OWNER
+        if key not in people:
+            people[key] = {
+                "key": key,
+                "owner_id": owner.id if owner is not None else None,
+                "name": owner.name if owner is not None else None,
+                "is_company": bool(owner.is_company) if owner is not None else False,
+                "properties": [],
+            }
+        people[key]["properties"].append(
+            {**_property_brief(p), "commercial": p.type == PropertyTypeEnum.COMMERCIAL}
+        )
+    for person in people.values():
+        person["properties"].sort(key=lambda x: (x["address"] or "").lower())
+    return sorted(
+        people.values(),
+        key=lambda x: (x["key"] == NO_OWNER, x["is_company"], (x["name"] or "").lower()),
+    )
 
 
 def _property_brief(p: Property) -> dict:
