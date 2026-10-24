@@ -388,6 +388,7 @@ class TaxTracksService:
         result["marginal"] = _marginal(flats, payer, household, ctx)
         result["combination"] = _combination(flats, payer, result)
         result["expenses"] = _expense_summary(flats)
+        result["flats"] = [_flat_detail(f) for f in flats]
 
         notes = list(household.notes)
         count = len(props)
@@ -510,7 +511,11 @@ class TaxTracksService:
         if out["missing"]:
             return out
         bought = p.purchase_date.year
-        out.update({"price": float(p.purchase_price), "purchase_year": bought})
+        out.update({
+            "price": float(p.purchase_price),
+            "purchase_year": bought,
+            "purchase_date": p.purchase_date.isoformat(),
+        })
         if bought >= ctx.year:
             factor, linked = 1.0, None
         else:
@@ -527,8 +532,10 @@ class TaxTracksService:
                 out["missing"].append({"code": "cpi", **_property_brief(p)})
                 return out
             factor = (start + (end - start) / 2) / base
+            # The readings themselves, so the page can show the sum and not just its result.
             linked = {"from": [bought, 12], "start": [ctx.year - 1, 12], "end": list(end_period),
-                      "estimated": end_period != (ctx.year, 12)}
+                      "estimated": end_period != (ctx.year, 12),
+                      "values": {"from": base, "start": start, "end": end}}
         value = float(p.purchase_price) * factor
         out.update({
             "factor": round(factor, 4),
@@ -803,7 +810,14 @@ def _assessment(tracks: dict[int, str], flats: list[_Flat], payer: _Payer) -> di
     general, capital = payer.surtax(ordinary + ten_gross)
     return {
         "taxable_income": round(ordinary, 2),
+        # Each track's part, so a mix can be laid out flat by flat and track by track.
+        "exemption_rent": round(exemption_rent, 2),
+        "exemption_taxable": round(exemption_taxable, 2),
         "exemption_deductions": round(exemption_deductions, 2),
+        "exemption_income": round(exemption_income, 2),
+        "ten_percent_gross": round(ten_gross, 2),
+        "marginal_net": round(marginal_net, 2),
+        "marginal_income": round(marginal_income, 2),
         "marginal_loss": marginal_net < 0,
         "ten_percent_tax": round(ten_tax, 2),
         "income_tax": round(income_tax, 2),
@@ -905,12 +919,43 @@ def _combination(flats: list[_Flat], payer: _Payer, result: dict) -> dict:
         if best is None or result["tax"] < best[1]["tax"] - 0.005:
             best = (combo, result)
     combo, result = best
+    tracks = {f.property.id: t for f, t in zip(flats, combo)}
+    rate = payer.values["ten_percent_rate_pct"]
     out.update({
         "available": True,
-        "flats": [{**_property_brief(f.property), "track": t} for f, t in zip(flats, combo)],
+        "flats": [{**_flat_figures(f, t, rate), "what_if": _what_if(f, choices[i], tracks, flats, payer, result["tax"])}
+                  for i, (f, t) in enumerate(zip(flats, combo))],
         "mixed": len(set(combo)) > 1,
         **result,
     })
+    return out
+
+
+def _flat_figures(f: _Flat, track: str, ten_rate: float) -> dict:
+    """One flat's own lines on its track. The exemption and the tax on what is taxed are the
+    household's together (the ceiling counts every flat, the brackets all the taxed rent), so
+    those stay with the track's totals."""
+    out = {**_property_brief(f.property), "track": track, "rent": round(f.rent, 2)}
+    if track == "marginal":
+        depreciation = f.depreciation.get("amount") or 0.0
+        out.update({
+            "deductions": round(f.deductions, 2),
+            "depreciation": round(depreciation, 2),
+            "net": round(f.rent - f.deductions - depreciation, 2),
+        })
+    elif track == "ten_percent":
+        out["ten_percent_tax"] = round(f.rent * ten_rate / 100, 2)
+    return out
+
+
+def _what_if(f: _Flat, allowed: list[str], tracks: dict, flats: list[_Flat], payer: _Payer, tax: float) -> list[dict]:
+    """The household's tax with this one flat moved to each of its other tracks."""
+    out = []
+    for t in allowed:
+        if t == tracks[f.property.id]:
+            continue
+        other = _assessment({**tracks, f.property.id: t}, flats, payer)["tax"]
+        out.append({"track": t, "tax": other, "more": round(other - tax, 2)})
     return out
 
 
@@ -930,6 +975,34 @@ def _expense_summary(flats: list[_Flat]) -> dict:
         ],
         "renovation": round(sum(f.renovation for f in flats), 2),
         "recognised": sorted(RECOGNISED_EXPENSE_KEYS),
+    }
+
+
+def _flat_detail(f: _Flat) -> dict:
+    """What the report knows about one flat, for the page's list of what it uses."""
+    mortgage = f.property.mortgage
+    if f.interest_detail is not None:
+        state = "estimated" if f.interest_detail["estimated"] else "statement"
+    elif f.interest_missing:
+        state = "missing"
+    else:
+        # No mortgage, or one that did not run that year.
+        state = "none"
+    return {
+        **_property_brief(f.property),
+        "rent": round(f.rent, 2),
+        "company_renter": f.company,
+        "expenses": round(f.expenses, 2),
+        "counted": [{"key": k, "amount": round(v, 2)} for k, v in sorted(f.counted.items())],
+        "not_counted": [
+            {"label": label, "built_in": built_in, "amount": round(v, 2)}
+            for (label, built_in), v in sorted(f.not_counted.items(), key=lambda x: str(x[0][0]))
+        ],
+        "renovation": round(f.renovation, 2),
+        "mortgage": state,
+        "mortgage_id": mortgage.id if mortgage is not None else None,
+        "interest": f.interest_detail,
+        "depreciation": {k: v for k, v in f.depreciation.items() if k != "missing"},
     }
 
 

@@ -363,8 +363,19 @@ def test_the_marginal_track_deducts_expenses_and_linked_depreciation(client, db_
     assert expenses["counted"] == [{"key": "repairs", "amount": 3000}]
     assert expenses["not_counted"] == [{"label": "property_tax", "built_in": True, "amount": 2000}]
     assert expenses["renovation"] == 10000
+    # The readings behind the factor, so the page can show the sum.
+    assert dep["purchase_date"] == "2019-06-01"
+    assert dep["cpi"]["values"] == {"from": 100.0, "start": 110.0, "end": 112.0}
     # One flat: the mix is the single tracks.
     assert group["combination"] == {"available": False, "reason": "one_flat"}
+    # The same, flat by flat, for the page's list of what the report uses.
+    [flat] = group["flats"]
+    assert flat["id"] == prop.id and flat["rent"] == 60000 and flat["expenses"] == 3000
+    assert flat["counted"] == [{"key": "repairs", "amount": 3000}]
+    assert flat["not_counted"] == [{"label": "property_tax", "built_in": True, "amount": 2000}]
+    assert flat["renovation"] == 10000
+    assert flat["mortgage"] == "none" and flat["interest"] is None
+    assert flat["depreciation"]["amount"] == 22200
 
 
 def test_what_the_marginal_track_is_missing_is_listed_per_flat(client, db_session):
@@ -464,6 +475,41 @@ def test_the_cheapest_mix_puts_each_flat_on_its_own_track(client, db_session):
     assert {f["id"] for f in mix["flats"]} == {p.id for p in flats}
 
 
+def test_a_mix_is_laid_out_flat_by_flat_with_what_each_other_track_would_cost(client, db_session):
+    """A flat whose costs take its rent belongs on the marginal rate, one without on the 10%.
+    The page shows each flat's own lines and what moving one flat would cost."""
+    _figures(db_session)
+    _cpi(db_session, {(2019, 12): 100.0, (2024, 12): 100.0, (2025, 12): 100.0})
+    make_property_owner(db_session, name="Dad", birth_date=date(1975, 3, 1))
+    costly = make_property(db_session, address="Costly", property_owner="Dad", purchase_price=500_000,
+                           purchase_date=date(2019, 6, 1))
+    plain = make_property(db_session, address="Plain", property_owner="Dad", purchase_price=500_000,
+                          purchase_date=date(2019, 6, 1))
+    _pay(db_session, _lease(db_session, costly, 3000), 3000, 2025, range(1, 13))
+    _pay(db_session, _lease(db_session, plain, 9000), 9000, 2025, range(1, 13))
+    _expense(db_session, costly, "repairs", 30000)
+    _other_income(client, _key(client), 200_000)
+
+    mix = _result(client)["combination"]
+    assert mix["available"] is True and mix["mixed"] is True
+    by_id = {f["id"]: f for f in mix["flats"]}
+    # 36,000 rent − 30,000 repairs − 10,000 depreciation: a loss, so no tax on that flat.
+    assert by_id[costly.id]["track"] == "marginal"
+    assert by_id[costly.id]["deductions"] == 30000 and by_id[costly.id]["depreciation"] == 10000
+    assert by_id[costly.id]["net"] == -4000
+    assert by_id[plain.id]["track"] == "ten_percent" and by_id[plain.id]["ten_percent_tax"] == 10800
+    # The track totals the table's household lines come from.
+    assert mix["marginal_net"] == -4000 and mix["marginal_income"] == 0
+    assert mix["ten_percent_gross"] == 108000 and mix["tax"] == 10800
+    # Moving any one flat costs more, and says by how much.
+    for flat in mix["flats"]:
+        assert {w["track"] for w in flat["what_if"]} == {"exemption", "ten_percent", "marginal"} - {flat["track"]}
+        for w in flat["what_if"]:
+            assert w["more"] >= 0 and w["tax"] == pytest.approx(mix["tax"] + w["more"])
+    ten = next(w for w in by_id[costly.id]["what_if"] if w["track"] == "ten_percent")
+    assert ten["more"] == 3600
+
+
 def test_ten_percent_rent_counts_toward_the_surtax(client, db_session):
     _figures(db_session)
     prop = make_property(db_session, property_owner="Dad")
@@ -525,6 +571,9 @@ def test_mortgage_interest_and_linkage_are_deducted(client, db_session):
     assert marginal["income"] == 30000
     assert marginal["no_mortgage"] == []
     assert [p["id"] for p in marginal["no_expenses"]] == [prop.id]
+    [flat] = _result(client)["flats"]
+    assert flat["mortgage"] == "statement" and flat["mortgage_id"] == mortgage.id
+    assert flat["interest"]["amount"] == 10000
 
 
 def test_the_current_year_estimates_with_last_years_interest(client, db_session):
