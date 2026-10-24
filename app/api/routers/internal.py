@@ -175,7 +175,10 @@ def run_reminders(
             logger.warning("Inline lease generation failed; sending reminders anyway")
 
     caught_up = False
+    tax_years_updated: list[str] = []
     if not job_runs.succeeded_on(JOB_CPI_INDEXING, utc_today()):
+        # The tax figures ride with the index (see run-cpi-indexing), so they catch up too.
+        tax_years_updated = _refresh_tax_data(tax_data_service)
         try:
             _record(
                 job_runs,
@@ -197,14 +200,6 @@ def run_reminders(
             rate_changes = policy_rate_service.refresh()["added"]
         except Exception:
             logger.exception("Policy rate refresh failed; sending reminders anyway")
-
-    # The tax tracks report's government figures. Same best-effort shape: a new year's
-    # booklet is looked for daily, and this year's is re-checked weekly for a republication.
-    tax_years_updated: list[str] = []
-    try:
-        tax_years_updated = tax_data_service.refresh()["updated"]
-    except Exception:
-        logger.exception("Tax data refresh failed; sending reminders anyway")
 
     sent = _record(job_runs, JOB_REMINDERS, reminder_service.run_daily_reminders)
     return {
@@ -242,13 +237,31 @@ def run_lease_generation(
     return {"status": "ok", **summary}
 
 
+def _refresh_tax_data(tax_data_service: TaxDataService) -> list[str]:
+    """The tax tracks report's figures from the Tax Authority's booklets: a new year's is
+    looked for daily, this year's re-checked weekly for a republication. Best-effort, and
+    apart from the index on purpose — either one's outage must not stop the other."""
+    try:
+        return tax_data_service.refresh()["updated"]
+    except Exception:
+        logger.exception("Tax data refresh failed")
+        return []
+
+
 @router.post("/run-cpi-indexing")
 def run_cpi_indexing(
     cpi_indexing_service: Annotated[CpiIndexingService, Depends(get_cpi_indexing_service)],
     job_runs: Annotated[JobRunRepository, Depends(get_job_run_repository)],
+    tax_data_service: Annotated[TaxDataService, Depends(get_tax_data_service)],
 ):
     """Refresh the cached Consumer Price Index and recompute every CPI-linked renter's rent
     schedule. Called daily by an external scheduler with the X-Cron-Secret header.
+
+    Also refreshes the tax figures (``tax_years_updated``): the same kind of work — a
+    government publication stored per period — and, unlike ``run-reminders``, it sends no
+    pushes (its rent-change notices are pushed by that job, and a second run adds none), so
+    it can be triggered at any hour. Done first, so an index failure that raises does not
+    take them down with it.
 
     The index is read from CBS, falling back to the Bank of Israel's republication of the
     same series when CBS is unreachable. A run served by the fallback still succeeds
@@ -260,13 +273,14 @@ def run_cpi_indexing(
     itself is best-effort and never raises, so without this check a totally dead feed would
     keep returning 200 — which is exactly how a week-long CBS outage went unnoticed.
     """
+    tax_years_updated = _refresh_tax_data(tax_data_service)
     result = _record(
         job_runs,
         JOB_CPI_INDEXING,
         cpi_indexing_service.run_cpi_indexing,
         status_of=lambda r: "stale" if r["stale"] else ("degraded" if r["degraded"] else "ok"),
     )
-    body = {"status": "stale" if result["stale"] else "ok", **result}
+    body = {"status": "stale" if result["stale"] else "ok", **result, "tax_years_updated": tax_years_updated}
     if result["stale"]:
         # Non-2xx so the scheduler surfaces it, but with the full summary intact — the
         # DB work has already committed; only the status code differs.

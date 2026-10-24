@@ -180,3 +180,60 @@ def test_indexing_called_directly_is_recorded_once(client, db_session, monkeypat
     assert len(runs) == 1
     assert runs[0].status in ("ok", "degraded", "stale")
     assert runs[0].started_at.date() == utc_today()
+
+
+def _tax_refresh(monkeypatch, outcome):
+    """Stand in for the tax figures' refresh; returns the list its calls are counted in."""
+    calls = []
+
+    def refresh(self, today=None):
+        calls.append(today)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"updated": outcome}
+
+    monkeypatch.setattr("app.services.tax_data_service.TaxDataService.refresh", refresh)
+    return calls
+
+
+def test_indexing_also_refreshes_the_tax_figures(client, db_session, monkeypatch):
+    """The tax figures ride with the index: the job that sends no pushes, so it can be
+    triggered by hand at any hour."""
+    _enable(monkeypatch)
+    calls = _tax_refresh(monkeypatch, ["IL-2025"])
+    body = client.post("/internal/run-cpi-indexing", headers=_headers()).json()
+    assert body["tax_years_updated"] == ["IL-2025"]
+    assert len(calls) == 1
+
+
+def test_the_tax_figures_and_the_index_do_not_stop_each_other(client, db_session, monkeypatch):
+    _enable(monkeypatch)
+    _tax_refresh(monkeypatch, RuntimeError("gov.il down"))
+    body = client.post("/internal/run-cpi-indexing", headers=_headers()).json()
+    assert body["tax_years_updated"] == []
+    assert _runs(db_session, JOB_CPI_INDEXING)[0].status in ("ok", "degraded", "stale")
+
+    # The index raising still leaves the tax figures refreshed: they go first.
+    calls = _tax_refresh(monkeypatch, [])
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("CBS unreachable")
+
+    monkeypatch.setattr(
+        "app.services.cpi_indexing_service.CpiIndexingService.run_cpi_indexing", boom
+    )
+    with pytest.raises(RuntimeError, match="CBS unreachable"):
+        client.post("/internal/run-cpi-indexing", headers=_headers())
+    assert len(calls) == 1
+
+
+def test_reminders_refresh_the_tax_figures_only_with_the_catch_up(client, db_session, monkeypatch):
+    _enable(monkeypatch)
+    calls = _tax_refresh(monkeypatch, ["IL-2025"])
+    body = client.post("/internal/run-reminders", headers=_headers()).json()
+    assert body["cpi_caught_up"] is True and body["tax_years_updated"] == ["IL-2025"]
+
+    # Indexing has now run today, so the next reminders run leaves both alone.
+    body = client.post("/internal/run-reminders", headers=_headers()).json()
+    assert body["cpi_caught_up"] is False and body["tax_years_updated"] == []
+    assert len(calls) == 1

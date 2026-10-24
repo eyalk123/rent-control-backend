@@ -396,8 +396,13 @@ check-in as errored. Keep the cron entry and `ROLLUP_MONITOR_CONFIG` in
 `app/api/routers/internal.py` in sync — Sentry upserts the monitor from the config sent with each
 check-in. If the rollup itself never runs, Sentry reports it as a missed check-in.
 
-**`run-reminders` also refreshes the tax tracks report's government figures**
-(`app/services/tax_data_service.py`), best-effort like the policy rate. For every country with
+**`run-cpi-indexing` also refreshes the tax tracks report's government figures**
+(`app/services/tax_data_service.py`), best-effort and before the index, so neither one's outage
+stops the other. They share the job because it is the same kind of work (a government publication
+stored per period) and sends no pushes (a second run adds no rent-change notices either), so
+triggering `cpi-indexing-cron` by hand is safe at any hour; `run-reminders` is what pushes. When indexing has not run that day, `run-reminders`' inline
+catch-up refreshes them too. gov.il refuses Railway's servers (403), so a refused download is read
+through the Internet Archive's copy of the same address. For every country with
 `tax_tracks` on, it writes the rates in the law for each year from `TaxData.first_year`
 (`il_tax_source.LAW_VALUES`, each with its section), and downloads the Tax Authority's yearly
 booklet: a year with none stored is tried every run, this year's is re-checked weekly (last year's
